@@ -317,18 +317,25 @@ async function openSession(id){
         <tr style="color:var(--muted)"><th style="text-align:left;padding:3px 6px">File</th>
           <th style="padding:3px 6px">Block</th><th style="padding:3px 6px">Byte</th>
           <th style="padding:3px 6px">Before</th><th style="padding:3px 6px">After</th></tr>
-        ${ana.storage_records.slice(0,20).map(r=>
-          `<tr style="border-top:1px solid var(--border)">
-            <td style="padding:3px 6px;color:var(--text);max-width:200px;overflow:hidden;
-              text-overflow:ellipsis;white-space:nowrap" title="${esc(r.filename||'')}">
-              ${esc((r.filename||'').split('/').pop())}</td>
-            <td style="padding:3px 6px;text-align:center;color:var(--muted)">${r.targetblock||'—'}</td>
-            <td style="padding:3px 6px;text-align:center;color:var(--muted)">${r.targetbyte||'—'}</td>
-            <td style="padding:3px 6px;text-align:center;color:var(--green)">0x${(r.origValue||0).toString(16)}</td>
-            <td style="padding:3px 6px;text-align:center;color:var(--red)">0x${(r.afterValue||0).toString(16)}</td>
-          </tr>`).join('')}
+        ${(function(){
+          let rows='';
+          ana.storage_records.slice(0,20).forEach(function(r){
+            const fname = esc((r.filename||'').split('/').pop());
+            const ftitle = esc(r.filename||'');
+            const orig = (r.origValue||0).toString(16);
+            const after = (r.afterValue||0).toString(16);
+            rows += '<tr style="border-top:1px solid var(--border)">'
+              + '<td style="padding:3px 6px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+ftitle+'">'+fname+'</td>'
+              + '<td style="padding:3px 6px;text-align:center;color:var(--muted)">'+(r.targetblock||'')+'</td>'
+              + '<td style="padding:3px 6px;text-align:center;color:var(--muted)">'+(r.targetbyte||'')+'</td>'
+              + '<td style="padding:3px 6px;text-align:center;color:var(--green)">0x'+orig+'</td>'
+              + '<td style="padding:3px 6px;text-align:center;color:var(--red)">0x'+after+'</td>'
+              + '</tr>';
+          });
+          return rows;
+        })()}
       </table>
-      ${ana.storage_records.length>20?`<div style="color:var(--muted);font-size:10px;padding:4px 6px">… ${ana.storage_records.length-20} more records in cj.db</div>`:''}
+      ${ana.storage_records.length>20 ? '<div style="color:var(--muted);font-size:10px;padding:4px 6px">'+'\u2026 '+(ana.storage_records.length-20)+' more in cj.db</div>' : ''}
     </div>`;
   }
   html += '</div>';
@@ -338,19 +345,19 @@ async function openSession(id){
     html += `<div class="section"><div class="section-title">Workflow results</div>`;
     ana.results.forEach(r=>{
       const m = r.metrics || {};
-      html += `<div class="fault-block">
-        <div style="color:var(--muted);font-size:10px;margin-bottom:6px">${r.recorded_at||''}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-          ${Object.entries(m).map(([k,v])=>`
-            <div style="background:var(--card);border:1px solid var(--border);
-              border-radius:4px;padding:8px;text-align:center">
-              <div style="font-size:16px;font-weight:700;color:${
-                k.includes('fail')||k.includes('corrupt')||k.includes('miss')?'var(--red)':
-                k.includes('retry')?'var(--yellow)':'var(--blue)'}">${v}</div>
-              <div style="color:var(--muted);font-size:10px;text-transform:uppercase">${k.replace(/_/g,' ')}</div>
-            </div>`).join('')}
-        </div>
-      </div>`;
+      let cells = '';
+      Object.entries(m).forEach(function(entry){
+        const k = entry[0], v = entry[1];
+        cells += '<div style="background:var(--bg);border:1px solid var(--border);'
+               + 'border-radius:4px;padding:8px;text-align:center">'
+               + '<div style="font-size:16px;font-weight:700;color:' + metricColor(k) + '">' + v + '</div>'
+               + '<div style="color:var(--muted);font-size:10px;text-transform:uppercase">' + k.replace(/_/g,' ') + '</div>'
+               + '</div>';
+      });
+      html += '<div class="fault-block">'
+            + '<div style="color:var(--muted);font-size:10px;margin-bottom:6px">' + (r.recorded_at||'') + '</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">' + cells + '</div>'
+            + '</div>';
     });
     html += '</div>';
   }
@@ -363,6 +370,12 @@ async function openSession(id){
 function closeDrawer(){
   document.getElementById('drawer').classList.remove('open');
   document.getElementById('overlay').classList.remove('on');
+}
+
+function metricColor(k){
+  if(k.includes('fail')||k.includes('corrupt')||k.includes('miss')) return 'var(--red)';
+  if(k.includes('retry')||k.includes('warn')) return 'var(--yellow)';
+  return 'var(--blue)';
 }
 
 // ── logs ──────────────────────────────────────────────────────────
