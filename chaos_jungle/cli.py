@@ -235,6 +235,21 @@ def suite(config, parallel, max_workers):
         import sys; sys.exit(1)
 
 
+# ── dashboard ─────────────────────────────────────────────────────
+
+@main.command()
+@click.option("--host", default="127.0.0.1", help="Bind address. Default: 127.0.0.1")
+@click.option("--port", default=8050, help="Port. Default: 8050")
+def dashboard(host, port):
+    """Open the experiment tracking dashboard in your browser."""
+    from chaos_jungle.dashboard import run as dash_run
+    import webbrowser, threading
+    url = f"http://{host}:{port}"
+    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    click.echo(f"[chaos-jungle] Dashboard → {url}  (Ctrl+C to stop)")
+    dash_run(host=host, port=port)
+
+
 # ── daemon subcommand ────────────────────────────────────────────
 
 @main.command()
