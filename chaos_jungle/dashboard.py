@@ -300,8 +300,7 @@ async function openSession(id){
   if(ana.active_tc_rules && ana.active_tc_rules.length){
     html += `<div style="margin-bottom:8px">
       <div style="color:var(--yellow);font-size:11px;margin-bottom:4px">&#x2713; Active tc qdisc rules (network fault is ON)</div>
-      <pre style="font-size:10px;color:var(--muted);background:var(--bg);
-        padding:8px;border-radius:4px;overflow-x:auto">${ana.active_tc_rules.map(esc).join('\n')}</pre>
+      <pre style="font-size:10px;color:var(--muted);background:var(--bg);padding:8px;border-radius:4px;overflow-x:auto">${ana.active_tc_rules.map(esc).join('\\n')}</pre>
     </div>`;
   } else {
     html += `<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No active tc rules (network fault is OFF)</div>`;
@@ -408,7 +407,7 @@ async function loadLogContent(){
     if(/CORRUPT|inversion/i.test(l))    return `<span style="color:var(--yellow)">${esc(l)}</span>`;
     if(/REVERT|stop|OK/i.test(l))       return `<span style="color:var(--green)">${esc(l)}</span>`;
     return `<span style="color:var(--muted)">${esc(l)}</span>`;
-  }).join('\n');
+  }).join('\\n');
   // auto-scroll to bottom
   pre.scrollTop = pre.scrollHeight;
   document.getElementById('log-lines').textContent = data.lines.length + ' lines';
