@@ -8,8 +8,10 @@ Or programmatically:  from chaos_jungle.dashboard import run; run()
 """
 
 from __future__ import annotations
+import os
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -116,6 +118,20 @@ _HTML = """<!DOCTYPE html>
       <span id="tool-summary" style="font-size:11px"></span>
     </div>
     <div class="tool-grid" id="tools"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span>Tool logs</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="log-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:4px;padding:3px 8px;font-size:11px;font-family:inherit"></select>
+        <span id="log-lines" style="color:var(--muted);font-size:11px"></span>
+      </div>
+    </div>
+    <pre id="log-content" style="padding:14px 16px;font-size:11px;line-height:1.7;
+      overflow-x:auto;max-height:320px;overflow-y:auto;color:var(--text);
+      white-space:pre-wrap;word-break:break-all">Loading…</pre>
   </div>
 
   <div class="panel">
@@ -276,8 +292,55 @@ function closeDrawer(){
   document.getElementById('overlay').classList.remove('on');
 }
 
+// ── logs ──────────────────────────────────────────────────────────
+let _logFiles = [];
+
+async function loadLogList(){
+  const files = await fetch('/api/logs').then(r=>r.json());
+  _logFiles = files;
+  const sel = document.getElementById('log-select');
+  const prev = sel.value;
+  sel.innerHTML = files.length
+    ? files.map(f=>`<option value="${f.name}">${f.name} (${f.size_kb}kb)</option>`).join('')
+    : '<option value="">no log files yet</option>';
+  if(prev && files.find(f=>f.name===prev)) sel.value = prev;
+}
+
+async function loadLogContent(){
+  const sel = document.getElementById('log-select');
+  if(!sel.value) return;
+  const data = await fetch(`/api/logs/${encodeURIComponent(sel.value)}?lines=120`).then(r=>r.json());
+  const pre = document.getElementById('log-content');
+  if(data.error){
+    pre.textContent = data.error;
+    return;
+  }
+  // colour-code lines
+  pre.innerHTML = data.lines.map(l=>{
+    if(/ERROR|FAIL|critical/i.test(l))  return `<span style="color:var(--red)">${esc(l)}</span>`;
+    if(/WARN/i.test(l))                 return `<span style="color:var(--yellow)">${esc(l)}</span>`;
+    if(/CORRUPT|inversion/i.test(l))    return `<span style="color:var(--yellow)">${esc(l)}</span>`;
+    if(/REVERT|stop|OK/i.test(l))       return `<span style="color:var(--green)">${esc(l)}</span>`;
+    return `<span style="color:var(--muted)">${esc(l)}</span>`;
+  }).join('\n');
+  // auto-scroll to bottom
+  pre.scrollTop = pre.scrollHeight;
+  document.getElementById('log-lines').textContent = data.lines.length + ' lines';
+}
+
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+document.getElementById('log-select').addEventListener('change', loadLogContent);
+
+async function loadLogs(){
+  await loadLogList();
+  await loadLogContent();
+}
+
+// ── boot ──────────────────────────────────────────────────────────
 load();
-setInterval(load, 5000);
+loadLogs();
+setInterval(()=>{ load(); loadLogContent(); }, 5000);
 </script>
 </body>
 </html>"""
@@ -349,6 +412,52 @@ async def api_system():
         result.append({"binary": binary, "package": package,
                         "role": role, "found": found, "path": path})
     return JSONResponse(result)
+
+
+_CJ_HOME = Path(os.path.expanduser("~/.chaos-jungle"))
+
+_LOG_FILES = [
+    ("cj.log",       "storage bit-flip user log"),
+    ("cj_debug.log", "storage debug log"),
+    ("chaos.log",    "chaos-jungle runner log"),
+]
+
+
+@app.get("/api/logs")
+async def api_logs():
+    """List available log files under ~/.chaos-jungle/."""
+    result = []
+    # scan known log files + any *.log in cj_home
+    seen = set()
+    candidates = list(_LOG_FILES)
+    for p in _CJ_HOME.glob("**/*.log"):
+        name = p.name
+        if name not in seen:
+            candidates.append((name, str(p.relative_to(_CJ_HOME))))
+    for name, desc in candidates:
+        path = _CJ_HOME / name
+        if path.exists():
+            size_kb = round(path.stat().st_size / 1024, 1)
+            result.append({"name": name, "desc": desc, "size_kb": size_kb})
+            seen.add(name)
+    return JSONResponse(result)
+
+
+@app.get("/api/logs/{filename}")
+async def api_log_content(filename: str, lines: int = 120):
+    """Return the last N lines of a log file under ~/.chaos-jungle/."""
+    # safety: no path traversal
+    safe = Path(filename).name
+    path = _CJ_HOME / safe
+    if not path.exists():
+        return JSONResponse({"error": f"Log file not found: {safe}", "lines": []})
+    try:
+        text = path.read_text(errors="replace")
+        all_lines = text.splitlines()
+        tail = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        return JSONResponse({"name": safe, "total": len(all_lines), "lines": tail})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "lines": []})
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
