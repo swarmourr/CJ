@@ -156,12 +156,16 @@ class ChaosRunner:
                 f"Starting fault: {fault.__class__.__name__}",
                 fault_id=fid,
             )
+            print(f"[chaos-jungle] Injecting {fault.__class__.__name__}({fault._parameters()})")
             fault.start(self.target)
             self.db.add_event(
                 self._session_id,
                 f"Fault started: {fault.__class__.__name__}",
                 fault_id=fid,
             )
+
+        print(f"[chaos-jungle] Chaos ON  — scenario '{self.scenario.name}'  "
+              f"(session id: {self._session_id})")
 
         if duration is not None:
             seconds = parse_duration(duration)
@@ -209,6 +213,7 @@ class ChaosRunner:
                     f"Fault stopped and reverted: {fault.__class__.__name__}",
                     fault_id=fid,
                 )
+                print(f"[chaos-jungle] Reverted {fault.__class__.__name__}")
             except Exception as exc:
                 errors.append(exc)
                 self.db.add_event(
@@ -216,10 +221,12 @@ class ChaosRunner:
                     f"ERROR stopping {fault.__class__.__name__}: {exc}",
                     fault_id=fid,
                 )
+                print(f"[chaos-jungle] ERROR reverting {fault.__class__.__name__}: {exc}")
 
         self.db.close_session(self._session_id, status="reverted")
         self.db.add_event(self._session_id, "Session closed")
         self.target.disconnect()
+        print(f"[chaos-jungle] Chaos OFF — session {self._session_id} reverted.")
 
         if errors:
             raise RuntimeError(f"Errors during stop: {errors}")
