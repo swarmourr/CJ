@@ -295,7 +295,8 @@ async def api_sessions():
     db = SessionDB()
     sessions = db.list_sessions()
     result = []
-    for s in sessions:
+    for row in sessions:
+        s = dict(row)
         data = db.export_session(s["id"])
         duration_s = _calc_duration(s.get("started_at"), s.get("stopped_at"))
         result.append({
