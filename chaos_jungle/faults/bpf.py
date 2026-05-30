@@ -67,12 +67,6 @@ class SilentNetworkCorrupt(Fault):
 
     dependencies = ["python3-bpfcc"]
 
-    # Map for preflight — bpfcc-tools provides python3-bpfcc
-    _PKG_TO_BIN = {
-        **Fault._PKG_TO_BIN,
-        "python3-bpfcc": "python3",   # checked via dpkg, not which
-    }
-
     def __init__(
         self,
         rate: int = 5000,
