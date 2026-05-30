@@ -53,6 +53,9 @@ cj-daemon    = "chaos_jungle.daemon:run"
 where = ["."]
 include = ["chaos_jungle*"]
 
+[tool.setuptools.package-data]
+"chaos_jungle.scripts.storage" = ["*.py", "*.cfg"]
+
 [tool.black]
 line-length = 100
 
