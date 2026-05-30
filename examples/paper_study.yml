@@ -1,0 +1,139 @@
+# Chaos-Jungle Paper Study — Parallel Multi-Node Version
+# =========================================================
+#
+# This YAML config runs all 9 experiments simultaneously, one per node.
+# Each node runs a different fault scenario while all execute the same
+# Rosetta/Pegasus workflow. This mirrors the experimental setup from:
+#
+#   Rynge et al., "Chaos Engineering for Scientific Workflows", PEARC '19
+#
+# Requirements
+# ------------
+#   - 9 identical worker nodes (same OS, same workflow installed)
+#   - SSH key access from your machine to each worker
+#   - chaos-jungle installed on each worker (pip install chaos-jungle)
+#   - cj_storage.py present on each worker at ~/chaos-jungle/storage/
+#
+# Run
+# ---
+#   chaos-jungle suite --config examples/paper_study.yml
+#
+# For sequential execution on a single node:
+#   chaos-jungle suite --config examples/paper_study.yml --sequential
+
+duration: 30m       # each experiment runs for 30 minutes
+conflict: raise     # abort if a tc rule is already active on any node
+auto_install: true  # sudo apt-get install iproute2 / e2fsprogs if missing
+
+experiments:
+
+  # ── E1  Baseline ──────────────────────────────────────────────────────────
+  - name: E1-baseline
+    target: ssh://ubuntu@node0.example.com
+    faults: []
+    # No faults. Establishes the reference point.
+    # Run this first and verify all 10 Rosetta jobs succeed before
+    # drawing conclusions from E2–E9.
+
+  # ── E2  Storage corruption ────────────────────────────────────────────────
+  - name: E2-storage-only
+    target: ssh://ubuntu@node1.example.com
+    faults:
+      - kind: StorageCorrupt
+        pattern: "*.pdb"
+        directory: /scratch/rosetta/input
+        interval: 10m      # flip a bit every 10 minutes
+        recursive: false
+    # cj_storage finds the physical disk block of a random .pdb, reads it
+    # with dd, flips one bit (XOR 0x80), writes it back.  The OS and
+    # Pegasus see no error. The job reads corrupt protein coordinates silently.
+
+  # ── E3  Network delay ─────────────────────────────────────────────────────
+  - name: E3-net-delay
+    target: ssh://ubuntu@node2.example.com
+    faults:
+      - kind: NetworkDelay
+        delay: 100ms
+        jitter: 10ms
+    # tc netem holds every outgoing packet for 100ms ± 10ms.
+    # HTCondor file staging slows; jobs may hit transfer timeouts.
+
+  # ── E4  Packet loss ───────────────────────────────────────────────────────
+  - name: E4-net-loss
+    target: ssh://ubuntu@node3.example.com
+    faults:
+      - kind: NetworkLoss
+        rate: 5%
+    # 1 in 20 packets is silently dropped.
+    # TCP retransmits recover most losses, but HTCondor heartbeats
+    # may also be lost — the worker appears offline, jobs get rescheduled.
+
+  # ── E5  Network corruption ────────────────────────────────────────────────
+  - name: E5-net-corrupt
+    target: ssh://ubuntu@node4.example.com
+    faults:
+      - kind: NetworkCorrupt
+        rate: 1%
+    # tc netem flips a random bit in 1% of packets.
+    # TCP checksums catch most; rare packets with correct checksums but
+    # corrupt data slip through to the application.
+
+  # ── E6  Storage + delay ───────────────────────────────────────────────────
+  - name: E6-storage-delay
+    target: ssh://ubuntu@node5.example.com
+    faults:
+      - kind: NetworkDelay
+        delay: 100ms
+        jitter: 10ms
+      - kind: StorageCorrupt
+        pattern: "*.pdb"
+        directory: /scratch/rosetta/input
+        interval: 10m
+        recursive: false
+    # Slow staging means jobs start later, giving the 10-min corruption
+    # interval more opportunities to corrupt files before they are read.
+
+  # ── E7  Storage + packet loss ─────────────────────────────────────────────
+  - name: E7-storage-loss
+    target: ssh://ubuntu@node6.example.com
+    faults:
+      - kind: NetworkLoss
+        rate: 5%
+      - kind: StorageCorrupt
+        pattern: "*.pdb"
+        directory: /scratch/rosetta/input
+        interval: 10m
+        recursive: false
+    # Workers appear to go offline → HTCondor reschedules jobs.
+    # A rescheduled job may land on a node with already-corrupt input.
+
+  # ── E8  Storage + network corruption ─────────────────────────────────────
+  - name: E8-storage-net-corrupt
+    target: ssh://ubuntu@node7.example.com
+    faults:
+      - kind: NetworkCorrupt
+        rate: 1%
+      - kind: StorageCorrupt
+        pattern: "*.pdb"
+        directory: /scratch/rosetta/input
+        interval: 10m
+        recursive: false
+    # Two independent silent corruption sources.
+    # A wrong result could come from disk or from the network —
+    # impossible to tell without checksums at every layer.
+
+  # ── E9  All chaos ─────────────────────────────────────────────────────────
+  - name: E9-all-chaos
+    target: ssh://ubuntu@node8.example.com
+    faults:
+      - kind: NetworkDelay
+        delay: 100ms
+        jitter: 10ms
+      - kind: StorageCorrupt
+        pattern: "*.pdb"
+        directory: /scratch/rosetta/input
+        interval: 10m
+        recursive: false
+    # Maximum chaos: slow network + periodic disk corruption.
+    # Some jobs succeed (correct), some succeed (wrong), some fail.
+    # Pegasus may report the workflow as complete while the science is wrong.

@@ -1,0 +1,114 @@
+Quickstart
+==========
+
+Installation
+------------
+
+.. code-block:: bash
+
+   pip install chaos-jungle
+
+   # with docs extras
+   pip install "chaos-jungle[docs]"
+
+   # with dev extras
+   pip install "chaos-jungle[dev]"
+
+Requirements
+~~~~~~~~~~~~
+
+* Python 3.9+
+* Linux on the **target** machine (for ``tc`` and ``dd``)
+* ``sudo`` access on the target for privileged commands
+
+First example — local machine
+------------------------------
+
+Inject 100 ms network delay on your local machine while running a command:
+
+.. code-block:: python
+
+   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay, LocalTarget
+
+   scenario = Scenario("local-delay", faults=[NetworkDelay("100ms")])
+   runner = ChaosRunner(scenario, LocalTarget())
+
+   runner.start()
+   # your code here
+   runner.stop()
+
+Using the decorator
+-------------------
+
+.. code-block:: python
+
+   from chaos_jungle.decorators import chaos
+   from chaos_jungle import NetworkDelay, StorageCorrupt
+
+   @chaos(NetworkDelay("100ms"), StorageCorrupt("*.pdb", "/data"))
+   def my_experiment():
+       run_my_pipeline()
+
+   my_experiment()   # chaos starts, function runs, chaos stops automatically
+
+Using the context manager
+--------------------------
+
+.. code-block:: python
+
+   from chaos_jungle.decorators import chaos_session
+   from chaos_jungle import NetworkLoss
+
+   with chaos_session(NetworkLoss("5%"), scenario_name="loss-test") as session:
+       run_my_pipeline()
+       print(session.export("json"))
+
+CLI — separate mode
+--------------------
+
+Start chaos independently from your workload:
+
+.. code-block:: bash
+
+   # Terminal 1 — start chaos
+   chaos-jungle start --scenario net-delay --delay 100ms --jitter 10ms
+
+   # Terminal 2 — run anything
+   bash my-workflow.sh
+
+   # Terminal 1 — stop chaos
+   chaos-jungle stop
+
+Remote machine (SSH)
+---------------------
+
+.. code-block:: bash
+
+   chaos-jungle start --scenario net-delay --delay 100ms \
+       --target ssh://ubuntu@worker1
+
+Remote machine (HTTP daemon)
+-----------------------------
+
+On the remote machine:
+
+.. code-block:: bash
+
+   cj-daemon --port 7777 --token mysecret
+
+On your machine:
+
+.. code-block:: bash
+
+   chaos-jungle start --scenario net-delay --delay 100ms \
+       --target http://worker1:7777
+
+Or in Python:
+
+.. code-block:: python
+
+   from chaos_jungle import HTTPTarget, NetworkDelay, Scenario, ChaosRunner
+
+   target = HTTPTarget("http://worker1:7777", token="mysecret")
+   runner = ChaosRunner(Scenario("net-delay", [NetworkDelay("100ms")]), target)
+   runner.start()
