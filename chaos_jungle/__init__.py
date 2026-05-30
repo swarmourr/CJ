@@ -35,6 +35,7 @@ from chaos_jungle.runner import ChaosRunner
 from chaos_jungle.suite import ExperimentSuite
 from chaos_jungle.decorators import chaos, chaos_session
 from chaos_jungle.guardrails import ConflictError, ConflictWarning
+from chaos_jungle.preflight import detect_pkg_manager, PKG_MAP
 from chaos_jungle.faults import (
     Fault,
     PreflightError,
@@ -73,4 +74,7 @@ __all__ = [
     # Guardrails
     "ConflictError",
     "ConflictWarning",
+    # Preflight / auto-install
+    "detect_pkg_manager",
+    "PKG_MAP",
 ]

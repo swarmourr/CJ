@@ -53,6 +53,7 @@ class StorageCorrupt(Fault):
     """
 
     dependencies = ["python3", "e2fsprogs", "inotify-tools", "coreutils"]
+    pip_dependencies = ["python-crontab"]
 
     def __init__(
         self,

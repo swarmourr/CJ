@@ -11,7 +11,7 @@ class PreflightError(RuntimeError):
     """Raised when required dependencies are missing on the target machine.
 
     Contains a human-readable message listing every missing binary and
-    the apt package needed to install it.
+    the exact install command to fix it.
     """
 
 
@@ -22,38 +22,25 @@ class Fault(ABC):
     side effects it has caused. It also declares what system packages
     it needs on the target machine.
 
-    Parameters
-    ----------
-    None — subclasses define their own parameters.
-
     Notes
     -----
     All fault methods receive a :class:`~chaos_jungle.targets.base.Target`
     instance so they can execute commands on the correct machine.
     """
 
-    #: System packages required on the target machine.
+    #: System packages required on the target machine (canonical names).
     dependencies: list[str] = []
+
+    #: Python (pip) packages required on the target machine.
+    pip_dependencies: list[str] = []
 
     @abstractmethod
     def start(self, target: "Target") -> None:
-        """Inject the fault on the target machine.
-
-        Parameters
-        ----------
-        target :
-            The machine to inject the fault on.
-        """
+        """Inject the fault on the target machine."""
 
     @abstractmethod
     def stop(self, target: "Target") -> None:
-        """Remove the fault from the target machine.
-
-        Parameters
-        ----------
-        target :
-            The machine to remove the fault from.
-        """
+        """Remove the fault from the target machine."""
 
     @abstractmethod
     def revert(self, target: "Target") -> None:
@@ -62,67 +49,57 @@ class Fault(ABC):
         For stateless faults (e.g. network rules) this is a no-op.
         For stateful faults (e.g. storage corruption) this restores
         original data.
-
-        Parameters
-        ----------
-        target :
-            The machine to revert on.
         """
 
-    # Map apt package names → binary to check with `which`
-    _PKG_TO_BIN: dict[str, str] = {
-        "iproute2":      "tc",
-        "e2fsprogs":     "filefrag",
-        "inotify-tools": "inotifywait",
-        "coreutils":     "dd",
-        "python3":       "python3",
-    }
-
-    def preflight(self, target: "Target", auto_install: bool = False) -> None:
+    def preflight(
+        self,
+        target: "Target",
+        auto_install: "bool | str" = False,
+    ) -> None:
         """Check dependencies on the target and optionally install missing ones.
 
         Parameters
         ----------
         target :
             The machine to check.
-        auto_install : bool
-            If ``True``, install missing packages via ``apt-get``.
-            If ``False`` (default), raise :exc:`PreflightError` listing
-            all missing packages.
+        auto_install : bool or ``"prompt"``
+            * ``False`` *(default)* — raise :exc:`PreflightError` listing all
+              missing packages with the exact fix command.
+            * ``True`` — detect the package manager (apt / dnf / yum / apk /
+              brew) and install missing packages automatically.
+            * ``"prompt"`` — print a summary of what will be installed and ask
+              the user for confirmation before proceeding.
 
         Raises
         ------
         PreflightError
-            When ``auto_install=False`` and one or more dependencies are missing.
+            When ``auto_install=False`` and dependencies are missing, when no
+            supported package manager is found, or when the user declines the
+            prompt.
+
+        Examples
+        --------
+        Silent auto-install:
+
+        >>> fault.preflight(target, auto_install=True)
+
+        Interactive prompt:
+
+        >>> fault.preflight(target, auto_install="prompt")
+        [preflight] NetworkDelay — missing dependencies:
+          System packages:
+            - 'iproute2'  (binary: tc)
+        Install now? [y/N]
         """
-        missing = []
-        for pkg in self.dependencies:
-            binary = self._PKG_TO_BIN.get(pkg, pkg)
-            code, _, _ = target.run(f"which {binary} 2>/dev/null")
-            if code != 0:
-                missing.append((pkg, binary))
+        from chaos_jungle.preflight import run_preflight
 
-        if not missing:
-            return
-
-        if auto_install:
-            for pkg, binary in missing:
-                print(f"[preflight] Installing missing package: {pkg}")
-                code, _, stderr = target.sudo(f"apt-get install -y {pkg}")
-                if code != 0:
-                    raise PreflightError(
-                        f"Failed to install '{pkg}' on target: {stderr.strip()}"
-                    )
-                print(f"[preflight] Installed: {pkg}")
-        else:
-            lines = "\n".join(
-                f"  - {binary!r}  (apt package: {pkg})" for pkg, binary in missing
-            )
-            raise PreflightError(
-                f"{self.__class__.__name__} preflight failed — missing on target:\n{lines}\n"
-                f"Fix: run with auto_install=True  or  apt-get install "
-                + " ".join(pkg for pkg, _ in missing)
-            )
+        run_preflight(
+            target=target,
+            fault_name=self.__class__.__name__,
+            dependencies=self.dependencies,
+            pip_dependencies=self.pip_dependencies,
+            auto_install=auto_install,
+        )
 
     def to_dict(self) -> dict:
         """Serialize fault parameters to a plain dict (stored as JSON in DB).
