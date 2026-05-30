@@ -10,6 +10,7 @@ from chaos_jungle.guardrails import apply_guardrails
 from chaos_jungle.scenario import Scenario
 from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
+from chaos_jungle.targets.logging import LoggingTarget
 
 
 class ChaosRunner:
@@ -139,9 +140,12 @@ class ChaosRunner:
         self._session_id = self.db.open_session(self.scenario.name)
         self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
 
+        # wrap target so every command is logged to the session DB
+        logged = LoggingTarget(self.target, self.db, self._session_id)
+
         if self.auto_preflight:
             for fault in self.scenario.faults:
-                fault.preflight(self.target, auto_install=self.auto_install)
+                fault.preflight(logged, auto_install=self.auto_install)
 
         self._fault_ids = []
         for fault in self.scenario.faults:
@@ -151,13 +155,14 @@ class ChaosRunner:
                 fault._parameters(),
             )
             self._fault_ids.append(fid)
+            logged.fault_id = fid   # tag subsequent commands with this fault
             self.db.add_event(
                 self._session_id,
                 f"Starting fault: {fault.__class__.__name__}",
                 fault_id=fid,
             )
             print(f"[chaos-jungle] Injecting {fault.__class__.__name__}({fault._parameters()})")
-            fault.start(self.target)
+            fault.start(logged)
             self.db.add_event(
                 self._session_id,
                 f"Fault started: {fault.__class__.__name__}",
@@ -197,16 +202,18 @@ class ChaosRunner:
         if self._session_id is None:
             raise RuntimeError("No active session — call start() first or use attach()")
 
+        logged = LoggingTarget(self.target, self.db, self._session_id)
         errors = []
         for fault, fid in zip(reversed(self.scenario.faults), reversed(self._fault_ids)):
             try:
+                logged.fault_id = fid
                 self.db.add_event(
                     self._session_id,
                     f"Stopping fault: {fault.__class__.__name__}",
                     fault_id=fid,
                 )
-                fault.stop(self.target)
-                fault.revert(self.target)
+                fault.stop(logged)
+                fault.revert(logged)
                 self.db.close_fault(fid)
                 self.db.add_event(
                     self._session_id,
