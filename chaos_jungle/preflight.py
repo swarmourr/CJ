@@ -203,7 +203,7 @@ def install_pip_package(target: "Target", pip_pkg: str) -> None:
     """
     pkg_name = _PIP_MAP.get(pip_pkg, pip_pkg)
     print(f"[preflight] Installing Python package '{pkg_name}' via pip3 ...", flush=True)
-    code, _, stderr = target.run(f"pip3 install --quiet {pkg_name}")
+    code, _, stderr = target.run(f"pip3 install --quiet --break-system-packages {pkg_name}")
     if code != 0:
         raise RuntimeError(
             f"[preflight] pip3 install '{pkg_name}' failed: {stderr.strip()}"
