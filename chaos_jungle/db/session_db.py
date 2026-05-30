@@ -75,6 +75,13 @@ class SessionDB:
                 timestamp   TEXT    NOT NULL,
                 message     TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS results (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id   INTEGER NOT NULL REFERENCES sessions(id),
+                recorded_at  TEXT    NOT NULL,
+                metrics      TEXT    NOT NULL DEFAULT '{}'
+            );
         """)
         self._conn.commit()
 
@@ -233,6 +240,58 @@ class SessionDB:
             "faults": fault_list,
             "events": [dict(e) for e in events],
         }
+
+    # ── Results ───────────────────────────────────────────────────
+
+    def record_result(self, session_id: int, metrics: dict) -> int:
+        """Store workflow outcome metrics for a session.
+
+        Call this after your workload finishes to attach observed results
+        (throughput, retries, integrity failures, etc.) to the chaos session
+        so they appear in the dashboard.
+
+        Parameters
+        ----------
+        session_id : int
+        metrics : dict
+            Any JSON-serializable dict, e.g.::
+
+                {
+                    "files_transferred": 120,
+                    "files_corrupted":    3,
+                    "files_missing":      0,
+                    "retries":            7,
+                    "throughput_mbps":    42.1,
+                    "integrity_failures": 3,
+                }
+
+        Returns
+        -------
+        int
+            Result record id.
+        """
+        cur = self._conn.execute(
+            "INSERT INTO results (session_id, recorded_at, metrics) VALUES (?, ?, ?)",
+            (session_id, _now(), json.dumps(metrics)),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_results(self, session_id: int) -> list[dict]:
+        """Return all result records for a session."""
+        rows = self._conn.execute(
+            "SELECT * FROM results WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            row = dict(r)
+            try:
+                row["metrics"] = json.loads(row["metrics"])
+            except (TypeError, ValueError):
+                pass
+            out.append(row)
+        return out
 
     def close(self) -> None:
         self._conn.close()

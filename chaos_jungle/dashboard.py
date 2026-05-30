@@ -229,7 +229,10 @@ async function load(){
 }
 
 async function openSession(id){
-  const d = await fetch(`/api/session/${id}`).then(r=>r.json());
+  const [d, ana] = await Promise.all([
+    fetch(`/api/session/${id}`).then(r=>r.json()),
+    fetch(`/api/session/${id}/analysis`).then(r=>r.json()),
+  ]);
   const s = d.session;
   const dur = s.duration_s != null ? s.duration_s + 's' : (s.status==='running' ? 'still running' : '—');
 
@@ -281,6 +284,76 @@ async function openSession(id){
     });
   }
   html += '</div>';
+
+  // ── verification ────────────────────────────────────────────
+  html += `<div class="section"><div class="section-title">Verification</div>`;
+
+  // command stats
+  const ok  = ana.command_ok    || 0;
+  const err = ana.command_error || 0;
+  html += `<div style="margin-bottom:10px;font-size:11px">
+    Commands executed: <b style="color:var(--green)">${ok} OK</b>
+    &nbsp;/&nbsp;<b style="color:var(--red)">${err} ERROR</b>
+  </div>`;
+
+  // active tc rules
+  if(ana.active_tc_rules && ana.active_tc_rules.length){
+    html += `<div style="margin-bottom:8px">
+      <div style="color:var(--yellow);font-size:11px;margin-bottom:4px">&#x2713; Active tc qdisc rules (network fault is ON)</div>
+      <pre style="font-size:10px;color:var(--muted);background:var(--bg);
+        padding:8px;border-radius:4px;overflow-x:auto">${ana.active_tc_rules.map(esc).join('\n')}</pre>
+    </div>`;
+  } else {
+    html += `<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No active tc rules (network fault is OFF)</div>`;
+  }
+
+  // storage bit-flip records
+  if(ana.storage_records && ana.storage_records.length){
+    html += `<div style="margin-bottom:8px">
+      <div style="color:var(--yellow);font-size:11px;margin-bottom:6px">
+        &#x2713; Storage bit-flips recorded in cj.db (${ana.storage_records.length} records)
+      </div>
+      <table style="width:100%;font-size:10px;border-collapse:collapse">
+        <tr style="color:var(--muted)"><th style="text-align:left;padding:3px 6px">File</th>
+          <th style="padding:3px 6px">Block</th><th style="padding:3px 6px">Byte</th>
+          <th style="padding:3px 6px">Before</th><th style="padding:3px 6px">After</th></tr>
+        ${ana.storage_records.slice(0,20).map(r=>
+          `<tr style="border-top:1px solid var(--border)">
+            <td style="padding:3px 6px;color:var(--text);max-width:200px;overflow:hidden;
+              text-overflow:ellipsis;white-space:nowrap" title="${esc(r.filename||'')}">
+              ${esc((r.filename||'').split('/').pop())}</td>
+            <td style="padding:3px 6px;text-align:center;color:var(--muted)">${r.targetblock||'—'}</td>
+            <td style="padding:3px 6px;text-align:center;color:var(--muted)">${r.targetbyte||'—'}</td>
+            <td style="padding:3px 6px;text-align:center;color:var(--green)">0x${(r.origValue||0).toString(16)}</td>
+            <td style="padding:3px 6px;text-align:center;color:var(--red)">0x${(r.afterValue||0).toString(16)}</td>
+          </tr>`).join('')}
+      </table>
+      ${ana.storage_records.length>20?`<div style="color:var(--muted);font-size:10px;padding:4px 6px">… ${ana.storage_records.length-20} more records in cj.db</div>`:''}
+    </div>`;
+  }
+  html += '</div>';
+
+  // ── workflow results ─────────────────────────────────────────
+  if(ana.results && ana.results.length){
+    html += `<div class="section"><div class="section-title">Workflow results</div>`;
+    ana.results.forEach(r=>{
+      const m = r.metrics || {};
+      html += `<div class="fault-block">
+        <div style="color:var(--muted);font-size:10px;margin-bottom:6px">${r.recorded_at||''}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${Object.entries(m).map(([k,v])=>`
+            <div style="background:var(--card);border:1px solid var(--border);
+              border-radius:4px;padding:8px;text-align:center">
+              <div style="font-size:16px;font-weight:700;color:${
+                k.includes('fail')||k.includes('corrupt')||k.includes('miss')?'var(--red)':
+                k.includes('retry')?'var(--yellow)':'var(--blue)'}">${v}</div>
+              <div style="color:var(--muted);font-size:10px;text-transform:uppercase">${k.replace(/_/g,' ')}</div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  }
 
   document.getElementById('drawer-body').innerHTML = html;
   document.getElementById('drawer').classList.add('open');
@@ -458,6 +531,72 @@ async def api_log_content(filename: str, lines: int = 120):
         return JSONResponse({"name": safe, "total": len(all_lines), "lines": tail})
     except Exception as exc:
         return JSONResponse({"error": str(exc), "lines": []})
+
+
+@app.get("/api/session/{session_id}/analysis")
+async def api_analysis(session_id: int):
+    """Cross-reference chaos session with cj.db records and live tc rules."""
+    db = SessionDB()
+    data = db.export_session(session_id)
+    results = db.get_results(session_id)
+
+    # ── storage: read bit-flip records from cj.db ──────────────────
+    cj_db_path = _CJ_HOME / "cj.db"
+    storage_records = []
+    if cj_db_path.exists():
+        import sqlite3 as _sql
+        try:
+            conn = _sql.connect(str(cj_db_path))
+            conn.row_factory = _sql.Row
+            rows = conn.execute(
+                "SELECT * FROM records ORDER BY id DESC LIMIT 200"
+            ).fetchall()
+            storage_records = [dict(r) for r in rows]
+            conn.close()
+        except Exception as e:
+            storage_records = [{"error": str(e)}]
+
+    # ── network: read active tc qdisc rules ────────────────────────
+    tc_rules = []
+    try:
+        out = subprocess.check_output(
+            ["tc", "qdisc", "show"], stderr=subprocess.DEVNULL, text=True
+        )
+        tc_rules = [l.strip() for l in out.splitlines() if l.strip()
+                    and "noqueue" not in l and "noop" not in l]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        tc_rules = []
+
+    # ── command summary: count OK vs ERROR ─────────────────────────
+    events = data["events"]
+    cmd_ok    = sum(1 for e in events if "[cmd:OK]"    in e.get("message",""))
+    cmd_error = sum(1 for e in events if "[cmd:ERROR]" in e.get("message",""))
+
+    return JSONResponse({
+        "session_id":       session_id,
+        "command_ok":       cmd_ok,
+        "command_error":    cmd_error,
+        "storage_records":  storage_records,
+        "active_tc_rules":  tc_rules,
+        "results":          results,
+    })
+
+
+@app.get("/api/cj_records")
+async def api_cj_records():
+    """Return all bit-flip records from cj.db (storage corruption evidence)."""
+    cj_db_path = _CJ_HOME / "cj.db"
+    if not cj_db_path.exists():
+        return JSONResponse({"records": [], "note": "cj.db not found — no storage faults run yet"})
+    import sqlite3 as _sql
+    try:
+        conn = _sql.connect(str(cj_db_path))
+        conn.row_factory = _sql.Row
+        rows = conn.execute("SELECT * FROM records ORDER BY id DESC").fetchall()
+        conn.close()
+        return JSONResponse({"records": [dict(r) for r in rows]})
+    except Exception as e:
+        return JSONResponse({"records": [], "error": str(e)})
 
 
 # ── helpers ────────────────────────────────────────────────────────────────

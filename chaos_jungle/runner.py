@@ -299,6 +299,34 @@ class ChaosRunner:
             "errors": errors,
         }
 
+    def record_result(self, metrics: dict) -> None:
+        """Attach workflow outcome metrics to the current session.
+
+        Call this after your workload completes to link observed results
+        (throughput, retries, integrity failures …) to the chaos session.
+        Results appear in the dashboard session drawer.
+
+        Parameters
+        ----------
+        metrics : dict
+            Any JSON-serializable dict, e.g.::
+
+                runner.record_result({
+                    "files_transferred": 120,
+                    "files_corrupted":    3,
+                    "retries":            7,
+                    "throughput_mbps":   42.1,
+                    "integrity_failures": 3,
+                })
+        """
+        if self._session_id is None:
+            raise RuntimeError("No active session — call start() first")
+        self.db.record_result(self._session_id, metrics)
+        self.db.add_event(
+            self._session_id,
+            f"Result recorded: {metrics}",
+        )
+
     def export(self, fmt: str = "dict") -> dict | str:
         """Export the current session data.
 
