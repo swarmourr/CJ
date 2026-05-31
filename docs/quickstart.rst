@@ -63,6 +63,43 @@ Using the context manager
        run_my_pipeline()
        print(session.export("json"))
 
+Measure style — auto-record results
+-------------------------------------
+
+``@chaos_measure`` runs the function under chaos **and** automatically
+saves its return dict as workflow metrics linked to the session. The
+metrics appear in the dashboard and in exported CSV files.
+
+.. code-block:: python
+
+   from chaos_jungle.decorators import chaos_measure
+   from chaos_jungle import NetworkDelay
+
+   @chaos_measure(NetworkDelay("100ms"), scenario_name="E1")
+   def run_experiment():
+       run_my_pipeline()
+       # return a dict → auto-stored as results
+       return {
+           "files_transferred": 120,
+           "retries":             3,
+           "throughput_mbps":   42.1,
+       }
+
+   summary = run_experiment()
+   print(summary["duration_s"], "s of chaos")
+   print(summary["fn_result"])   # the dict above
+
+Capture stdout as well:
+
+.. code-block:: python
+
+   @chaos_measure(NetworkDelay("100ms"), capture_output=True)
+   def run_experiment():
+       ...
+
+   summary = run_experiment()
+   print(summary["captured_output"])   # everything printed during the run
+
 CLI — separate mode
 --------------------
 

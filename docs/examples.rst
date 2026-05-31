@@ -445,10 +445,68 @@ CLI:
    chaos-jungle start --scenario test --delay 100ms --conflict warn
 
 
-13. Exporting session data
----------------------------
+13. @chaos_measure — auto-record results
+-----------------------------------------
+
+The ``@chaos_measure`` decorator runs a function under chaos and
+automatically stores its return dict as workflow metrics. No extra
+``runner.record_result()`` call needed.
+
+.. code-block:: python
+
+   from chaos_jungle.decorators import chaos_measure
+   from chaos_jungle.faults import NetworkDelay
+   from chaos_jungle.targets import LocalTarget
+
+   @chaos_measure(
+       NetworkDelay("100ms", jitter="10ms"),
+       scenario_name="latency-experiment",
+       conflict="warn",
+   )
+   def run_experiment():
+       import subprocess, time
+
+       # measure ping latency under chaos
+       latencies = []
+       for _ in range(5):
+           r = subprocess.run(["ping", "-c", "1", "127.0.0.1"],
+                              capture_output=True, text=True)
+           for line in r.stdout.splitlines():
+               if "time=" in line:
+                   latencies.append(float(line.split("time=")[1].split()[0]))
+           time.sleep(0.5)
+
+       avg = round(sum(latencies) / len(latencies), 2) if latencies else 0
+       # return dict → auto-saved to results table in DB
+       return {
+           "avg_latency_ms": avg,
+           "samples":        len(latencies),
+           "target_delay_ms": 100,
+       }
+
+   summary = run_experiment()
+   print(f"Chaos ran for {summary['duration_s']} s")
+   print(f"Measured latency: {summary['fn_result']['avg_latency_ms']} ms")
+
+With ``capture_output=True``, stdout printed inside the function is
+captured and returned in ``summary["captured_output"]``:
+
+.. code-block:: python
+
+   @chaos_measure(NetworkDelay("100ms"), capture_output=True)
+   def run_experiment():
+       run_pipeline()   # prints progress
+       return {"retries": 3}
+
+   summary = run_experiment()
+   print(summary["captured_output"])   # full stdout text
+
+
+14. Exporting session data to files
+-------------------------------------
 
 Every run is stored in ``~/.chaos-jungle/chaos_jungle.db``.
+Use ``export`` to write portable files to disk.
 
 .. code-block:: python
 
@@ -459,26 +517,77 @@ Every run is stored in ``~/.chaos-jungle/chaos_jungle.db``.
    runner = ChaosRunner(Scenario("export-demo", [NetworkDelay("50ms")]), LocalTarget())
    runner.start()
    run_workflow()
+   runner.record_result({"retries": 2, "throughput_mbps": 38.4})
    runner.stop()
 
-   # export after stopping
+   # export programmatically
    data = runner.export("dict")
    print(data["session"])
    print(data["events"])
-
-   # or as JSON
    print(runner.export("json"))
 
-CLI:
+CLI — write to a file:
 
 .. code-block:: bash
 
-   chaos-jungle list                        # show all sessions
-   chaos-jungle export --session 3          # JSON
+   # auto-named JSON (session_3_export-demo.json)
+   chaos-jungle export --session 3
+
+   # CSV with metrics columns flattened
    chaos-jungle export --session 3 --format csv
 
+   # all sessions → chaos_sessions.csv
+   chaos-jungle export --format csv
 
-14. ExperimentSuite — parallel multi-node chaos
+   # custom output path
+   chaos-jungle export --session 3 --format json --output run3.json
+
+The CSV columns are::
+
+   session_id, name, status, started_at, stopped_at, duration_s,
+   fault_kind, fault_parameters, retries, throughput_mbps, ...
+
+
+15. Fetching results from a remote SSH host
+---------------------------------------------
+
+After a remote chaos run, pull the session DB and logs to your machine:
+
+.. code-block:: bash
+
+   # fetch DB + auto-export to CSV
+   chaos-jungle fetch --target ssh://ubuntu@worker1
+
+   # fetch DB + storage log, save to ./experiment-1/
+   chaos-jungle fetch --target ssh://ubuntu@worker1 \
+       --files "chaos_jungle.db,cj.log" \
+       --output-dir ./experiment-1/
+
+Result::
+
+   ./experiment-1/
+     chaos_jungle.db       ← full SQLite session DB
+     cj.log                ← storage bit-flip log (if fetched)
+     chaos_sessions.csv    ← auto-generated portable CSV
+
+In Python:
+
+.. code-block:: python
+
+   from chaos_jungle.targets import SSHTarget
+
+   target = SSHTarget("worker1", user="ubuntu")
+   target.connect()
+   target.get("~/.chaos-jungle/chaos_jungle.db", "./results/chaos_jungle.db")
+   target.disconnect()
+
+   from chaos_jungle.db.session_db import SessionDB
+   db = SessionDB("./results/chaos_jungle.db")
+   for sess in db.list_sessions():
+       print(sess["id"], sess["name"], sess["status"])
+
+
+16. ExperimentSuite — parallel multi-node chaos
 -------------------------------------------------
 
 Run different fault scenarios on different machines simultaneously.
@@ -539,7 +648,7 @@ Sequential mode (one after the other):
    results = suite.run(parallel=False)
 
 
-15. YAML-based suite config
+17. YAML-based suite config
 -----------------------------
 
 Define your entire suite in a YAML file — no Python required.
@@ -612,7 +721,7 @@ In Python:
    ExperimentSuite.print_summary(results)
 
 
-16. End-to-end: Pegasus WMS experiment
+18. End-to-end: Pegasus WMS experiment
 ----------------------------------------
 
 A realistic example: inject faults while a Pegasus workflow runs on a
@@ -657,36 +766,58 @@ remote cluster, then collect results and export the chaos log.
    finally:
        runner.stop()
 
-   # ── 5. Export session log ─────────────────────────────────────
+   # ── 5. Record and export results ─────────────────────────────
+   runner.record_result({
+       "jobs_succeeded": 120,
+       "jobs_failed":      3,
+       "retries":          7,
+   })
+
+   # ── 6. Export to files ────────────────────────────────────────
    with open("chaos-session.json", "w") as fh:
        fh.write(runner.export("json"))
    print("Chaos log saved to chaos-session.json")
 
-Or as a decorator:
+   # CLI equivalent (write to disk):
+   # chaos-jungle export --session 3 --format csv
+
+Or with ``@chaos_measure`` — the cleanest style when the function
+returns measurable results:
 
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos
+   from chaos_jungle.decorators import chaos_measure
    from chaos_jungle.faults import NetworkDelay, StorageCorrupt
    from chaos_jungle.targets import SSHTarget
+   import subprocess
 
    target = SSHTarget("submit.cluster.example.com", user="ubuntu")
 
-   @chaos(
+   @chaos_measure(
        NetworkDelay("100ms", jitter="10ms"),
        StorageCorrupt("*.pdb", "/scratch/pegasus-output"),
        target=target,
        scenario_name="pegasus-chaos",
-       duration="1h",
    )
    def run_pegasus():
-       import subprocess
-       subprocess.run(["pegasus-run", "--submit", "pegasus.yml"], check=True)
+       result = subprocess.run(
+           ["pegasus-run", "--submit", "pegasus.yml"],
+           capture_output=True, text=True,
+       )
+       # return dict → auto-saved to DB and included in CSV export
+       return {
+           "exit_code":    result.returncode,
+           "jobs_run":     120,
+           "jobs_failed":    3,
+           "retries":        7,
+       }
 
-   run_pegasus()   # chaos starts → workflow → chaos always reverted
+   summary = run_pegasus()
+   # Results are in DB — fetch them after the run:
+   # chaos-jungle export --format csv
 
 
-17. Full parallel suite (YAML) — four-node experiment
+19. Full parallel suite (YAML) — four-node experiment
 -------------------------------------------------------
 
 A production-ready YAML config that covers all fault types simultaneously

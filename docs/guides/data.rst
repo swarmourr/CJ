@@ -116,8 +116,8 @@ Example ``parameters`` values by fault type:
 events
 ~~~~~~
 
-Append-only timestamped log. Every state change — start, stop, error —
-is written here.
+Append-only timestamped log. Every state change — start, stop, error,
+and every shell command run on the target — is written here.
 
 .. code-block:: sql
 
@@ -135,10 +135,47 @@ Typical event sequence for one session with one fault:
 
    Session started: net-delay
    Starting fault: NetworkDelay
+   [cmd:OK] # tc qdisc add dev eth0 root netem delay 100ms | exit=0 | stdout: (none)
    Fault started: NetworkDelay
    Stopping fault: NetworkDelay
+   [cmd:OK] # tc qdisc del dev eth0 root | exit=0 | stdout: (none)
    Fault stopped and reverted: NetworkDelay
    Session closed
+
+Every command the framework runs on the target (via ``tc``, ``dd``, etc.)
+is logged as a ``[cmd:OK]`` or ``[cmd:ERROR]`` event, so you can see
+exactly what chaos-jungle did on the machine. These appear in the
+dashboard event log and are included in exports.
+
+results
+~~~~~~~
+
+Optional table populated by ``runner.record_result()``. Stores arbitrary
+JSON metrics linked to the session — throughput, retries, failure counts,
+latency — anything your workload measures.
+
+.. code-block:: sql
+
+   CREATE TABLE results (
+       id           INTEGER PRIMARY KEY AUTOINCREMENT,
+       session_id   INTEGER NOT NULL REFERENCES sessions(id),
+       recorded_at  TEXT    NOT NULL,
+       metrics      TEXT    NOT NULL DEFAULT '{}'
+   );
+
+.. code-block:: python
+
+   runner.record_result({
+       "files_transferred":  120,
+       "files_corrupted":      3,
+       "retries":              7,
+       "throughput_mbps":    42.1,
+       "baseline_latency_ms": 0.2,
+       "chaos_latency_ms":  108.6,
+   })
+
+When you export to CSV, all keys in ``metrics`` become extra columns in
+the output file — no schema changes needed.
 
 ----
 
@@ -252,6 +289,11 @@ Python API — reading session data
    print(data["faults"])    # list of fault dicts
    print(data["events"])    # list of event dicts
 
+   # read workflow metrics stored by runner.record_result()
+   results = db.get_results(session_id=3)
+   for r in results:
+       print(r["metrics"])  # dict of key/value pairs
+
    # check if chaos is currently running
    active = db.active_session()
    if active:
@@ -302,17 +344,54 @@ CLI — session management
    # list all sessions (all time)
    chaos-jungle list
 
-   # export session 3 as JSON
+   # export session 3 → auto-named JSON file on disk
    chaos-jungle export --session 3
 
-   # export as CSV (events only)
+   # export session 3 → CSV with metrics columns
    chaos-jungle export --session 3 --format csv
+
+   # export all sessions → chaos_sessions.csv
+   chaos-jungle export --format csv
+
+   # custom output path
+   chaos-jungle export --session 3 --format json --output run3.json
 
    # stop and revert the most recent session
    chaos-jungle stop
 
    # stop a specific session by id
    chaos-jungle stop --session 3
+
+----
+
+CLI — fetching results from remote machines
+---------------------------------------------
+
+After a remote run (SSH target), use ``chaos-jungle fetch`` to pull the
+session database and any log files to a local directory.
+
+.. code-block:: bash
+
+   # fetch DB and auto-export CSV (default)
+   chaos-jungle fetch --target ssh://ubuntu@worker1
+
+   # fetch DB + cj.log, save to ./experiment-1/
+   chaos-jungle fetch --target ssh://ubuntu@worker1 \
+       --files "chaos_jungle.db,cj.log" \
+       --output-dir ./experiment-1/
+
+   # result:
+   #   ./experiment-1/chaos_jungle.db    ← full SQLite DB
+   #   ./experiment-1/cj.log             ← storage bit-flip log
+   #   ./experiment-1/chaos_sessions.csv ← portable CSV with metrics
+
+The auto-generated CSV has the same structure as
+``chaos-jungle export --format csv``:
+
+.. code-block:: text
+
+   session_id, name, status, started_at, stopped_at, duration_s,
+   fault_kind, fault_parameters, <...metrics from record_result()>
 
 ----
 
