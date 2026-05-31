@@ -21,6 +21,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    guides/ssh
    guides/http
    guides/separate-mode
+   guides/metrics
    guides/data
    guides/paper-study
 
@@ -33,6 +34,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    api/scenario
    api/runner
    api/decorators
+   api/metrics
    api/guardrails
    api/suite
    api/cli
