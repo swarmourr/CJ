@@ -23,6 +23,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    guides/separate-mode
    guides/metrics
    guides/data
+   guides/llm
    guides/paper-study
 
 .. toctree::

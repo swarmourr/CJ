@@ -59,6 +59,11 @@ from chaos_jungle.faults import (
     NetworkDuplicate,
     StorageCorrupt,
     SilentNetworkCorrupt,
+    LLMLatency,
+    LLMRateLimit,
+    LLMTimeout,
+    LLMResponseCorrupt,
+    LLMUnavailable,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 
@@ -87,6 +92,11 @@ __all__ = [
     "NetworkDuplicate",
     "StorageCorrupt",
     "SilentNetworkCorrupt",
+    "LLMLatency",
+    "LLMRateLimit",
+    "LLMTimeout",
+    "LLMResponseCorrupt",
+    "LLMUnavailable",
     # Targets
     "LocalTarget",
     "SSHTarget",

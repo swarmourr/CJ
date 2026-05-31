@@ -1,6 +1,29 @@
 Changelog
 =========
 
+0.3.0 (2026-05-31)
+------------------
+
+**New features**
+
+* **LLM agent fault injection** — five new fault types that intercept HTTP
+  traffic between an LLM agent and its API endpoint via a stdlib-only
+  local proxy.  No agent code changes required:
+
+  - ``LLMLatency`` — artificial per-request delay
+  - ``LLMRateLimit`` — HTTP 429 after *n* requests
+  - ``LLMTimeout`` — hang every connection for *timeout_s* seconds
+  - ``LLMResponseCorrupt`` — truncate / empty / invalid-JSON responses
+  - ``LLMUnavailable`` — always return HTTP 503
+
+* Works with OpenAI, Anthropic, Azure OpenAI, Ollama, and any
+  OpenAI-compatible endpoint; configurable via ``upstream`` and
+  ``base_url_env`` parameters.
+* ``examples/llm_agent.py`` — one runnable example per fault type plus
+  a ``@chaos_measure`` integration example.
+* New guide: :ref:`guide-llm` — fault reference, failure taxonomy, and
+  multi-fault suite patterns.
+
 0.2.0 (2026-05-31)
 ------------------
 

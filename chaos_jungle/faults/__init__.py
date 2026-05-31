@@ -9,6 +9,13 @@ from chaos_jungle.faults.network import (
 )
 from chaos_jungle.faults.storage import StorageCorrupt
 from chaos_jungle.faults.bpf import SilentNetworkCorrupt
+from chaos_jungle.faults.llm import (
+    LLMLatency,
+    LLMRateLimit,
+    LLMTimeout,
+    LLMResponseCorrupt,
+    LLMUnavailable,
+)
 
 __all__ = [
     "Fault",
@@ -19,4 +26,9 @@ __all__ = [
     "NetworkDuplicate",
     "StorageCorrupt",
     "SilentNetworkCorrupt",
+    "LLMLatency",
+    "LLMRateLimit",
+    "LLMTimeout",
+    "LLMResponseCorrupt",
+    "LLMUnavailable",
 ]

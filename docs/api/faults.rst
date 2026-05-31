@@ -9,3 +9,7 @@ Faults
 
 .. automodule:: chaos_jungle.faults.storage
    :members:
+
+.. automodule:: chaos_jungle.faults.llm
+   :members:
+   :undoc-members:
