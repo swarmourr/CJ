@@ -1,44 +1,45 @@
 .. _guide-llm:
 
-LLM Agent Fault Injection
-=========================
+LLM Agent & MCP Fault Injection
+================================
 
 Modern AI applications embed LLM calls deep inside agent loops, tool chains,
-and multi-step workflows.  When the LLM API is slow, throttled, or down the
+and multi-step workflows.  When the model API is slow, throttled, or down the
 entire application can stall, retry infinitely, or produce silent wrong
-answers.
+answers.  MCP servers add another layer: a failing tool can corrupt the whole
+agent task.
 
-chaos-jungle provides a set of **LLM fault types** that intercept HTTP traffic
-between your agent and the model API without modifying any agent code.
-
-.. contents:: On this page
-   :local:
-   :depth: 2
+chaos-jungle intercepts **all HTTP traffic** between your agent and its
+backend — LLM API calls, tool results, and MCP server calls — without
+modifying any agent code.
 
 How it works
 ------------
 
-All LLM faults share the same proxy-based mechanism:
+Every LLM/MCP fault shares the same proxy-based mechanism:
 
 .. code-block:: text
 
-   ┌─────────────────────────────────────────────────────────┐
-   │  Your machine                                           │
-   │                                                         │
-   │  [Agent] ──HTTP──▶ [LLM Proxy :18000] ──HTTP──▶ [API]  │
-   │                          │                              │
-   │                     injects fault                       │
-   └─────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────┐
+   │  Your machine                                                │
+   │                                                              │
+   │  [Agent]                                                     │
+   │    │                                                         │
+   │    ├──chat/completions──▶ [LLM Proxy :18000] ──▶ [LLM API]  │
+   │    │                           (fault injected here)        │
+   │    │                                                         │
+   │    └──tools/call──────▶ [MCP Proxy :18100] ──▶ [MCP Server] │
+   │                              (fault injected here)          │
+   └──────────────────────────────────────────────────────────────┘
 
 1. ``fault.start()`` spawns the bundled proxy as a background subprocess.
-2. The proxy listens on ``localhost:<port>`` and forwards requests to the
-   real API endpoint while injecting the chosen fault.
-3. The environment variable ``OPENAI_BASE_URL`` (or any variable you name)
-   is set so that OpenAI / Anthropic / LiteLLM clients automatically route
-   through the proxy.
-4. ``fault.stop()`` kills the proxy and restores the original environment.
+2. The proxy listens on ``localhost:<port>`` and forwards every request to
+   the real endpoint while injecting the chosen fault.
+3. The environment variable (``OPENAI_BASE_URL``, ``MCP_SERVER_URL``, or
+   any variable you name) is set so the client routes through the proxy.
+4. ``fault.stop()`` kills the proxy and restores the original env var.
 
-No agent code needs to change — just wrap your agent call.
+No agent code needs to change.
 
 Quick start
 -----------
@@ -49,16 +50,15 @@ Quick start
    from chaos_jungle.faults.llm import LLMLatency
    from chaos_jungle.targets import LocalTarget
 
-   fault = LLMLatency(delay_s=3.0)
-   runner = ChaosRunner(Scenario("slow-llm", [fault]), LocalTarget())
-
+   runner = ChaosRunner(
+       Scenario("slow-llm", [LLMLatency(delay_s=3.0)]),
+       LocalTarget(),
+   )
    runner.start()
-   # --- your agent runs here ---
    response = agent.run("Summarise this document")
-   # ----------------------------
    runner.stop()
 
-Or with the decorator:
+Or with the ``@chaos_measure`` decorator:
 
 .. code-block:: python
 
@@ -72,10 +72,9 @@ Or with the decorator:
        return {"answered": len(questions)}
 
    summary = run_agent_task()
-   print(summary["duration_s"], "s — errors:", summary["result"]["errors"])
 
-Available faults
-----------------
+LLM API faults
+--------------
 
 LLMLatency
 ~~~~~~~~~~
@@ -86,93 +85,56 @@ Adds artificial delay before forwarding every API call.
 
    from chaos_jungle.faults.llm import LLMLatency
 
-   # 2 second delay on every call (default)
-   fault = LLMLatency()
+   fault = LLMLatency(delay_s=3.0)
 
-   # 5 second delay
-   fault = LLMLatency(delay_s=5.0)
-
-**What to look for**
-
-- Does the agent time out correctly, or wait indefinitely?
-- Do retries compound the latency (retry storms)?
-- Is the user shown a spinner / progress indicator?
+**Tests:** timeout budgets, retry compounding, user-visible progress.
 
 LLMRateLimit
 ~~~~~~~~~~~~
 
-Allows the first *n* requests through, then returns HTTP 429 for all
-subsequent calls.
+Allows the first *n* requests through, then returns HTTP 429.
 
 .. code-block:: python
 
    from chaos_jungle.faults.llm import LLMRateLimit
 
-   # Allow 5 calls, then rate-limit
    fault = LLMRateLimit(n=5)
 
-**What to look for**
-
-- Does the agent implement exponential back-off?
-- Does it respect a ``Retry-After`` header?
-- Does it surface a clear error to the user instead of looping?
+**Tests:** back-off logic, ``Retry-After`` handling, request queuing.
 
 LLMTimeout
 ~~~~~~~~~~
 
-Hangs every connection for *timeout_s* seconds, then returns HTTP 504.
-No requests are forwarded to the real API.
+Hangs every connection for *timeout_s* seconds then returns HTTP 504.
+No request is forwarded.
 
 .. code-block:: python
 
    from chaos_jungle.faults.llm import LLMTimeout
 
-   # 10-second hang per request
    fault = LLMTimeout(timeout_s=10.0)
 
-**What to look for**
-
-- Does the agent cancel the hung task or block the whole process?
-- Is there a user-visible timeout with a friendly message?
-- Does the agent resume correctly after the fault is removed?
+**Tests:** client-side timeouts, task cancellation, process blocking.
 
 LLMResponseCorrupt
 ~~~~~~~~~~~~~~~~~~
 
-Forwards the real API call but mangles the response before the agent
-sees it.  Supports three corruption modes:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 80
-
-   * - Mode
-     - What happens
-   * - ``"truncate"``
-     - Response body cut to half its length (partial / broken JSON)
-   * - ``"empty"``
-     - Response body replaced with ``{}``
-   * - ``"invalid_json"``
-     - Response body replaced with a non-JSON string
+Forwards the real API call but mangles the response.
 
 .. code-block:: python
 
    from chaos_jungle.faults.llm import LLMResponseCorrupt
 
-   fault = LLMResponseCorrupt(mode="truncate")       # default
-   fault = LLMResponseCorrupt(mode="empty")
-   fault = LLMResponseCorrupt(mode="invalid_json")
+   fault = LLMResponseCorrupt(mode="truncate")    # partial JSON
+   fault = LLMResponseCorrupt(mode="empty")       # {}
+   fault = LLMResponseCorrupt(mode="invalid_json") # non-JSON string
 
-**What to look for**
-
-- Does the agent catch ``json.JSONDecodeError`` / ``ValidationError``?
-- Does it retry on parse failure or pass the broken data downstream?
-- Does partial content cause silent wrong answers?
+**Tests:** ``JSONDecodeError`` handling, downstream data propagation.
 
 LLMUnavailable
 ~~~~~~~~~~~~~~
 
-Makes the API completely unreachable — every request returns HTTP 503.
+Always returns HTTP 503.
 
 .. code-block:: python
 
@@ -180,103 +142,233 @@ Makes the API completely unreachable — every request returns HTTP 503.
 
    fault = LLMUnavailable()
 
-**What to look for**
+**Tests:** fallback models, fail-fast behaviour, user error messages.
 
-- Does the agent fail fast or retry indefinitely?
-- Is there a fallback model or graceful degradation path?
-- Does the user see a meaningful error message?
+Tool call faults
+----------------
+
+ToolFault
+~~~~~~~~~
+
+Intercepts requests that contain a ``role: tool`` message — i.e. when the
+agent is returning a tool execution result to the model — and injects an
+API error instead of forwarding it.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import ToolFault
+
+   # Fail every tool call
+   fault = ToolFault()
+
+   # Fail only the "search" tool
+   fault = ToolFault(tool_name="search")
+
+**Tests:** tool-failure recovery, error propagation through agent loops,
+whether the agent retries, aborts, or continues with a bad state.
+
+LLMHallucination
+~~~~~~~~~~~~~~~~
+
+Forwards the real API call and replaces ``choices[0].message.content``
+with injected wrong text before returning it to the agent.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMHallucination
+
+   fault = LLMHallucination("The capital of France is Berlin.")
+   fault = LLMHallucination("I cannot answer that question.")
+
+**Tests:** downstream validation, fact-checking layers, whether wrong
+model output propagates silently through the agent pipeline.
+
+LLMStreamInterrupt
+~~~~~~~~~~~~~~~~~~
+
+When the agent sends a request with ``"stream": true``, the proxy
+pipes SSE events back and then abruptly closes the connection after
+*interrupt_after* data events.  Non-streaming requests are unaffected.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMStreamInterrupt
+
+   fault = LLMStreamInterrupt(interrupt_after=3)
+
+**Tests:** partial-response handling, streaming error recovery,
+incomplete tool-call detection when the model is cut off mid-generation.
+
+LLMTokenStarvation
+~~~~~~~~~~~~~~~~~~
+
+Rewrites every request to set ``max_tokens`` to a tiny value before
+forwarding.  The model returns a real but truncated response with
+``finish_reason: "length"``.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMTokenStarvation
+
+   fault = LLMTokenStarvation(max_tokens=5)
+
+**Tests:** truncated answer handling, context-window pressure simulation,
+agents that loop when a response is incomplete.
+
+MCP faults
+----------
+
+`Model Context Protocol (MCP) <https://modelcontextprotocol.io>`_ servers
+expose tools and resources to LLM agents over HTTP using JSON-RPC.
+``MCPFault`` proxies MCP traffic the same way LLM faults proxy API calls.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import MCPFault
+
+   # Return a JSON-RPC error for every tool/resource call
+   fault = MCPFault(mode="tool_error")
+
+   # Make the MCP server completely unreachable
+   fault = MCPFault(mode="unavailable")
+
+   # Hang every call for 10 s
+   fault = MCPFault(mode="timeout", timeout_s=10.0)
+
+Point ``upstream`` at your MCP server and ``base_url_env`` at the variable
+your agent reads for the MCP server URL:
+
+.. code-block:: python
+
+   fault = MCPFault(
+       mode="tool_error",
+       upstream="http://localhost:3000",   # your MCP server
+       base_url_env="MCP_SERVER_URL",      # env var your agent reads
+       port=18100,
+   )
+
+**Tests:** tool execution failures inside agent loops, JSON-RPC error
+handling, graceful degradation when a tool server goes down.
+
+Intercepting MCP between agents
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When multiple agents communicate via MCP (agent A calls agent B's tools),
+place the proxy between them by overriding the URL agent A uses to reach
+agent B:
+
+.. code-block:: python
+
+   import os
+
+   # Agent A reads AGENT_B_URL to find agent B's MCP server
+   fault = MCPFault(
+       mode="timeout",
+       timeout_s=5.0,
+       upstream="http://agent-b:3000",
+       base_url_env="AGENT_B_URL",
+       port=18200,
+   )
+   runner.start()
+   # Agent A now routes through the proxy → fault injected
+   agent_a.run_task()
+   runner.stop()
 
 Combining faults
 ----------------
 
-Run multiple fault scenarios back-to-back with :class:`~chaos_jungle.suite.ExperimentSuite`:
+Run multiple scenarios back-to-back with :class:`~chaos_jungle.suite.ExperimentSuite`:
 
 .. code-block:: python
 
    from chaos_jungle import ExperimentSuite
-   from chaos_jungle.faults.llm import LLMLatency, LLMRateLimit, LLMUnavailable
+   from chaos_jungle.faults.llm import (
+       LLMLatency, LLMRateLimit, LLMUnavailable,
+       ToolFault, MCPFault,
+   )
    from chaos_jungle.targets import LocalTarget
 
    suite = ExperimentSuite(target=LocalTarget())
-   suite.add("slow-api",        faults=[LLMLatency(delay_s=4.0)])
-   suite.add("throttled",       faults=[LLMRateLimit(n=2)])
-   suite.add("complete-outage", faults=[LLMUnavailable()])
+   suite.add("slow-api",       faults=[LLMLatency(delay_s=4.0)])
+   suite.add("throttled",      faults=[LLMRateLimit(n=2)])
+   suite.add("complete-outage",faults=[LLMUnavailable()])
+   suite.add("tool-down",      faults=[ToolFault()])
+   suite.add("mcp-down",       faults=[MCPFault(mode="unavailable")])
 
-   for experiment in suite.run(workload=run_agent_task):
-       print(experiment["scenario"], experiment["duration_s"])
+   for result in suite.run(workload=run_agent_task):
+       print(result["scenario"], result["duration_s"])
 
-Changing the API endpoint
--------------------------
-
-By default the proxy forwards to ``https://api.openai.com``.  Override
-``upstream`` to test against Anthropic, Azure OpenAI, a local model, or any
-OpenAI-compatible endpoint:
-
-.. code-block:: python
-
-   # Anthropic (Claude)
-   LLMLatency(delay_s=2.0, upstream="https://api.anthropic.com")
-
-   # Azure OpenAI
-   LLMLatency(delay_s=2.0, upstream="https://my-resource.openai.azure.com")
-
-   # Local Ollama
-   LLMLatency(delay_s=2.0, upstream="http://localhost:11434")
-
-Changing the base-URL environment variable
-------------------------------------------
-
-The proxy sets ``OPENAI_BASE_URL`` by default.  If your LLM client reads a
-different variable, pass ``base_url_env``:
-
-.. code-block:: python
-
-   # Anthropic SDK reads ANTHROPIC_BASE_URL
-   LLMLatency(delay_s=2.0, base_url_env="ANTHROPIC_BASE_URL",
-              upstream="https://api.anthropic.com")
-
-   # LiteLLM proxy
-   LLMUnavailable(base_url_env="LITELLM_PROXY_BASE_URL")
-
-Port conflicts
---------------
-
-Each fault uses port ``18000`` by default.  If you run multiple fault
-instances simultaneously (e.g., in a test suite), assign unique ports:
-
-.. code-block:: python
-
-   LLMLatency(port=18001)
-   LLMRateLimit(port=18002)
-   LLMUnavailable(port=18003)
-
-Failure types reference
+Configuration reference
 -----------------------
 
-The table below maps agent failure modes to the recommended fault type:
+Upstream endpoint
+~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   LLMLatency(upstream="https://api.openai.com")      # default
+   LLMLatency(upstream="https://api.anthropic.com")
+   LLMLatency(upstream="http://localhost:11434")       # Ollama
+
+Environment variable
+~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   LLMLatency(base_url_env="OPENAI_BASE_URL")         # default (openai SDK)
+   LLMLatency(base_url_env="ANTHROPIC_BASE_URL")      # anthropic SDK
+   MCPFault(base_url_env="MCP_SERVER_URL")            # MCP clients
+
+Port assignment
+~~~~~~~~~~~~~~~
+
+Each fault occupies one port.  Assign unique ports when running multiple
+faults simultaneously:
+
+.. code-block:: python
+
+   LLMLatency(port=18000)       # default
+   LLMRateLimit(port=18001)
+   ToolFault(port=18002)
+   MCPFault(port=18100)         # MCP default
+
+Fault reference
+---------------
 
 .. list-table::
    :header-rows: 1
-   :widths: 40 30 30
+   :widths: 25 25 50
 
-   * - Agent failure mode
-     - Fault to inject
+   * - Fault
+     - Agent failure mode
      - What you are testing
-   * - Model responds slowly
-     - :class:`LLMLatency`
+   * - ``LLMLatency``
+     - Slow model response
      - Timeout budget, retry strategy
-   * - Model is throttled (429)
-     - :class:`LLMRateLimit`
+   * - ``LLMRateLimit``
+     - Throttled API (429)
      - Back-off, request queuing
-   * - Connection hangs forever
-     - :class:`LLMTimeout`
+   * - ``LLMTimeout``
+     - Hanging connection
      - Task cancellation, hang detection
-   * - Response is malformed JSON
-     - :class:`LLMResponseCorrupt`
-     - Parse-error handling, retry on failure
-   * - Model API is completely down
-     - :class:`LLMUnavailable`
+   * - ``LLMResponseCorrupt``
+     - Malformed JSON response
+     - Parse-error handling, retry
+   * - ``LLMUnavailable``
+     - Complete API outage
      - Fallback model, graceful degradation
-   * - Intermittent errors
-     - :class:`LLMRateLimit` (low n)
-     - Error rate tolerance, partial success
+   * - ``ToolFault``
+     - Tool execution error
+     - Tool-failure recovery in agent loops
+   * - ``LLMHallucination``
+     - Wrong model answer
+     - Downstream validation, fact-checking
+   * - ``LLMStreamInterrupt``
+     - Truncated stream
+     - Partial-response handling
+   * - ``LLMTokenStarvation``
+     - Response cut off at length limit
+     - Incomplete-answer handling
+   * - ``MCPFault``
+     - MCP server failure
+     - Tool server resilience, agent-to-agent calls

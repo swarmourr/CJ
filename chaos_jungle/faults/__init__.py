@@ -15,6 +15,11 @@ from chaos_jungle.faults.llm import (
     LLMTimeout,
     LLMResponseCorrupt,
     LLMUnavailable,
+    ToolFault,
+    LLMHallucination,
+    LLMStreamInterrupt,
+    LLMTokenStarvation,
+    MCPFault,
 )
 
 __all__ = [
@@ -31,4 +36,9 @@ __all__ = [
     "LLMTimeout",
     "LLMResponseCorrupt",
     "LLMUnavailable",
+    "ToolFault",
+    "LLMHallucination",
+    "LLMStreamInterrupt",
+    "LLMTokenStarvation",
+    "MCPFault",
 ]

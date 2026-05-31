@@ -64,6 +64,11 @@ from chaos_jungle.faults import (
     LLMTimeout,
     LLMResponseCorrupt,
     LLMUnavailable,
+    ToolFault,
+    LLMHallucination,
+    LLMStreamInterrupt,
+    LLMTokenStarvation,
+    MCPFault,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 
@@ -97,6 +102,11 @@ __all__ = [
     "LLMTimeout",
     "LLMResponseCorrupt",
     "LLMUnavailable",
+    "ToolFault",
+    "LLMHallucination",
+    "LLMStreamInterrupt",
+    "LLMTokenStarvation",
+    "MCPFault",
     # Targets
     "LocalTarget",
     "SSHTarget",

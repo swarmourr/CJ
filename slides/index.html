@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>chaos-jungle — Chaos Engineering Framework</title>
+
+  <!-- Reveal.js -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" />
+  <!-- Code highlighting -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css" />
+
+  <style>
+    :root {
+      --cj-green:  #00e676;
+      --cj-orange: #ff6d00;
+      --cj-blue:   #40c4ff;
+      --cj-red:    #ff1744;
+      --cj-gray:   #546e7a;
+    }
+
+    .reveal { font-family: 'Segoe UI', system-ui, sans-serif; }
+
+    /* ── Title slide ── */
+    .title-slide h1 { font-size: 2.4em; color: var(--cj-green); margin-bottom: 0.2em; }
+    .title-slide .subtitle { font-size: 1.1em; color: #cfd8dc; }
+    .title-slide .tagline  { margin-top: 0.8em; font-size: 0.9em; color: #78909c; }
+
+    /* ── Section headers ── */
+    .reveal h2 { color: var(--cj-green); text-transform: none; font-size: 1.5em; }
+    .reveal h3 { color: var(--cj-blue);  text-transform: none; font-size: 1.15em; }
+
+    /* ── Highlight spans ── */
+    .hl-green  { color: var(--cj-green); font-weight: 700; }
+    .hl-orange { color: var(--cj-orange); font-weight: 700; }
+    .hl-blue   { color: var(--cj-blue);  font-weight: 700; }
+    .hl-red    { color: var(--cj-red);   font-weight: 700; }
+
+    /* ── Cards / pill badges ── */
+    .pill {
+      display: inline-block;
+      padding: 0.18em 0.7em;
+      border-radius: 999px;
+      font-size: 0.78em;
+      font-weight: 600;
+      margin: 0.15em;
+    }
+    .pill-green  { background: #00c85320; border: 1px solid var(--cj-green);  color: var(--cj-green); }
+    .pill-orange { background: #ff6d0020; border: 1px solid var(--cj-orange); color: var(--cj-orange); }
+    .pill-blue   { background: #40c4ff20; border: 1px solid var(--cj-blue);   color: var(--cj-blue); }
+    .pill-red    { background: #ff174420; border: 1px solid var(--cj-red);    color: var(--cj-red); }
+
+    /* ── Two-column layout ── */
+    .cols { display: flex; gap: 2em; align-items: flex-start; }
+    .col  { flex: 1; }
+
+    /* ── Boxes ── */
+    .box {
+      border-radius: 8px;
+      padding: 0.8em 1.1em;
+      margin: 0.4em 0;
+      font-size: 0.82em;
+      text-align: left;
+    }
+    .box-green  { background: #00e67610; border-left: 3px solid var(--cj-green); }
+    .box-orange { background: #ff6d0010; border-left: 3px solid var(--cj-orange); }
+    .box-blue   { background: #40c4ff10; border-left: 3px solid var(--cj-blue); }
+    .box-red    { background: #ff174410; border-left: 3px solid var(--cj-red); }
+
+    /* ── Tables ── */
+    .reveal table { font-size: 0.75em; width: 100%; border-collapse: collapse; }
+    .reveal table th { background: #1e2a30; color: var(--cj-blue); padding: 0.5em 0.8em; }
+    .reveal table td { padding: 0.4em 0.8em; border-bottom: 1px solid #2e3d45; }
+    .reveal table tr:hover td { background: #1e2a3080; }
+
+    /* ── Code blocks ── */
+    .reveal pre { font-size: 0.68em; border-radius: 8px; box-shadow: 0 4px 20px #00000060; }
+    .reveal code { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+    /* ── Flow diagram ── */
+    .flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      flex-wrap: wrap;
+      margin: 0.6em 0;
+    }
+    .flow-box {
+      background: #1e2a30;
+      border: 1px solid #37474f;
+      border-radius: 6px;
+      padding: 0.4em 0.8em;
+      font-size: 0.72em;
+      text-align: center;
+      min-width: 90px;
+    }
+    .flow-arrow { color: var(--cj-green); font-size: 1.2em; padding: 0 0.3em; }
+
+    /* ── Number list ── */
+    .num-list { list-style: none; padding: 0; margin: 0; }
+    .num-list li { display: flex; align-items: flex-start; gap: 0.6em; margin: 0.4em 0; font-size: 0.82em; }
+    .num-badge {
+      min-width: 1.6em; height: 1.6em;
+      background: var(--cj-green);
+      color: #000;
+      border-radius: 50%;
+      font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.85em;
+      flex-shrink: 0;
+    }
+
+    /* ── Footer ── */
+    .slide-footer {
+      position: fixed; bottom: 10px; right: 16px;
+      font-size: 0.5em; color: #546e7a;
+    }
+    .slide-footer a { color: #546e7a; text-decoration: none; }
+
+    /* ── Divider ── */
+    .divider { border: none; border-top: 1px solid #37474f; margin: 0.6em 0; }
+
+    /* ── Icon-like bullets ── */
+    .icon-list { list-style: none; padding: 0; }
+    .icon-list li { margin: 0.35em 0; font-size: 0.82em; }
+    .icon-list li::before { content: '›'; color: var(--cj-green); font-weight: 700; margin-right: 0.5em; }
+  </style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 1 — Title
+═══════════════════════════════════════════════════════════════ -->
+<section class="title-slide" data-background-gradient="radial-gradient(ellipse at 20% 50%, #0d2b1a 0%, #000000 70%)">
+  <h1>chaos-jungle</h1>
+  <p class="subtitle">A Generic Chaos Engineering Framework</p>
+  <hr class="divider" style="width:60%; margin: 0.8em auto;" />
+  <p class="tagline">
+    Inject network delays &nbsp;·&nbsp; storage corruption &nbsp;·&nbsp; packet loss<br/>
+    on any Linux machine — locally, via SSH, or via HTTP daemon
+  </p>
+  <br/>
+  <p style="font-size:0.65em; color:#546e7a;">
+    <span class="pill pill-green">Python 3.9+</span>
+    <span class="pill pill-blue">Linux target</span>
+    <span class="pill pill-orange">No agent required</span>
+    <span class="pill pill-red">Open source</span>
+  </p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 2 — What is Chaos Engineering?
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>What is Chaos Engineering?</h2>
+  <p style="font-size:0.85em; color:#b0bec5;">
+    The practice of <span class="hl-green">deliberately injecting failures</span> into a system<br/>
+    to discover weaknesses <em>before</em> they cause outages in production.
+  </p>
+  <br/>
+  <div class="cols">
+    <div class="col box box-red">
+      <strong style="color:var(--cj-red)">Without chaos testing</strong><br/>
+      Failures are discovered in production, under load, at the worst time.
+    </div>
+    <div class="col box box-green">
+      <strong style="color:var(--cj-green)">With chaos testing</strong><br/>
+      Weaknesses are found in a controlled experiment, with full observability.
+    </div>
+  </div>
+  <br/>
+  <div class="flow">
+    <div class="flow-box">Hypothesis</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--cj-orange); color:var(--cj-orange)">Inject Fault</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">Measure Impact</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--cj-green); color:var(--cj-green)">Fix &amp; Learn</div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 3 — Why chaos-jungle?
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Why chaos-jungle?</h2>
+  <div class="cols">
+    <div class="col">
+      <ul class="icon-list">
+        <li><span class="hl-green">No agent on the target</span> — uses existing tools (<code>tc</code>, <code>dd</code>)</li>
+        <li><span class="hl-blue">Any target</span> — local, SSH, HTTP daemon, containers</li>
+        <li><span class="hl-orange">Automatic revert</span> — always cleans up, even on crash</li>
+        <li>Built-in <span class="hl-green">metric collection</span> — baseline vs chaos comparison</li>
+        <li>Persistent <span class="hl-blue">SQLite session DB</span> — every run is recorded</li>
+        <li>Portable <span class="hl-orange">CSV / JSON export</span> — share results anywhere</li>
+        <li>Live <span class="hl-green">dashboard</span> — no extra dependencies</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="box box-blue" style="font-size:0.72em;">
+        <strong>Origin</strong><br/>
+        Based on the RENCI/PEARC '19 experiment framework.<br/>
+        Generalised into a reusable Python package that works<br/>
+        with <em>any</em> workflow, not just Pegasus WMS.
+      </div>
+      <br/>
+      <pre><code class="language-bash" data-trim>
+pip install git+https://github.com/swarmourr/CJ.git
+      </code></pre>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 4 — Architecture
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Architecture</h2>
+  <div class="flow" style="flex-direction:column; gap:0.4em;">
+    <div style="display:flex; gap:1em; justify-content:center;">
+      <div class="flow-box pill-orange" style="min-width:110px;">User Code<br/><small>decorator / API</small></div>
+      <div class="flow-box pill-orange" style="min-width:110px;">CLI<br/><small>chaos-jungle start</small></div>
+      <div class="flow-box pill-orange" style="min-width:110px;">YAML Suite<br/><small>config file</small></div>
+    </div>
+    <div class="flow-arrow" style="font-size:1.5em;">↓</div>
+    <div class="flow-box" style="background:#0d2b1a; border-color:var(--cj-green); color:var(--cj-green); min-width:300px;">
+      <strong>ChaosRunner</strong><br/>
+      <small>guardrails · preflight · lifecycle · DB logging</small>
+    </div>
+    <div class="flow-arrow" style="font-size:1.5em;">↓</div>
+    <div style="display:flex; gap:1em; justify-content:center;">
+      <div class="flow-box pill-green" style="min-width:90px;">Faults<br/><small>NetworkDelay<br/>StorageCorrupt…</small></div>
+      <div class="flow-box pill-blue" style="min-width:90px;">Targets<br/><small>Local · SSH<br/>HTTP</small></div>
+      <div class="flow-box" style="min-width:90px; border-color:#7e57c2; color:#ce93d8;">Metrics<br/><small>PingLatency<br/>CommandMetric…</small></div>
+      <div class="flow-box" style="min-width:90px; border-color:#ff6d00; color:#ffb74d;">SessionDB<br/><small>SQLite<br/>chaos_jungle.db</small></div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 5 — Fault Types
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Fault Types</h2>
+  <table>
+    <thead>
+      <tr><th>Fault</th><th>What it does</th><th>Required params</th><th>Tool used</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="hl-green">NetworkDelay</span></td>
+        <td>Add latency to all outgoing packets</td>
+        <td><code>delay</code> e.g. <code>"100ms"</code></td>
+        <td>tc netem</td>
+      </tr>
+      <tr>
+        <td><span class="hl-green">NetworkLoss</span></td>
+        <td>Drop a % of packets</td>
+        <td><code>rate</code> e.g. <code>"5%"</code></td>
+        <td>tc netem</td>
+      </tr>
+      <tr>
+        <td><span class="hl-green">NetworkCorrupt</span></td>
+        <td>Corrupt a % of packets (breaks checksum)</td>
+        <td><code>rate</code> e.g. <code>"1%"</code></td>
+        <td>tc netem</td>
+      </tr>
+      <tr>
+        <td><span class="hl-green">NetworkDuplicate</span></td>
+        <td>Duplicate a % of packets</td>
+        <td><code>rate</code> e.g. <code>"0.5%"</code></td>
+        <td>tc netem</td>
+      </tr>
+      <tr>
+        <td><span class="hl-orange">StorageCorrupt</span></td>
+        <td>Flip bits in files on disk (via crontab)</td>
+        <td><code>pattern</code>, <code>directory</code></td>
+        <td>dd + cj_storage</td>
+      </tr>
+      <tr>
+        <td><span class="hl-red">SilentNetworkCorrupt</span></td>
+        <td>Corrupt packets silently — valid checksum</td>
+        <td><code>rate</code> (1-in-N)</td>
+        <td>BPF / XDP</td>
+      </tr>
+    </tbody>
+  </table>
+  <br/>
+  <p style="font-size:0.65em; color:#78909c;">
+    All faults auto-detect the network interface via <code>ip route</code> if <code>iface=</code> is not given.<br/>
+    All faults are always reverted in a <code>finally</code> block — even on exception.
+  </p>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 6 — Targets
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Targets — Where to inject</h2>
+  <div class="cols">
+    <div class="col">
+      <div class="box box-green">
+        <strong class="hl-green">LocalTarget</strong><br/>
+        <small>Run on this machine. No connection needed.<br/>Good for development and single-node tests.</small>
+        <pre style="margin-top:0.4em;"><code class="language-python" data-trim>
+target = LocalTarget()
+        </code></pre>
+      </div>
+      <div class="box box-blue">
+        <strong class="hl-blue">SSHTarget</strong><br/>
+        <small>Run on a remote machine over SSH.<br/>
+        Auth: key file, ssh-agent, or password.</small>
+        <pre style="margin-top:0.4em;"><code class="language-python" data-trim>
+target = SSHTarget("worker1", user="ubuntu")
+# or explicit key
+target = SSHTarget("worker1", user="ubuntu",
+                   key="~/.ssh/id_ed25519")
+        </code></pre>
+      </div>
+    </div>
+    <div class="col">
+      <div class="box box-orange">
+        <strong class="hl-orange">HTTPTarget (Daemon)</strong><br/>
+        <small>Control a remote machine via REST API.<br/>
+        Use when SSH is blocked or multiple controllers needed.</small>
+        <pre style="margin-top:0.4em;"><code class="language-python" data-trim>
+# on the remote machine:
+# cj-daemon --port 7777 --token secret
+
+target = HTTPTarget("http://worker1:7777",
+                    token="secret")
+        </code></pre>
+      </div>
+      <br/>
+      <table style="font-size:0.62em;">
+        <tr><th></th><th>SSH</th><th>Daemon</th></tr>
+        <tr><td>SSH keys needed</td><td>yes</td><td>no</td></tr>
+        <tr><td>Port 22 required</td><td>yes</td><td>no</td></tr>
+        <tr><td>Works behind firewall</td><td>maybe</td><td>yes</td></tr>
+        <tr><td>Multi-user</td><td>—</td><td>yes</td></tr>
+        <tr><td>Kubernetes / container</td><td>rarely</td><td>yes</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 7 — Usage Modes
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Usage Modes</h2>
+  <div class="cols">
+    <div class="col">
+      <h3>Explicit</h3>
+      <pre><code class="language-python" data-trim>
+runner = ChaosRunner(scenario, target)
+runner.start()
+run_pipeline()
+runner.stop()
+      </code></pre>
+
+      <h3>Decorator</h3>
+      <pre><code class="language-python" data-trim>
+@chaos(NetworkDelay("100ms"))
+def run_experiment():
+    run_pipeline()
+      </code></pre>
+    </div>
+    <div class="col">
+      <h3>Context Manager</h3>
+      <pre><code class="language-python" data-trim>
+with chaos_session(NetworkLoss("5%")) as s:
+    run_pipeline()
+    print(s.export("json"))
+      </code></pre>
+
+      <h3>Separate (CLI)</h3>
+      <pre><code class="language-bash" data-trim>
+# Terminal 1
+chaos-jungle start --scenario E1 --delay 100ms
+
+# Terminal 2 — run anything
+bash my_workflow.sh
+
+# Terminal 1
+chaos-jungle stop
+      </code></pre>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 8 — @chaos_measure
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2><code>@chaos_measure</code> — Auto-record results</h2>
+  <p style="font-size:0.8em; color:#b0bec5;">
+    Wraps a function with chaos <em>and</em> automatically saves its return dict as session metrics.
+  </p>
+  <pre><code class="language-python" data-trim>
+from chaos_jungle.decorators import chaos_measure
+from chaos_jungle.faults import NetworkDelay
+
+@chaos_measure(
+    NetworkDelay("100ms", jitter="10ms"),
+    scenario_name="E1",
+    conflict="warn",
+)
+def run_experiment():
+    result = run_pipeline()
+    return {                          # dict → auto-saved to DB
+        "files_transferred": 120,
+        "retries":             3,
+        "throughput_mbps":   42.1,
+    }
+
+summary = run_experiment()
+print(summary["duration_s"])          # how long chaos was active
+print(summary["fn_result"])           # the dict above
+  </code></pre>
+  <div class="flow" style="margin-top:0.4em;">
+    <div class="flow-box">connect</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--cj-blue); color:var(--cj-blue)">baseline metrics</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--cj-orange); color:var(--cj-orange)">chaos ON</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">run fn()</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--cj-blue); color:var(--cj-blue)">chaos metrics</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box" style="border-color:var(--cj-green); color:var(--cj-green)">chaos OFF + record</div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 9 — Metrics Interface
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Metrics Interface</h2>
+  <p style="font-size:0.8em; color:#b0bec5;">
+    Define <em>what</em> to measure and <em>how</em>. Collected automatically at baseline and under chaos.
+  </p>
+  <div class="cols">
+    <div class="col">
+      <h3>Built-in metrics</h3>
+      <table>
+        <tr><th>Class</th><th>Measures</th></tr>
+        <tr><td><code>PingLatency</code></td><td>avg / min / max RTT</td></tr>
+        <tr><td><code>CommandMetric</code></td><td>any shell command</td></tr>
+        <tr><td><code>FileIntegrity</code></td><td>file count + md5 diff</td></tr>
+        <tr><td><code>ThroughputMetric</code></td><td>curl download speed</td></tr>
+      </table>
+      <br/>
+      <pre><code class="language-python" data-trim>
+@chaos_measure(
+  NetworkDelay("100ms"),
+  metrics=[
+    PingLatency("8.8.8.8", count=5),
+    CommandMetric(
+      "ss -tn state established | wc -l",
+      parse=lambda o: {"conns": int(o)},
+      name="tcp",
+    ),
+  ],
+)
+def run(): ...
+      </code></pre>
+    </div>
+    <div class="col">
+      <h3>Custom metric</h3>
+      <pre><code class="language-python" data-trim>
+from chaos_jungle.metrics import Metric
+
+class RetransmitRate(Metric):
+    name = "tcp_retrans"
+
+    def collect(self, target) -> dict:
+        _, out, _ = target.run(
+          "awk '/^Tcp:/{getline; "
+          "print $12}' /proc/net/snmp"
+        )
+        return {"retransmits": int(out.strip())}
+      </code></pre>
+      <div class="box box-blue" style="font-size:0.72em; margin-top:0.6em;">
+        <strong>Result keys in DB:</strong><br/>
+        <code>baseline_ping_avg_ms: 0.2</code><br/>
+        <code>chaos_ping_avg_ms: 108.6</code><br/>
+        <code>baseline_tcp_conns: 12</code><br/>
+        <code>chaos_tcp_conns: 8</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 10 — Data Storage
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Data Storage</h2>
+  <p style="font-size:0.78em; color:#b0bec5;">All experiment data is persisted to <code>~/.chaos-jungle/chaos_jungle.db</code></p>
+  <div class="cols">
+    <div class="col">
+      <h3>Database schema</h3>
+      <table>
+        <tr><th>Table</th><th>Stores</th></tr>
+        <tr><td><code>sessions</code></td><td>name, start/stop time, status</td></tr>
+        <tr><td><code>faults</code></td><td>kind + parameters per fault</td></tr>
+        <tr><td><code>events</code></td><td>every shell command + output</td></tr>
+        <tr><td><code>results</code></td><td>workflow metrics (JSON)</td></tr>
+      </table>
+      <br/>
+      <div class="box box-green" style="font-size:0.72em;">
+        Every <code>tc</code>, <code>dd</code>, <code>ping</code> command is logged with exit code and output.
+        You can see exactly what chaos-jungle did on the machine.
+      </div>
+    </div>
+    <div class="col">
+      <h3>Export</h3>
+      <pre><code class="language-bash" data-trim>
+# JSON file
+chaos-jungle export --session 3
+
+# CSV with metrics columns
+chaos-jungle export --session 3 --format csv
+
+# All sessions
+chaos-jungle export --format csv
+      </code></pre>
+      <h3>Fetch from remote</h3>
+      <pre><code class="language-bash" data-trim>
+chaos-jungle fetch \
+  --target ssh://ubuntu@worker1 \
+  --output-dir ./results/
+# Downloads DB + auto-generates CSV
+      </code></pre>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 11 — SSH Auth
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>SSH Authentication</h2>
+  <p style="font-size:0.78em; color:#b0bec5;">Auth is attempted in order — same as the OpenSSH client:</p>
+  <ul class="num-list">
+    <li><div class="num-badge">1</div><div><strong>Explicit key file</strong> — <code>SSHTarget("h", user="u", key="~/.ssh/id_ed25519")</code></div></li>
+    <li><div class="num-badge">2</div><div><strong>SSH agent</strong> — if <code>ssh-add</code> was used, picked up automatically</div></li>
+    <li><div class="num-badge">3</div><div><strong>Default key search</strong> — Paramiko tries <code>~/.ssh/id_rsa</code>, <code>id_ecdsa</code>, <code>id_ed25519</code></div></li>
+    <li><div class="num-badge">4</div><div><strong>Password</strong> — <code>SSHTarget("h", user="u", password="...")</code></div></li>
+  </ul>
+  <br/>
+  <div class="cols">
+    <div class="col">
+      <pre><code class="language-python" data-trim>
+# most common — agent / default key
+SSHTarget("worker1", user="ubuntu")
+
+# password-only (no key)
+SSHTarget("worker1", user="ubuntu",
+          password="secret",
+          allow_agent=False,
+          look_for_keys=False)
+      </code></pre>
+    </div>
+    <div class="col">
+      <div class="box box-orange" style="font-size:0.72em;">
+        <strong>Sudoers setup on target:</strong><br/>
+        <code>echo "ubuntu ALL=(ALL) NOPASSWD:<br/>
+        /sbin/tc, /bin/dd, /usr/sbin/filefrag" \<br/>
+        | sudo tee /etc/sudoers.d/chaos-jungle</code>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 12 — When to use Daemon
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>When to use the Daemon</h2>
+  <div class="cols">
+    <div class="col">
+      <div class="box box-red" style="font-size:0.78em;">
+        <strong>Use SSHTarget when:</strong><br/>
+        <ul class="icon-list" style="margin-top:0.3em;">
+          <li>SSH keys are already set up</li>
+          <li>Port 22 is open</li>
+          <li>One-off or short experiments</li>
+          <li>HPC / cloud VMs</li>
+        </ul>
+      </div>
+      <br/>
+      <div class="box box-orange" style="font-size:0.78em;">
+        <strong>Use Daemon (HTTPTarget) when:</strong><br/>
+        <ul class="icon-list" style="margin-top:0.3em;">
+          <li>Port 22 is blocked by firewall</li>
+          <li>Multiple controllers share one target</li>
+          <li>Container / Kubernetes pod</li>
+          <li>REST API integration (Ansible, CI/CD)</li>
+          <li>No SSH key management needed</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col">
+      <pre><code class="language-bash" data-trim>
+# on the target machine — once
+cj-daemon --port 7777 --token mysecret
+
+# from anywhere
+chaos-jungle start \
+  --scenario net-delay \
+  --delay 100ms \
+  --target http://worker1:7777
+      </code></pre>
+      <br/>
+      <pre><code class="language-python" data-trim>
+target = HTTPTarget(
+    "http://worker1:7777",
+    token="mysecret"
+)
+runner = ChaosRunner(scenario, target)
+runner.run("10m")
+      </code></pre>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 13 — Guardrails & Validation
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Guardrails &amp; Input Validation</h2>
+  <div class="cols">
+    <div class="col">
+      <h3>Guardrails</h3>
+      <p style="font-size:0.78em; color:#b0bec5;">Checked before any fault starts:</p>
+      <ul class="icon-list">
+        <li>Two tc-netem faults on same interface → <code>ConflictError</code></li>
+        <li>tc rule already active from previous run → <code>ConflictError</code></li>
+        <li>StorageCorrupt + NetworkCorrupt together → warn</li>
+      </ul>
+      <br/>
+      <pre><code class="language-python" data-trim>
+runner = ChaosRunner(
+    scenario, target,
+    conflict="warn",   # or "raise" / "force"
+)
+      </code></pre>
+    </div>
+    <div class="col">
+      <h3>Input validation</h3>
+      <p style="font-size:0.78em; color:#b0bec5;">Caught at <code>__init__</code> time — not at runtime:</p>
+      <pre><code class="language-python" data-trim>
+# ValueError: 'delay' must be like
+# '100ms', '1s' — got 'hundred'
+NetworkDelay("hundred")
+
+# ValueError: 'rate' must be like
+# '5%', '0.5%' — got '5'
+NetworkLoss("5")
+
+# ValueError: 'directory' must start with '/'
+StorageCorrupt("*.pdb", "data/")
+
+# ValueError: SSHTarget 'key' not found
+SSHTarget("h", user="u",
+          key="~/.ssh/missing")
+      </code></pre>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 14 — ExperimentSuite
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>ExperimentSuite — Multi-node Parallel Chaos</h2>
+  <div class="cols">
+    <div class="col">
+      <pre><code class="language-yaml" data-trim>
+# suite.yml
+duration: 10m
+conflict: raise
+auto_install: true
+
+experiments:
+  - name: control
+    target: local
+    faults: []
+
+  - name: net-delay
+    target: ssh://ubuntu@node1
+    faults:
+      - kind: NetworkDelay
+        delay: 100ms
+        jitter: 10ms
+
+  - name: packet-loss
+    target: ssh://ubuntu@node2
+    faults:
+      - kind: NetworkLoss
+        rate: 5%
+
+  - name: storage-corrupt
+    target: ssh://ubuntu@node3
+    duration: 5m
+    faults:
+      - kind: StorageCorrupt
+        pattern: "*.pdb"
+        directory: /scratch/data
+      </code></pre>
+    </div>
+    <div class="col">
+      <pre><code class="language-bash" data-trim>
+chaos-jungle suite --config suite.yml
+      </code></pre>
+      <pre><code class="language-python" data-trim>
+suite = ExperimentSuite(duration="10m")
+suite.add(Scenario("control", []),
+          LocalTarget())
+suite.add(Scenario("delay",
+          [NetworkDelay("100ms")]),
+          SSHTarget("node1", user="ubuntu"))
+
+results = suite.run(parallel=True)
+ExperimentSuite.print_summary(results)
+      </code></pre>
+      <div class="box box-green" style="font-size:0.72em; margin-top:0.5em;">
+        All experiments start simultaneously.<br/>
+        Each runs independently on its own target.<br/>
+        Results stored in the same DB.
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 15 — Dashboard
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Dashboard</h2>
+  <p style="font-size:0.78em; color:#b0bec5;">
+    Built-in web dashboard — no extra dependencies. Powered by FastAPI.
+  </p>
+  <div class="cols">
+    <div class="col">
+      <ul class="icon-list">
+        <li>Lists all sessions with status and duration</li>
+        <li>Session drawer: faults, event log, shell commands</li>
+        <li>Verification panel: live <code>tc qdisc show</code> + cj.db bit-flips</li>
+        <li>Workflow results: metrics table with color coding</li>
+        <li>System info: platform, uptime, disk, memory</li>
+        <li>Auto-refresh every 5 seconds</li>
+      </ul>
+      <br/>
+      <pre><code class="language-bash" data-trim>
+chaos-jungle dashboard
+# → http://127.0.0.1:8050
+
+chaos-jungle dashboard \
+  --host 0.0.0.0 --port 9000
+      </code></pre>
+    </div>
+    <div class="col" style="display:flex; flex-direction:column; gap:0.5em;">
+      <div class="box box-green" style="font-size:0.75em;">
+        <strong>Session panel shows:</strong><br/>
+        started · stopped · duration · status
+      </div>
+      <div class="box box-blue" style="font-size:0.75em;">
+        <strong>Event log shows:</strong><br/>
+        <code>[cmd:OK] # tc qdisc add dev eth0 ...</code><br/>
+        <code>[cmd:OK] $ ping -c 5 127.0.0.1 ...</code>
+      </div>
+      <div class="box box-orange" style="font-size:0.75em;">
+        <strong>Metrics panel shows:</strong><br/>
+        baseline vs chaos comparison<br/>
+        color coded: green = normal, red = degraded
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 16 — System state during experiment
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>System State During Experiment</h2>
+  <p style="font-size:0.78em; color:#b0bec5;">Configurations applied to the target that persist if not reverted:</p>
+  <table>
+    <thead><tr><th>Fault</th><th>State created</th><th>Reverted by</th></tr></thead>
+    <tbody>
+      <tr><td>NetworkDelay/Loss/Corrupt</td><td><code>tc qdisc</code> rule on interface</td><td><code>runner.stop()</code></td></tr>
+      <tr><td>StorageCorrupt</td><td>crontab entry + deployed scripts</td><td><code>runner.stop()</code></td></tr>
+      <tr><td>SilentNetworkCorrupt</td><td>BPF/XDP hook attached</td><td><code>runner.stop()</code></td></tr>
+      <tr><td>All faults</td><td>Session record in <code>chaos_jungle.db</code></td><td>always</td></tr>
+    </tbody>
+  </table>
+  <br/>
+  <div class="cols">
+    <div class="col box box-red" style="font-size:0.72em;">
+      <strong>If experiment crashes:</strong><br/>
+      tc rules stay active. Crontab keeps running.<br/>
+      Session stuck as <code>running</code> in DB.
+    </div>
+    <div class="col box box-green" style="font-size:0.72em;">
+      <strong>Recovery:</strong><br/>
+      <code>chaos-jungle stop</code> — reverts most recent<br/>
+      <code>sudo tc qdisc del dev eth0 root</code><br/>
+      <code>crontab -l | grep -v cj_storage | crontab -</code>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 17 — Full experiment workflow
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Full Experiment Workflow</h2>
+  <div class="flow" style="flex-direction:column; gap:0.5em; align-items:stretch; max-width:700px; margin:0 auto;">
+    <div class="flow-box" style="background:#0d1f2d; border-color:#37474f; text-align:left; padding:0.5em 1em;">
+      <strong style="color:var(--cj-blue)">1. Define</strong> &nbsp;
+      <code style="font-size:0.85em;">Scenario + Faults + Target + Metrics</code>
+    </div>
+    <div class="flow-arrow" style="text-align:center;">↓</div>
+    <div class="flow-box" style="background:#0d1f2d; border-color:#37474f; text-align:left; padding:0.5em 1em;">
+      <strong style="color:var(--cj-green)">2. Preflight</strong> &nbsp;
+      <code style="font-size:0.85em;">check deps · guardrails · interface detection</code>
+    </div>
+    <div class="flow-arrow" style="text-align:center;">↓</div>
+    <div class="flow-box" style="background:#0d2b1a; border-color:var(--cj-green); text-align:left; padding:0.5em 1em;">
+      <strong style="color:var(--cj-orange)">3. Inject</strong> &nbsp;
+      <code style="font-size:0.85em;">baseline metrics → chaos ON → run workload → chaos metrics</code>
+    </div>
+    <div class="flow-arrow" style="text-align:center;">↓</div>
+    <div class="flow-box" style="background:#0d1f2d; border-color:#37474f; text-align:left; padding:0.5em 1em;">
+      <strong style="color:var(--cj-red)">4. Revert</strong> &nbsp;
+      <code style="font-size:0.85em;">tc qdisc del · crontab remove · record results</code>
+    </div>
+    <div class="flow-arrow" style="text-align:center;">↓</div>
+    <div class="flow-box" style="background:#0d1f2d; border-color:#37474f; text-align:left; padding:0.5em 1em;">
+      <strong style="color:var(--cj-blue)">5. Analyse</strong> &nbsp;
+      <code style="font-size:0.85em;">dashboard · export CSV / JSON · chaos-jungle fetch</code>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 18 — CLI Reference
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>CLI Reference</h2>
+  <table>
+    <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>chaos-jungle start</code></td><td>Start fault injection (returns immediately or blocks with <code>--duration</code>)</td></tr>
+      <tr><td><code>chaos-jungle stop</code></td><td>Stop and revert the active session</td></tr>
+      <tr><td><code>chaos-jungle status</code></td><td>Show current running session</td></tr>
+      <tr><td><code>chaos-jungle list</code></td><td>List all sessions</td></tr>
+      <tr><td><code>chaos-jungle export</code></td><td>Write session data to JSON or CSV file</td></tr>
+      <tr><td><code>chaos-jungle fetch</code></td><td>Download DB + logs from remote SSH host</td></tr>
+      <tr><td><code>chaos-jungle suite</code></td><td>Run an ExperimentSuite from YAML</td></tr>
+      <tr><td><code>chaos-jungle dashboard</code></td><td>Open live tracking dashboard</td></tr>
+      <tr><td><code>cj-daemon</code></td><td>Start HTTP daemon on a target machine</td></tr>
+    </tbody>
+  </table>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 19 — Install & Quickstart
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-color="#0a0f12">
+  <h2>Install &amp; Quickstart</h2>
+  <div class="cols">
+    <div class="col">
+      <h3>Install</h3>
+      <pre><code class="language-bash" data-trim>
+# latest from GitHub
+pip install git+https://github.com/swarmourr/CJ.git
+
+# force-reinstall
+pip install --force-reinstall \
+  git+https://github.com/swarmourr/CJ.git
+
+# Ubuntu 23+ / externally managed Python
+pip install --break-system-packages \
+  git+https://github.com/swarmourr/CJ.git
+      </code></pre>
+    </div>
+    <div class="col">
+      <h3>First experiment</h3>
+      <pre><code class="language-python" data-trim>
+from chaos_jungle.decorators import chaos_measure
+from chaos_jungle.faults import NetworkDelay
+from chaos_jungle.metrics import PingLatency
+
+@chaos_measure(
+    NetworkDelay("100ms"),
+    metrics=[PingLatency("8.8.8.8")],
+)
+def my_experiment():
+    run_my_pipeline()
+    return {"retries": 3}
+
+summary = my_experiment()
+print(summary["metrics"])
+      </code></pre>
+      <pre><code class="language-bash" data-trim>
+chaos-jungle dashboard   # view results
+      </code></pre>
+    </div>
+  </div>
+</section>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     SLIDE 20 — Thank you
+═══════════════════════════════════════════════════════════════ -->
+<section data-background-gradient="radial-gradient(ellipse at 80% 50%, #0d2b1a 0%, #000000 70%)">
+  <h1 style="color:var(--cj-green); font-size:2em;">chaos-jungle</h1>
+  <p style="color:#b0bec5; font-size:0.9em;">Generic Chaos Engineering Framework</p>
+  <hr class="divider" style="width:50%; margin: 0.8em auto;" />
+  <div style="font-size:0.78em; color:#78909c; line-height:2em;">
+    <div>Source &nbsp;&nbsp; <span class="hl-blue">github.com/swarmourr/CJ</span></div>
+    <div>Install &nbsp;&nbsp; <code style="color:#cfd8dc;">pip install git+https://github.com/swarmourr/CJ.git</code></div>
+    <div>Docs &nbsp;&nbsp;&nbsp;&nbsp; <span class="hl-green">chaos-jungle dashboard</span></div>
+  </div>
+  <br/>
+  <p style="font-size:0.65em; color:#546e7a;">
+    <span class="pill pill-green">NetworkDelay</span>
+    <span class="pill pill-green">NetworkLoss</span>
+    <span class="pill pill-orange">StorageCorrupt</span>
+    <span class="pill pill-red">SilentNetworkCorrupt</span>
+    <span class="pill pill-blue">SSHTarget</span>
+    <span class="pill pill-blue">HTTPTarget</span>
+    <span class="pill" style="border-color:#ce93d8; color:#ce93d8; background:#7e57c220;">Metrics</span>
+    <span class="pill" style="border-color:#ffb74d; color:#ffb74d; background:#ff6d0020;">Dashboard</span>
+  </p>
+</section>
+
+
+</div><!-- .slides -->
+</div><!-- .reveal -->
+
+<div class="slide-footer">chaos-jungle &nbsp;·&nbsp; <a href="https://github.com/swarmourr/CJ">github.com/swarmourr/CJ</a></div>
+
+<!-- Reveal.js scripts -->
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+
+<script>
+  Reveal.initialize({
+    hash: true,
+    slideNumber: 'c/t',
+    transition: 'slide',
+    transitionSpeed: 'fast',
+    backgroundTransition: 'fade',
+    controls: true,
+    progress: true,
+    center: true,
+    plugins: [ RevealHighlight, RevealNotes ],
+    highlight: {
+      highlightOnLoad: true,
+    },
+  });
+</script>
+</body>
+</html>
