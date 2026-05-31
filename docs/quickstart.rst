@@ -4,14 +4,35 @@ Quickstart
 Installation
 ------------
 
+**From PyPI:**
+
 .. code-block:: bash
 
    pip install chaos-jungle
 
-   # with docs extras
+**Directly from GitHub (latest):**
+
+.. code-block:: bash
+
+   pip install git+https://github.com/swarmourr/CJ.git
+
+   # force-reinstall to pick up the latest commit
+   pip install --force-reinstall git+https://github.com/swarmourr/CJ.git
+
+   # on systems with externally managed Python (Ubuntu 23+, Debian 12+)
+   pip install --break-system-packages git+https://github.com/swarmourr/CJ.git
+
+   # or with sudo
+   sudo pip install git+https://github.com/swarmourr/CJ.git --break-system-packages
+
+**With extras:**
+
+.. code-block:: bash
+
+   # docs
    pip install "chaos-jungle[docs]"
 
-   # with dev extras
+   # dev
    pip install "chaos-jungle[dev]"
 
 Requirements
