@@ -55,6 +55,8 @@ class StorageCorrupt(Fault):
     dependencies = ["python3", "e2fsprogs", "inotify-tools", "coreutils"]
     pip_dependencies = ["python-crontab"]
 
+    _INTERVAL_RE = __import__("re").compile(r"^\d+(\.\d+)?(s|m|h)$")
+
     def __init__(
         self,
         pattern: str,
@@ -63,9 +65,29 @@ class StorageCorrupt(Fault):
         recursive: bool = True,
         cj_storage_path: str = _BUNDLED,
     ) -> None:
-        self.pattern = pattern
-        self.directory = directory
-        self.interval = interval
+        if not pattern or not pattern.strip():
+            raise ValueError(
+                "StorageCorrupt requires 'pattern' — a glob like '*.pdb' or '*.dat'.\n"
+                "  Example: StorageCorrupt('*.pdb', '/data')"
+            )
+        if not directory or not directory.strip():
+            raise ValueError(
+                "StorageCorrupt requires 'directory' — absolute path to the directory to watch.\n"
+                "  Example: StorageCorrupt('*.pdb', '/scratch/data')"
+            )
+        if not directory.startswith("/"):
+            raise ValueError(
+                f"StorageCorrupt 'directory' must be an absolute path (starting with '/'), "
+                f"got {directory!r}.\n"
+                f"  Example: StorageCorrupt('*.pdb', '/scratch/data')"
+            )
+        if not self._INTERVAL_RE.match(interval.strip()):
+            raise ValueError(
+                f"StorageCorrupt 'interval' must be like '10m', '2h', '30s' — got {interval!r}."
+            )
+        self.pattern = pattern.strip()
+        self.directory = directory.rstrip("/")
+        self.interval = interval.strip()
         self.recursive = recursive
         self.cj_storage_path = cj_storage_path
         self._deployed_path: str | None = None

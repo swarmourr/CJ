@@ -1,12 +1,32 @@
 """Network fault implementations using Linux tc netem."""
 
 from __future__ import annotations
+import re
 from typing import TYPE_CHECKING
 
 from chaos_jungle.faults.base import Fault
 
 if TYPE_CHECKING:
     from chaos_jungle.targets.base import Target
+
+# e.g. "100ms", "1s", "500us", "1.5ms"
+_TIME_RE  = re.compile(r"^\d+(\.\d+)?(ms|us|s)$")
+# e.g. "5%", "0.5%", "100%"
+_RATE_RE  = re.compile(r"^\d+(\.\d+)?%$")
+
+
+def _require_time(value: str, name: str) -> None:
+    if not value or not _TIME_RE.match(value.strip()):
+        raise ValueError(
+            f"{name!r} must be a time value like '100ms', '1s', '500us' — got {value!r}"
+        )
+
+
+def _require_rate(value: str, name: str) -> None:
+    if not value or not _RATE_RE.match(value.strip()):
+        raise ValueError(
+            f"{name!r} must be a percentage like '5%', '0.5%', '100%' — got {value!r}"
+        )
 
 
 def _default_iface(target: "Target") -> str:
@@ -73,6 +93,9 @@ class NetworkDelay(Fault):
     dependencies = ["iproute2"]
 
     def __init__(self, delay: str, jitter: str = "", iface: str = "") -> None:
+        _require_time(delay, "delay")
+        if jitter:
+            _require_time(jitter, "jitter")
         self.delay = delay
         self.jitter = jitter
         self.iface = iface
@@ -116,6 +139,7 @@ class NetworkLoss(Fault):
     dependencies = ["iproute2"]
 
     def __init__(self, rate: str, iface: str = "") -> None:
+        _require_rate(rate, "rate")
         self.rate = rate
         self.iface = iface
         self._resolved_iface: str = ""
@@ -156,6 +180,7 @@ class NetworkCorrupt(Fault):
     dependencies = ["iproute2"]
 
     def __init__(self, rate: str, iface: str = "") -> None:
+        _require_rate(rate, "rate")
         self.rate = rate
         self.iface = iface
         self._resolved_iface: str = ""
@@ -196,6 +221,7 @@ class NetworkDuplicate(Fault):
     dependencies = ["iproute2"]
 
     def __init__(self, rate: str, iface: str = "") -> None:
+        _require_rate(rate, "rate")
         self.rate = rate
         self.iface = iface
         self._resolved_iface: str = ""

@@ -27,8 +27,24 @@ class Scenario:
     """
 
     def __init__(self, name: str, faults: list[Fault]) -> None:
-        self.name = name
-        self.faults = faults
+        if not name or not str(name).strip():
+            raise ValueError(
+                "Scenario requires a non-empty 'name'.\n"
+                "  Example: Scenario('my-experiment', faults=[NetworkDelay('100ms')])"
+            )
+        if not isinstance(faults, (list, tuple)):
+            raise TypeError(
+                f"Scenario 'faults' must be a list of Fault instances, got {type(faults).__name__}.\n"
+                "  Example: Scenario('test', faults=[NetworkDelay('100ms')])"
+            )
+        for i, f in enumerate(faults):
+            if not isinstance(f, Fault):
+                raise TypeError(
+                    f"Scenario 'faults[{i}]' must be a Fault instance, got {type(f).__name__}.\n"
+                    "  Example: faults=[NetworkDelay('100ms'), NetworkLoss('5%')]"
+                )
+        self.name = str(name).strip()
+        self.faults = list(faults)
 
     def __repr__(self) -> str:
         fault_names = [f.__class__.__name__ for f in self.faults]

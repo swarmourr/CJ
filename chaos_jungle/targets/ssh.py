@@ -80,8 +80,28 @@ class SSHTarget(Target):
         allow_agent: bool = True,
         look_for_keys: bool = True,
     ) -> None:
-        self.host = host
-        self.user = user
+        if not host or not host.strip():
+            raise ValueError(
+                "SSHTarget requires 'host' — hostname or IP of the target machine.\n"
+                "  Example: SSHTarget('worker1', user='ubuntu')"
+            )
+        if not user or not user.strip():
+            raise ValueError(
+                "SSHTarget requires 'user' — SSH username on the target machine.\n"
+                "  Example: SSHTarget('worker1', user='ubuntu')"
+            )
+        if not (1 <= port <= 65535):
+            raise ValueError(
+                f"SSHTarget 'port' must be between 1 and 65535, got {port}."
+            )
+        if key and not os.path.isfile(os.path.expanduser(key)):
+            raise ValueError(
+                f"SSHTarget 'key' file not found: {key!r}\n"
+                f"  Fix A: check the path\n"
+                f"  Fix B: omit 'key' to use ssh-agent or default ~/.ssh/ keys"
+            )
+        self.host = host.strip()
+        self.user = user.strip()
         self.key = os.path.expanduser(key) if key else None
         self.port = port
         self.use_sudo = use_sudo
