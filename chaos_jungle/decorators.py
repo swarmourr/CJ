@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 import functools
+import io
+import sys
 from contextlib import contextmanager
 from typing import Callable
 
@@ -101,3 +103,97 @@ def chaos_session(
         yield runner
     finally:
         runner.stop()
+
+
+def chaos_measure(
+    *faults: Fault,
+    target: Target | None = None,
+    scenario_name: str = "",
+    capture_output: bool = False,
+    auto_install: bool | str = False,
+    conflict: str = "warn",
+) -> Callable:
+    """Decorator that runs a function under chaos and auto-records its results.
+
+    If the decorated function returns a ``dict``, it is automatically stored
+    via :meth:`~chaos_jungle.runner.ChaosRunner.record_result` so the metrics
+    appear in the dashboard without any extra code.
+
+    Parameters
+    ----------
+    *faults : Fault
+        One or more fault instances to inject.
+    target : Target, optional
+        Where to inject the faults. Defaults to :class:`~chaos_jungle.targets.local.LocalTarget`.
+    scenario_name : str, optional
+        Name stored in the database. Defaults to the function name.
+    capture_output : bool, optional
+        If ``True``, stdout printed inside the function is captured and
+        returned in ``summary["captured_output"]`` as well as printed
+        normally. Default ``False``.
+    auto_install : bool or str, optional
+        Passed to :class:`~chaos_jungle.runner.ChaosRunner`. Use
+        ``"prompt"`` to ask before installing missing deps.
+    conflict : str
+        Guardrail conflict mode: ``"raise"``, ``"warn"`` (default), or
+        ``"force"``.
+
+    Returns
+    -------
+    Callable
+        The wrapper returns a dict with all keys from
+        :meth:`~chaos_jungle.runner.ChaosRunner.summary` plus:
+
+        * ``fn_result``        — the raw return value of the function
+        * ``captured_output``  — stdout text (only when ``capture_output=True``)
+
+    Examples
+    --------
+    >>> @chaos_measure(NetworkDelay("100ms"), scenario_name="E1")
+    ... def run_experiment():
+    ...     run_pipeline()
+    ...     return {
+    ...         "files_transferred": 120,
+    ...         "retries": 3,
+    ...         "throughput_mbps": 42.1,
+    ...     }
+    ...
+    >>> summary = run_experiment()
+    >>> print(summary["duration_s"], "s of chaos")
+    >>> print(summary["fn_result"])   # the dict above
+    """
+    def decorator(fn: Callable) -> Callable:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            name = scenario_name or fn.__name__
+            runner = ChaosRunner(
+                Scenario(name, list(faults)),
+                target=target or LocalTarget(),
+                auto_install=auto_install,
+                conflict=conflict,
+            )
+            runner.start()
+            captured: str | None = None
+            _buf: io.StringIO | None = None
+            old_stdout = None
+            if capture_output:
+                _buf = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = _buf
+            try:
+                result = fn(*args, **kwargs)
+            finally:
+                if capture_output and _buf is not None:
+                    captured = _buf.getvalue()
+                    sys.stdout = old_stdout
+                    print(captured, end="")
+                runner.stop()
+            if isinstance(result, dict):
+                runner.record_result(result)
+            summary = runner.summary()
+            summary["fn_result"] = result
+            if captured is not None:
+                summary["captured_output"] = captured
+            return summary
+        return wrapper
+    return decorator

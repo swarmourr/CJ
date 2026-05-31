@@ -28,12 +28,25 @@ Context manager style::
 
     with chaos_session(NetworkLoss("5%")) as session:
         run_pipeline()
+
+Measure style (auto-records return dict as results)::
+
+    from chaos_jungle.decorators import chaos_measure
+    from chaos_jungle.faults import NetworkDelay
+
+    @chaos_measure(NetworkDelay("100ms"), scenario_name="E1")
+    def run_experiment():
+        run_pipeline()
+        return {"retries": 3, "throughput_mbps": 42.1}
+
+    summary = run_experiment()
+    print(summary["duration_s"], "s of chaos")
 """
 
 from chaos_jungle.scenario import Scenario
 from chaos_jungle.runner import ChaosRunner
 from chaos_jungle.suite import ExperimentSuite
-from chaos_jungle.decorators import chaos, chaos_session
+from chaos_jungle.decorators import chaos, chaos_session, chaos_measure
 from chaos_jungle.guardrails import ConflictError, ConflictWarning
 from chaos_jungle.preflight import detect_pkg_manager, PKG_MAP
 from chaos_jungle.faults import (
@@ -58,6 +71,7 @@ __all__ = [
     # Decorators
     "chaos",
     "chaos_session",
+    "chaos_measure",
     # Faults
     "Fault",
     "PreflightError",
