@@ -11,6 +11,16 @@ from chaos_jungle.targets.base import Target
 class SSHTarget(Target):
     """Run fault commands on a remote machine over SSH.
 
+    Authentication is attempted in this order (same as the OpenSSH client):
+
+    1. **Explicit key file** — if ``key`` points to an existing file.
+    2. **SSH agent** — if ``allow_agent=True`` (default) and an agent is
+       running (e.g. ``ssh-add`` was used).
+    3. **Default key search** — if ``look_for_keys=True`` (default),
+       Paramiko tries ``~/.ssh/id_rsa``, ``~/.ssh/id_ecdsa``,
+       ``~/.ssh/id_ed25519``, etc.
+    4. **Password** — if ``password`` is provided (last resort).
+
     Parameters
     ----------
     host : str
@@ -18,47 +28,85 @@ class SSHTarget(Target):
     user : str
         SSH username.
     key : str, optional
-        Path to private key file. Defaults to ``~/.ssh/id_rsa``.
+        Path to a private key file, e.g. ``"~/.ssh/id_ed25519"``.
+        Skipped if the file does not exist. Default ``None`` (auto-detect).
     port : int, optional
         SSH port. Default ``22``.
     use_sudo : bool, optional
         Prepend ``sudo`` to privileged commands. Default ``True``.
     password : str, optional
-        Password for key passphrase or password auth (not recommended).
+        Password for keyboard-interactive or password auth, or the
+        passphrase for an encrypted private key.
+    allow_agent : bool, optional
+        Try the SSH agent (``ssh-agent`` / ``ssh-add``). Default ``True``.
+    look_for_keys : bool, optional
+        Let Paramiko search ``~/.ssh/`` for standard key filenames.
+        Default ``True``.
 
     Examples
     --------
-    >>> target = SSHTarget("worker1", user="ubuntu", key="~/.ssh/id_rsa")
-    >>> with target:
-    ...     code, out, err = target.run("hostname")
+    Key-based (agent or default key)::
+
+        target = SSHTarget("worker1", user="ubuntu")
+
+    Explicit key file::
+
+        target = SSHTarget("worker1", user="ubuntu", key="~/.ssh/id_ed25519")
+
+    Encrypted key with passphrase::
+
+        target = SSHTarget("worker1", user="ubuntu",
+                           key="~/.ssh/id_rsa", password="my-passphrase")
+
+    Password-only (no key)::
+
+        target = SSHTarget("worker1", user="ubuntu",
+                           password="hunter2",
+                           allow_agent=False, look_for_keys=False)
+
+    Custom port::
+
+        target = SSHTarget("worker1", user="ubuntu", port=2222)
     """
 
     def __init__(
         self,
         host: str,
         user: str,
-        key: str = "~/.ssh/id_rsa",
+        key: str | None = None,
         port: int = 22,
         use_sudo: bool = True,
         password: str | None = None,
+        allow_agent: bool = True,
+        look_for_keys: bool = True,
     ) -> None:
         self.host = host
         self.user = user
-        self.key = os.path.expanduser(key)
+        self.key = os.path.expanduser(key) if key else None
         self.port = port
         self.use_sudo = use_sudo
         self.password = password
+        self.allow_agent = allow_agent
+        self.look_for_keys = look_for_keys
         self._client: paramiko.SSHClient | None = None
 
     def connect(self) -> None:
         self._client = paramiko.SSHClient()
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        # Only pass key_filename if the file actually exists
+        key_filename = None
+        if self.key and os.path.isfile(self.key):
+            key_filename = self.key
+
         self._client.connect(
             hostname=self.host,
             port=self.port,
             username=self.user,
-            key_filename=self.key,
+            key_filename=key_filename,
             password=self.password,
+            allow_agent=self.allow_agent,
+            look_for_keys=self.look_for_keys,
         )
 
     def disconnect(self) -> None:

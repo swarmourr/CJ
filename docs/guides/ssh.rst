@@ -3,21 +3,70 @@ SSH target guide
 
 Use ``SSHTarget`` to inject faults on a remote machine over SSH.
 
-Setup
------
+Authentication
+--------------
 
-Ensure passwordless SSH access to the target:
+Authentication is attempted in this order (same as the OpenSSH client):
+
+1. **Explicit key file** — if you pass ``key="~/.ssh/id_ed25519"`` and the file exists.
+2. **SSH agent** — if ``ssh-agent`` is running and has a key loaded (``ssh-add``).
+3. **Default key search** — Paramiko tries ``~/.ssh/id_rsa``, ``~/.ssh/id_ecdsa``, ``~/.ssh/id_ed25519`` automatically.
+4. **Password** — if ``password=`` is provided.
+
+**Key-based (recommended) — agent or default key auto-detected:**
+
+.. code-block:: python
+
+   target = SSHTarget("worker1", user="ubuntu")
+
+**Explicit key file:**
+
+.. code-block:: python
+
+   target = SSHTarget("worker1", user="ubuntu", key="~/.ssh/id_ed25519")
+
+**Encrypted key with passphrase:**
+
+.. code-block:: python
+
+   target = SSHTarget("worker1", user="ubuntu",
+                      key="~/.ssh/id_rsa", password="my-passphrase")
+
+**Password-only (no key, useful for cloud VMs with password auth):**
+
+.. code-block:: python
+
+   target = SSHTarget("worker1", user="ubuntu",
+                      password="hunter2",
+                      allow_agent=False, look_for_keys=False)
+
+**Custom port:**
+
+.. code-block:: python
+
+   target = SSHTarget("worker1", user="ubuntu", port=2222)
+
+Setup — passwordless sudo
+--------------------------
+
+The target user needs ``sudo`` rights for ``tc`` (network faults) and
+``dd``/``filefrag`` (storage faults):
+
+.. code-block:: bash
+
+   # on the target machine
+   echo "ubuntu ALL=(ALL) NOPASSWD: /sbin/tc, /usr/sbin/tc, /bin/dd, /usr/sbin/filefrag" \
+       | sudo tee /etc/sudoers.d/chaos-jungle
+
+   sudo chmod 440 /etc/sudoers.d/chaos-jungle
+
+Copy your SSH key to the remote machine if not already done:
 
 .. code-block:: bash
 
    ssh-copy-id ubuntu@worker1
-
-The target user needs ``sudo`` for privileged commands:
-
-.. code-block:: bash
-
-   # on worker1
-   echo "ubuntu ALL=(ALL) NOPASSWD: /sbin/tc, /bin/dd" | sudo tee /etc/sudoers.d/chaos-jungle
+   # or for a specific key:
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub ubuntu@worker1
 
 Usage
 -----
@@ -26,7 +75,7 @@ Usage
 
    from chaos_jungle import Scenario, ChaosRunner, NetworkLoss, SSHTarget
 
-   target = SSHTarget("worker1", user="ubuntu", key="~/.ssh/id_rsa")
+   target = SSHTarget("worker1", user="ubuntu")   # auto-detect key/agent
    scenario = Scenario("remote-loss", faults=[NetworkLoss("5%")])
 
    runner = ChaosRunner(scenario, target)
@@ -42,8 +91,13 @@ CLI
 
 .. code-block:: bash
 
+   # key/agent auto-detected
    chaos-jungle start --scenario remote-loss --loss 5% \
        --target ssh://ubuntu@worker1
+
+   # custom port
+   chaos-jungle start --scenario remote-loss --loss 5% \
+       --target ssh://ubuntu@worker1:2222
 
    chaos-jungle stop --target ssh://ubuntu@worker1
 
