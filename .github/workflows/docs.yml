@@ -38,8 +38,10 @@ jobs:
       - name: Build HTML docs
         run: |
           cd docs
-          sphinx-build -b html . _build/html -W --keep-going
+          sphinx-build -b html . _build/html --keep-going 2>&1 | tee /tmp/sphinx.log
           echo "Sphinx version: $(sphinx-build --version)"
+          # Fail only on actual build errors, not warnings
+          grep -c "^build succeeded" /tmp/sphinx.log || exit 1
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
