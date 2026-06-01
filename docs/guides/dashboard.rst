@@ -7,6 +7,20 @@ chaos-jungle ships a built-in web dashboard for monitoring experiments in
 real-time, reviewing results, and inspecting system state — all without
 leaving your browser.
 
+.. figure:: ../_static/dashboard-light.png
+   :alt: chaos-jungle dashboard — light theme
+   :align: center
+   :width: 100%
+
+   Dashboard in light mode (default).
+
+.. figure:: ../_static/dashboard-dark.png
+   :alt: chaos-jungle dashboard — dark theme
+   :align: center
+   :width: 100%
+
+   Dashboard in dark mode — toggle with the 🌙 button in the header.
+
 Quick start
 -----------
 
@@ -102,6 +116,13 @@ the dropdown; the last 150 lines are shown with colour-coded severity:
 - **Yellow** — WARN / CORRUPT
 - **Green** — REVERT / stop / OK
 - **Grey** — everything else
+
+.. figure:: ../_static/dashboard-drawer.png
+   :alt: chaos-jungle dashboard — session detail drawer
+   :align: center
+   :width: 100%
+
+   Session detail drawer — click any row to open it.
 
 Session detail drawer
 ---------------------
