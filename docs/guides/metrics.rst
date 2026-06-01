@@ -93,8 +93,98 @@ The result stored in the database (and CSV export) looks like:
 Custom metrics
 ---------------
 
-Subclass :class:`~chaos_jungle.metrics.Metric` and implement
-:meth:`~chaos_jungle.metrics.Metric.collect`:
+There are three ways to define application-specific metrics.
+
+**Option 1 — ``@metric`` decorator** (recommended for inline functions):
+
+.. code-block:: python
+
+   from chaos_jungle.metrics import metric
+
+   @metric("throughput")
+   def my_throughput(_):
+       import json, urllib.request
+       with urllib.request.urlopen("http://localhost:9100/metrics") as r:
+           data = json.loads(r.read())
+       return {"mbps": data["bits_per_second"] / 1e6}
+
+   # Use with @chaos_measure exactly like a built-in metric
+   @chaos_measure(NetworkDelay("100ms"), metrics=[my_throughput])
+   def run():
+       run_pipeline()
+
+The function receives the active ``target`` as its only argument. It must
+return a plain ``dict``.  The decorated name is automatically registered in
+a global registry accessible via :func:`~chaos_jungle.metrics.get_metric`.
+
+The ``@metric`` decorator supports three calling forms:
+
+.. code-block:: python
+
+   @metric("my_name")          # explicit name
+   def measure_x(_): ...
+
+   @metric                     # uses the function name
+   def error_rate(_): ...
+
+   @metric(name="connections") # keyword form
+   def open_conns(_): ...
+
+**Option 2 — ``ScriptMetric``** (run a shell/Python script on the target):
+
+.. code-block:: python
+
+   from chaos_jungle.metrics import ScriptMetric
+
+   # Upload a local script, run it, parse stdout automatically
+   m = ScriptMetric("app", script="./scripts/measure_app.sh")
+
+   @chaos_measure(NetworkDelay("100ms"), metrics=[m])
+   def run():
+       run_pipeline()
+
+The script must print to stdout in JSON or ``key=value`` format:
+
+.. code-block:: bash
+
+   # measure_app.sh
+   echo '{"error_rate": 0.02, "throughput_mbps": 850.3}'
+   # or:
+   echo "error_rate=0.02"
+   echo "throughput_mbps=850.3"
+
+``ScriptMetric`` uploads the script once (cached after first upload), executes
+it on the target, and parses the output.  It supports local ``.sh`` / ``.py``
+files, scripts already on the target (``remote_script=``), and custom
+interpreters.
+
+.. list-table:: ScriptMetric parameters
+   :header-rows: 1
+   :widths: 20 15 65
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``name``
+     - required
+     - Metric name prefix — keys become ``<name>_<key>`` in the CSV
+   * - ``script``
+     - ``""``
+     - Local path to upload and run on the target
+   * - ``remote_script``
+     - ``""``
+     - Path already on the target (mutually exclusive with ``script``)
+   * - ``interpreter``
+     - ``"auto"``
+     - ``"bash"`` / ``"python3"`` / ``""`` (direct exec) — auto-detected from extension
+   * - ``parse``
+     - ``"auto"``
+     - ``"json"`` / ``"keyvalue"`` / ``"auto"`` (tries JSON first)
+   * - ``extra_args``
+     - ``""``
+     - Extra arguments appended to the script invocation
+
+**Option 3 — subclass** (full control):
 
 .. code-block:: python
 

@@ -24,6 +24,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    guides/metrics
    guides/data
    guides/llm
+   guides/ollama
    guides/paper-study
 
 .. toctree::
