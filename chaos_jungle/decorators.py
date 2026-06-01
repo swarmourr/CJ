@@ -152,7 +152,7 @@ def chaos_measure(
         Name stored in the database. Defaults to the function name.
     metrics : list of Metric, optional
         Metric collectors to run at baseline and under chaos. Any
-        subclass of :class:`~chaos_jungle.metrics.Metric` works here,
+        subclass of :class:`~chaos_jungle.metrics.base.Metric` works here,
         including the built-ins
         :class:`~chaos_jungle.metrics.PingLatency`,
         :class:`~chaos_jungle.metrics.CommandMetric`,
