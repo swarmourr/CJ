@@ -167,130 +167,246 @@ def list_sessions():
         click.echo(f"{s['id']:>4}  {s['name']:<30}  {s['status']:<10}  {s['started_at']}")
 
 
+# ── export helpers ─────────────────────────────────────────────────
+
+def _parse_session_ids(session: int | None, sessions: str | None, db: "SessionDB") -> list[int]:
+    """Resolve --session / --sessions into an ordered list of session IDs.
+
+    ``sessions`` accepts comma-separated IDs and inclusive ranges::
+
+        "3"          → [3]
+        "1,3,5"      → [1, 3, 5]
+        "1-5"        → [1, 2, 3, 4, 5]
+        "1,3,5-7"    → [1, 3, 5, 6, 7]
+        ""  / None   → all sessions in DB
+    """
+    if session is not None and sessions:
+        raise click.UsageError("Use either --session or --sessions, not both.")
+
+    if session is not None:
+        return [session]
+
+    if sessions:
+        ids: list[int] = []
+        for part in sessions.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                lo, hi = part.split("-", 1)
+                ids.extend(range(int(lo), int(hi) + 1))
+            else:
+                ids.append(int(part))
+        if not ids:
+            raise click.BadParameter("--sessions produced an empty list.", param_hint="--sessions")
+        return ids
+
+    # default: all sessions
+    rows = db.list_sessions()
+    if not rows:
+        return []
+    return [r["id"] for r in rows]
+
+
+def _session_filename(db: "SessionDB", sid: int, fmt: str) -> str:
+    """Return auto-generated filename for a single session."""
+    row = db.get_session(sid)
+    safe = row["name"].replace("/", "_").replace(" ", "_") if row else str(sid)
+    return f"session_{sid}_{safe}.{fmt}"
+
+
+def _build_csv_rows(db: "SessionDB", session_ids: list[int]) -> tuple[list[dict], list[str]]:
+    """Return (all_rows, fieldnames) for a CSV export of the given sessions."""
+    import csv as _csv, io as _io
+    from datetime import datetime as _dt
+
+    all_rows: list[dict] = []
+    metric_keys: list[str] = []
+
+    for sid in session_ids:
+        data = db.export_session(sid)
+        if data is None:
+            continue
+        sess = data["session"]
+
+        duration_s = ""
+        if sess.get("started_at") and sess.get("stopped_at"):
+            try:
+                t0 = _dt.fromisoformat(sess["started_at"])
+                t1 = _dt.fromisoformat(sess["stopped_at"])
+                duration_s = round((t1 - t0).total_seconds(), 1)
+            except ValueError:
+                pass
+
+        results = db.get_results(sid)
+        faults = data["faults"] or [{"kind": "", "parameters": {}}]
+
+        for fault in faults:
+            base = {
+                "session_id": sess["id"],
+                "name":        sess["name"],
+                "status":      sess["status"],
+                "started_at":  sess.get("started_at", ""),
+                "stopped_at":  sess.get("stopped_at", ""),
+                "duration_s":  duration_s,
+                "fault_kind":  fault["kind"],
+                "fault_parameters": json.dumps(fault["parameters"]),
+            }
+            metrics: dict = {}
+            if results:
+                metrics = results[0].get("metrics", {}) if isinstance(results[0].get("metrics"), dict) else {}
+            base.update(metrics)
+            for k in metrics:
+                if k not in metric_keys:
+                    metric_keys.append(k)
+            all_rows.append(base)
+
+    base_cols = ["session_id", "name", "status", "started_at", "stopped_at",
+                 "duration_s", "fault_kind", "fault_parameters"]
+    return all_rows, base_cols + metric_keys
+
+
+def _write_csv(rows: list[dict], fieldnames: list[str], dest: str) -> None:
+    import csv as _csv, io as _io
+    buf = _io.StringIO()
+    writer = _csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    with open(dest, "w", newline="") as fh:
+        fh.write(buf.getvalue())
+
+
 # ── export ────────────────────────────────────────────────────────
 
 @main.command()
 @click.option("--session", "-i", default=None, type=int,
-              help="Session id to export (default: all sessions)")
+              help="Single session id to export.")
+@click.option("--sessions", "-I", default="", metavar="IDS",
+              help="Multiple session ids: '1,3,5' or range '1-5' or mixed '1,3-5'.")
 @click.option("--format", "-f", "fmt", default="json",
               type=click.Choice(["json", "csv"]),
               help="Output format. Default: json")
 @click.option("--output", "-o", default="", metavar="PATH",
-              help="Output file path. Default: auto-named in current directory")
-def export(session, fmt, output):
-    """Export session(s) to a portable JSON or CSV file.
+              help="Output file path (single session). Ignored when --dir is set.")
+@click.option("--dir", "-d", "out_dir", default="", metavar="DIR",
+              help="Output directory. Files are auto-named inside it.")
+@click.option("--split", is_flag=True, default=False,
+              help="Write one file per session instead of a single combined file.")
+def export(session, sessions, fmt, output, out_dir, split):
+    """Export one or more sessions to JSON or CSV.
+
+    \b
+    Session selection
+      --session 3                single session
+      --sessions 1,3,5           specific sessions
+      --sessions 1-5             range (inclusive)
+      --sessions 1,3-5,8        mixed
+      (no flag)                  all sessions
+
+    \b
+    Output location
+      --output path.csv          explicit file (single session)
+      --dir ./results/           write into a folder (auto-named files)
+      --dir ./results/ --split   one file per session in the folder
 
     \b
     CSV columns: session_id, name, status, started_at, stopped_at,
                  duration_s, fault_kind, fault_parameters, <metrics...>
 
+    \b
     Examples:
       chaos-jungle export --session 3 --format csv
-      chaos-jungle export --session 3 --format json --output run3.json
-      chaos-jungle export --format csv          # all sessions
+      chaos-jungle export --sessions 1,3,5 --format csv --dir ./results/
+      chaos-jungle export --sessions 1-10 --dir ./results/ --split
+      chaos-jungle export --format csv --dir ./results/   # all sessions
     """
-    import csv as csv_mod, io as io_mod
-    from datetime import datetime, timezone
+    import os
+    from datetime import datetime
 
     db = SessionDB()
 
-    if session is not None:
-        sessions_to_export = [session]
-    else:
-        rows = db.list_sessions()
-        if not rows:
-            click.echo("No sessions found.")
-            return
-        sessions_to_export = [r["id"] for r in rows]
+    # Resolve session list
+    try:
+        ids = _parse_session_ids(session, sessions or None, db)
+    except click.UsageError:
+        raise
+    if not ids:
+        click.echo("No sessions found.")
+        return
 
+    # Resolve output directory
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    # ── JSON ──────────────────────────────────────────────────────
     if fmt == "json":
-        if len(sessions_to_export) == 1:
-            payload = db.export_session(sessions_to_export[0])
+        if split or (len(ids) == 1):
+            # One file per session
+            written: list[str] = []
+            for sid in ids:
+                payload = db.export_session(sid)
+                if payload is None:
+                    click.echo(f"[chaos-jungle] WARNING: session {sid} not found — skipped.", err=True)
+                    continue
+                content = json.dumps(payload, indent=2)
+                if out_dir:
+                    dest = os.path.join(out_dir, _session_filename(db, sid, "json"))
+                elif output and len(ids) == 1:
+                    dest = output
+                else:
+                    dest = _session_filename(db, sid, "json")
+                with open(dest, "w") as fh:
+                    fh.write(content)
+                click.echo(f"[chaos-jungle] Exported session {sid} → {dest}")
+                written.append(dest)
         else:
-            payload = [db.export_session(sid) for sid in sessions_to_export]
+            # Combined file
+            payload = [db.export_session(sid) for sid in ids if db.export_session(sid) is not None]
+            content = json.dumps(payload, indent=2)
+            if out_dir:
+                dest = os.path.join(out_dir, "chaos_sessions.json")
+            elif output:
+                dest = output
+            else:
+                dest = "chaos_sessions.json"
+            with open(dest, "w") as fh:
+                fh.write(content)
+            click.echo(f"[chaos-jungle] Exported {len(payload)} session(s) → {dest}")
 
-        content = json.dumps(payload, indent=2)
-        if output:
-            dest = output
-        elif session is not None:
-            sess = db.get_session(session)
-            safe_name = sess["name"].replace("/", "_").replace(" ", "_") if sess else str(session)
-            dest = f"session_{session}_{safe_name}.json"
-        else:
-            dest = "chaos_sessions.json"
-
-        with open(dest, "w") as fh:
-            fh.write(content)
-        click.echo(f"[chaos-jungle] Exported {len(sessions_to_export)} session(s) → {dest}")
-
+    # ── CSV ───────────────────────────────────────────────────────
     elif fmt == "csv":
-        # Collect all rows first to determine metric columns
-        all_rows = []
-        metric_keys: list[str] = []
-
-        for sid in sessions_to_export:
-            data = db.export_session(sid)
-            sess = data["session"]
-
-            # compute duration
-            duration_s = ""
-            if sess.get("started_at") and sess.get("stopped_at"):
-                try:
-                    t0 = datetime.fromisoformat(sess["started_at"])
-                    t1 = datetime.fromisoformat(sess["stopped_at"])
-                    duration_s = round((t1 - t0).total_seconds(), 1)
-                except ValueError:
-                    pass
-
-            results = db.get_results(sid)
-            faults = data["faults"] or [{"kind": "", "parameters": {}}]
-
-            # Build one base row per fault
-            for fault in faults:
-                base = {
-                    "session_id": sess["id"],
-                    "name": sess["name"],
-                    "status": sess["status"],
-                    "started_at": sess.get("started_at", ""),
-                    "stopped_at": sess.get("stopped_at", ""),
-                    "duration_s": duration_s,
-                    "fault_kind": fault["kind"],
-                    "fault_parameters": json.dumps(fault["parameters"]),
-                }
-                # Flatten the first result record's metrics
-                metrics: dict = {}
-                if results:
-                    metrics = results[0].get("metrics", {}) if isinstance(results[0].get("metrics"), dict) else {}
-                base.update(metrics)
-                for k in metrics:
-                    if k not in metric_keys:
-                        metric_keys.append(k)
-                all_rows.append(base)
-
-        base_cols = ["session_id", "name", "status", "started_at", "stopped_at",
-                     "duration_s", "fault_kind", "fault_parameters"]
-        fieldnames = base_cols + metric_keys
-
-        buf = io_mod.StringIO()
-        writer = csv_mod.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in all_rows:
-            writer.writerow(row)
-
-        content = buf.getvalue()
-
-        if output:
-            dest = output
-        elif session is not None:
-            sess_row = db.get_session(session)
-            safe_name = sess_row["name"].replace("/", "_").replace(" ", "_") if sess_row else str(session)
-            dest = f"session_{session}_{safe_name}.csv"
+        if split:
+            # One CSV per session
+            for sid in ids:
+                rows, fieldnames = _build_csv_rows(db, [sid])
+                if not rows:
+                    click.echo(f"[chaos-jungle] WARNING: session {sid} not found — skipped.", err=True)
+                    continue
+                if out_dir:
+                    dest = os.path.join(out_dir, _session_filename(db, sid, "csv"))
+                elif output and len(ids) == 1:
+                    dest = output
+                else:
+                    dest = _session_filename(db, sid, "csv")
+                _write_csv(rows, fieldnames, dest)
+                click.echo(f"[chaos-jungle] Exported session {sid} → {dest}")
         else:
-            dest = "chaos_sessions.csv"
-
-        with open(dest, "w") as fh:
-            fh.write(content)
-        click.echo(f"[chaos-jungle] Exported {len(sessions_to_export)} session(s) → {dest}")
+            # Combined file
+            rows, fieldnames = _build_csv_rows(db, ids)
+            if not rows:
+                click.echo("No data to export.")
+                return
+            if out_dir:
+                dest = os.path.join(out_dir, "chaos_sessions.csv")
+            elif output:
+                dest = output
+            elif len(ids) == 1:
+                dest = _session_filename(db, ids[0], "csv")
+            else:
+                dest = "chaos_sessions.csv"
+            _write_csv(rows, fieldnames, dest)
+            click.echo(f"[chaos-jungle] Exported {len(ids)} session(s) → {dest}")
 
 
 # ── fetch ──────────────────────────────────────────────────────────
