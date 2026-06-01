@@ -21,6 +21,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    guides/ssh
    guides/http
    guides/separate-mode
+   guides/dashboard
    guides/metrics
    guides/data
    guides/llm
@@ -41,6 +42,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    api/suite
    api/cli
    api/daemon
+   api/dashboard
 
 .. toctree::
    :maxdepth: 1
