@@ -62,13 +62,12 @@ class Fault(ABC):
         ----------
         target :
             The machine to check.
-        auto_install : bool or ``"prompt"``
-            * ``False`` *(default)* — raise :exc:`PreflightError` listing all
-              missing packages with the exact fix command.
-            * ``True`` — detect the package manager (apt / dnf / yum / apk /
-              brew) and install missing packages automatically.
-            * ``"prompt"`` — print a summary of what will be installed and ask
-              the user for confirmation before proceeding.
+        auto_install : bool or str
+            Pass ``False`` (default) to raise :exc:`PreflightError` when
+            packages are missing.  Pass ``True`` to auto-detect the package
+            manager (apt / dnf / yum / apk / brew) and install automatically.
+            Pass ``"prompt"`` to show a summary and ask for confirmation before
+            proceeding.
 
         Raises
         ------

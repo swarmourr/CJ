@@ -150,7 +150,7 @@ def chaos_measure(
         :class:`~chaos_jungle.targets.local.LocalTarget`.
     scenario_name : str, optional
         Name stored in the database. Defaults to the function name.
-    metrics : list of Metric, optional
+    metrics : list of :class:`~chaos_jungle.metrics.base.Metric`, optional
         Metric collectors to run at baseline and under chaos. Any
         subclass of :class:`~chaos_jungle.metrics.base.Metric` works here,
         including the built-ins
