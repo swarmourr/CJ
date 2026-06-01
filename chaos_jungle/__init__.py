@@ -47,7 +47,7 @@ from chaos_jungle.scenario import Scenario
 from chaos_jungle.runner import ChaosRunner
 from chaos_jungle.suite import ExperimentSuite
 from chaos_jungle.decorators import chaos, chaos_session, chaos_measure
-from chaos_jungle.metrics import Metric, PingLatency, CommandMetric, FileIntegrity
+from chaos_jungle.metrics import Metric, PingLatency, CommandMetric, FileIntegrity, metric, ScriptMetric
 from chaos_jungle.guardrails import ConflictError, ConflictWarning
 from chaos_jungle.preflight import detect_pkg_manager, PKG_MAP
 from chaos_jungle.faults import (
@@ -88,6 +88,8 @@ __all__ = [
     "PingLatency",
     "CommandMetric",
     "FileIntegrity",
+    "metric",
+    "ScriptMetric",
     # Faults
     "Fault",
     "PreflightError",

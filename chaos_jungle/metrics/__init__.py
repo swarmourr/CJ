@@ -26,10 +26,18 @@ any boilerplate:
 
 from chaos_jungle.metrics.base import Metric
 from chaos_jungle.metrics.builtin import PingLatency, CommandMetric, FileIntegrity
+from chaos_jungle.metrics.custom import metric, ScriptMetric, get_metric, list_metrics
 
 __all__ = [
+    # Base
     "Metric",
+    # Built-in collectors
     "PingLatency",
     "CommandMetric",
     "FileIntegrity",
+    # User-defined helpers
+    "metric",
+    "ScriptMetric",
+    "get_metric",
+    "list_metrics",
 ]
