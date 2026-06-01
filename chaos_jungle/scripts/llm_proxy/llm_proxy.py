@@ -174,13 +174,23 @@ def _mcp_tool_error_response(req_body: dict | None) -> bytes:
 
 
 def _inject_hallucination(resp_body: bytes, text: str) -> bytes:
-    """Replace the assistant content in an OpenAI chat completion response."""
+    """Replace the assistant content in a chat completion response.
+
+    Supports both OpenAI format (choices[0].message.content) and
+    Ollama native format (message.content at the top level).
+    """
     try:
         data = json.loads(resp_body)
+        # OpenAI / OpenAI-compat format
         choices = data.get("choices", [])
         if choices and "message" in choices[0]:
             choices[0]["message"]["content"] = text
             choices[0]["finish_reason"] = "stop"
+            return json.dumps(data).encode()
+        # Ollama native /api/chat format
+        if "message" in data and "content" in data["message"]:
+            data["message"]["content"] = text
+            data["done"] = True
             return json.dumps(data).encode()
     except (json.JSONDecodeError, KeyError, IndexError):
         pass
@@ -325,7 +335,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             return
 
         if fault == "token_starve" and req_body is not None:
-            req_body["max_tokens"] = FAULT_ARGS.get("max_tokens", 5)
+            n = FAULT_ARGS.get("max_tokens", 5)
+            req_body["max_tokens"] = n        # OpenAI / OpenAI-compat
+            req_body["num_predict"] = n       # Ollama native /api/generate + /api/chat
             raw_body = json.dumps(req_body).encode()
 
         if fault == "latency":
