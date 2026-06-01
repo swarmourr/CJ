@@ -50,6 +50,7 @@ sphinx_click_mock_imports = []
 # ── Suppress known harmless warnings ─────────────────────────────
 suppress_warnings = [
     "ref.duplicate",          # dataclass field double-indexing
+    "ref.python",             # Metric re-exported from metrics & metrics.base
 ]
 
 # ── Source ────────────────────────────────────────────────────────

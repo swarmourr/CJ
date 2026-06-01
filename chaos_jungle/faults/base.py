@@ -78,17 +78,13 @@ class Fault(ABC):
 
         Examples
         --------
-        Silent auto-install:
+        Silent auto-install::
 
-        >>> fault.preflight(target, auto_install=True)
+            fault.preflight(target, auto_install=True)
 
-        Interactive prompt:
+        Interactive prompt (the user is shown what will be installed)::
 
-        >>> fault.preflight(target, auto_install="prompt")
-        [preflight] NetworkDelay — missing dependencies:
-          System packages:
-            - 'iproute2'  (binary: tc)
-        Install now? [y/N]
+            fault.preflight(target, auto_install="prompt")
 
         """
         from chaos_jungle.preflight import run_preflight
