@@ -30,16 +30,16 @@ jobs:
         run: |
           pip install -e ".[dev]" || pip install -e .
           pip install \
-            sphinx \
+            "sphinx>=9.0,<10" \
             furo \
             sphinx-autodoc-typehints \
-            myst-parser \
-            sphinx-click
+            myst-parser
 
       - name: Build HTML docs
         run: |
           cd docs
           sphinx-build -b html . _build/html -W --keep-going
+          echo "Sphinx version: $(sphinx-build --version)"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
