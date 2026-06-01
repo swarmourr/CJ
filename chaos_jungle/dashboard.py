@@ -24,7 +24,7 @@ app = FastAPI(title="chaos-jungle dashboard", docs_url=None, redoc_url=None)
 # ── HTML shell ─────────────────────────────────────────────────────────────
 
 _HTML = """<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -33,12 +33,41 @@ _HTML = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
+/* ── Light theme (default) ── */
 :root {
+  --bg:       #f8fafc;
+  --surface:  #ffffff;
+  --card:     #f1f5f9;
+  --border:   #e2e8f0;
+  --border2:  #cbd5e1;
+  --hover-bg: rgba(0,0,0,.03);
+  --th-bg:    rgba(0,0,0,.04);
+  --green:    #16a34a;
+  --green-bg: rgba(22,163,74,.12);
+  --red:      #dc2626;
+  --red-bg:   rgba(220,38,38,.1);
+  --yellow:   #d97706;
+  --yellow-bg:rgba(217,119,6,.1);
+  --blue:     #2563eb;
+  --blue-bg:  rgba(37,99,235,.1);
+  --purple:   #7c3aed;
+  --cyan:     #0891b2;
+  --text:     #0f172a;
+  --text2:    #475569;
+  --text3:    #94a3b8;
+  --radius:   10px;
+  --radius-sm:6px;
+  --shadow:   0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
+}
+/* ── Dark theme ── */
+[data-theme="dark"] {
   --bg:       #090b10;
   --surface:  #0f1219;
   --card:     #141820;
   --border:   #1e2434;
   --border2:  #252d40;
+  --hover-bg: rgba(255,255,255,.025);
+  --th-bg:    rgba(0,0,0,.2);
   --green:    #22c55e;
   --green-bg: rgba(34,197,94,.1);
   --red:      #f43f5e;
@@ -52,8 +81,7 @@ _HTML = """<!DOCTYPE html>
   --text:     #e2e8f0;
   --text2:    #94a3b8;
   --text3:    #4b5870;
-  --radius:   10px;
-  --radius-sm:6px;
+  --shadow:   none;
 }
 * { box-sizing:border-box; margin:0; padding:0 }
 body { background:var(--bg); color:var(--text); font-family:'Inter',system-ui,sans-serif;
@@ -93,6 +121,12 @@ nav { display:flex; height:100%; gap:2px }
                animation:pulse 2s infinite }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 .ts-label { color:var(--text3); font-size:11px; font-family:'JetBrains Mono',monospace }
+.theme-btn {
+  width:32px; height:32px; border-radius:8px; border:1px solid var(--border);
+  background:var(--card); cursor:pointer; display:flex; align-items:center;
+  justify-content:center; font-size:15px; transition:all .15s; flex-shrink:0;
+}
+.theme-btn:hover { border-color:var(--border2); background:var(--surface) }
 
 /* ── Main scroll area ── */
 .main { overflow-y:auto; padding:24px }
@@ -128,7 +162,7 @@ nav { display:flex; height:100%; gap:2px }
 /* ── Panel ── */
 .panel {
   background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
-  overflow:hidden; margin-bottom:16px;
+  overflow:hidden; margin-bottom:16px; box-shadow:var(--shadow);
 }
 .panel-head {
   padding:14px 18px; border-bottom:1px solid var(--border);
@@ -146,12 +180,12 @@ nav { display:flex; height:100%; gap:2px }
   font-size:11px; font-weight:600; text-transform:uppercase;
   letter-spacing:.5px; color:var(--text3);
   border-bottom:1px solid var(--border);
-  background:rgba(0,0,0,.2);
+  background:var(--th-bg);
 }
 .tbl td { padding:11px 16px; border-bottom:1px solid var(--border); vertical-align:middle }
 .tbl tr:last-child td { border-bottom:none }
 .tbl tr.row { cursor:pointer; transition:background .12s }
-.tbl tr.row:hover { background:rgba(255,255,255,.025) }
+.tbl tr.row:hover { background:var(--hover-bg) }
 
 /* ── Badges ── */
 .badge {
@@ -346,6 +380,7 @@ nav { display:flex; height:100%; gap:2px }
   <div class="header-right">
     <div class="refresh-dot"></div>
     <span class="ts-label" id="ts">loading…</span>
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle light / dark">🌙</button>
   </div>
 </header>
 
@@ -446,6 +481,26 @@ nav { display:flex; height:100%; gap:2px }
 
 <script>
 // ─────────────────────────────────────────────────────────────
+// Theme
+// ─────────────────────────────────────────────────────────────
+function isDark(){ return document.documentElement.getAttribute('data-theme')==='dark' }
+
+function setTheme(t, save=true){
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('theme-btn').textContent = t==='dark' ? '☀️' : '🌙';
+  if(save) localStorage.setItem('cj-theme', t);
+  if(_sessions.length) renderCharts(_sessions);
+}
+function toggleTheme(){ setTheme(isDark() ? 'light' : 'dark') }
+function initTheme(){ setTheme(localStorage.getItem('cj-theme') || 'light', false) }
+
+function chartColors(){
+  return isDark()
+    ? { grid:'#1e2434', tick:'#4b5870', legend:'#94a3b8' }
+    : { grid:'#e2e8f0', tick:'#94a3b8', legend:'#475569' };
+}
+
+// ─────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────
 let _sessions = [];
@@ -534,37 +589,34 @@ function renderKPI(sessions){
 // ─────────────────────────────────────────────────────────────
 // Charts
 // ─────────────────────────────────────────────────────────────
-const _chartOpts = {
-  plugins:{ legend:{ labels:{ color:'#94a3b8', font:{ family:'Inter', size:11 }, boxWidth:12 } } },
-  scales:{ x:{ ticks:{ color:'#4b5870', font:{size:10} }, grid:{ color:'#1e2434' } },
-           y:{ ticks:{ color:'#4b5870', font:{size:10} }, grid:{ color:'#1e2434' } } },
-};
-
 function renderCharts(sessions){
-  // Fault distribution
+  const c = chartColors();
+  const axisOpts = {
+    ticks:{ color:c.tick, font:{size:10,family:'Inter'} },
+    grid:{ color:c.grid },
+  };
   const faultMap = {};
   sessions.forEach(s=>(s.faults||[]).forEach(f=>{
     faultMap[f.kind] = (faultMap[f.kind]||0) + 1;
   }));
   const faultLabels = Object.keys(faultMap);
   const faultData   = Object.values(faultMap);
-
-  const palette = ['#a855f7','#3b82f6','#22c55e','#f59e0b','#f43f5e',
-                   '#06b6d4','#ec4899','#84cc16','#fb923c','#14b8a6'];
+  const palette = ['#7c3aed','#2563eb','#16a34a','#d97706','#dc2626',
+                   '#0891b2','#db2777','#65a30d','#ea580c','#0d9488'];
 
   if(_chartFaults) _chartFaults.destroy();
   _chartFaults = new Chart(document.getElementById('chart-faults'), {
-    type: faultLabels.length ? 'bar' : 'bar',
-    data: {
+    type: 'bar',
+    data:{
       labels: faultLabels.length ? faultLabels.map(l=>l.replace('LLM','').replace('Network','Net')) : ['No data'],
       datasets:[{ label:'Sessions', data: faultData.length ? faultData : [0],
         backgroundColor: palette, borderRadius:4, borderSkipped:false }]
     },
-    options:{ ..._chartOpts, plugins:{..._chartOpts.plugins, legend:{display:false}},
-      responsive:true, maintainAspectRatio:false }
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{ x:axisOpts, y:{...axisOpts, ticks:{...axisOpts.ticks, stepSize:1}} } }
   });
 
-  // Status donut
   const st = { running:0, reverted:0, failed:0 };
   sessions.forEach(s=>{ if(st[s.status]!==undefined) st[s.status]++ });
 
@@ -574,12 +626,12 @@ function renderCharts(sessions){
     data:{
       labels:['Reverted','Running','Failed'],
       datasets:[{ data:[st.reverted, st.running, st.failed],
-        backgroundColor:['#22c55e','#3b82f6','#f43f5e'],
+        backgroundColor:['#16a34a','#2563eb','#dc2626'],
         borderWidth:0, hoverOffset:4 }]
     },
     options:{ responsive:true, maintainAspectRatio:false, cutout:'72%',
       plugins:{ legend:{ position:'right',
-        labels:{ color:'#94a3b8', font:{family:'Inter',size:11}, boxWidth:10, padding:14 }}}}
+        labels:{ color:c.legend, font:{family:'Inter',size:11}, boxWidth:10, padding:14 }}}}
   });
 }
 
@@ -956,6 +1008,7 @@ function fmt(v){
 // ─────────────────────────────────────────────────────────────
 // Boot
 // ─────────────────────────────────────────────────────────────
+initTheme();
 load();
 setInterval(()=>{ load(); if(document.getElementById('tab-logs').classList.contains('active')) loadLogContent(); }, 6000);
 </script>
