@@ -11,8 +11,7 @@ original chaos-jungle project, loaded via the BCC toolkit.
 
 from __future__ import annotations
 import os
-import signal
-import subprocess
+from importlib.resources import files, as_file
 from typing import TYPE_CHECKING
 
 from chaos_jungle.faults.base import Fault
@@ -20,8 +19,8 @@ from chaos_jungle.faults.base import Fault
 if TYPE_CHECKING:
     from chaos_jungle.targets.base import Target
 
-# Default path to the original chaos-jungle BPF driver on the target
-_XDP_FLOW_MODIFY = "~/chaos-jungle/bpf/bcc/xdp_flow_modify.py"
+# Sentinel: auto-deploy the bundled BPF scripts (default)
+_BUNDLED = "__bundled__"
 
 
 def iface_for_ip(ip: str, target: "Target") -> str:
@@ -99,7 +98,10 @@ class SilentNetworkCorrupt(Fault):
         :func:`iface_for_ip` at start time — no need to know the
         interface name in advance. Mutually exclusive with ``iface``.
     flow_modify_path : str, optional
-        Path to ``xdp_flow_modify.py`` on the target machine.
+        Path to ``xdp_flow_modify.py`` on the target machine. Defaults
+        to ``"__bundled__"`` which auto-deploys the bundled BPF scripts
+        to ``~/.chaos-jungle/bpf/bcc/`` on the target — no manual clone
+        of the chaos-jungle repo needed.
 
     Notes
     -----
@@ -107,7 +109,6 @@ class SilentNetworkCorrupt(Fault):
 
     * Linux kernel 4.15+ with BPF support
     * BCC toolkit: ``apt-get install bpfcc-tools python3-bpfcc``
-    * The original chaos-jungle BPF code at ``flow_modify_path``
 
     This fault cannot be used with ``LocalTarget`` unless the current
     machine is Linux with BCC installed.
@@ -128,7 +129,7 @@ class SilentNetworkCorrupt(Fault):
         hook: str = "tc",
         iface: str = "",
         link_ip: str = "",
-        flow_modify_path: str = _XDP_FLOW_MODIFY,
+        flow_modify_path: str = _BUNDLED,
     ) -> None:
         if hook not in ("tc", "xdp"):
             raise ValueError(f"hook must be 'tc' or 'xdp', got {hook!r}")
@@ -142,6 +143,42 @@ class SilentNetworkCorrupt(Fault):
         self.link_ip = link_ip
         self.flow_modify_path = flow_modify_path
         self._pid_file = "/tmp/cj_bpf.pid"
+        self._deployed_path: str | None = None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _deploy_scripts(self, target: "Target") -> str:
+        """Upload bundled BPF scripts to the target.
+
+        Returns the absolute path to ``xdp_flow_modify.py`` on the target.
+        Both ``xdp_flow_modify.py`` and ``flow_modify.c`` are deployed to
+        the same directory because BCC loads the C file by relative name.
+        """
+        _, home, _ = target.run("echo $HOME")
+        home = home.strip() or "/root"
+        remote_dir = f"{home}/.chaos-jungle/bpf/bcc"
+        target.run(f"mkdir -p {remote_dir}")
+
+        bpf_pkg = files("chaos_jungle.scripts.bpf")
+        for name in ("xdp_flow_modify.py", "flow_modify.c"):
+            with as_file(bpf_pkg / name) as src:
+                target.put(str(src), f"{remote_dir}/{name}")
+
+        return f"{remote_dir}/xdp_flow_modify.py"
+
+    def _get_bpf_path(self, target: "Target") -> str:
+        """Return path to xdp_flow_modify.py on target, deploying if needed."""
+        if self.flow_modify_path != _BUNDLED:
+            return self.flow_modify_path
+        if self._deployed_path is None:
+            self._deployed_path = self._deploy_scripts(target)
+        return self._deployed_path
+
+    # ------------------------------------------------------------------
+    # Fault lifecycle
+    # ------------------------------------------------------------------
 
     def start(self, target: "Target") -> None:
         if self.link_ip:
@@ -150,10 +187,14 @@ class SilentNetworkCorrupt(Fault):
             iface = self.iface or self._detect_iface(target)
         hook_flag = "-t" if self.hook == "tc" else ""
 
-        # Launch BPF program in background, write PID to file
+        bpf_path = self._get_bpf_path(target)
+        bpf_dir = os.path.dirname(bpf_path)
+
+        # Must cd into the directory so BCC finds flow_modify.c by relative path
         cmd = (
-            f"sudo python3 {self.flow_modify_path} "
-            f"-i {iface} {hook_flag} -r {self.rate} "
+            f"cd {bpf_dir} && "
+            f"sudo python3 {bpf_path} "
+            f"{iface} {hook_flag} -i {self.rate} "
             f"& echo $! > {self._pid_file}"
         )
         target.run(cmd)
@@ -172,7 +213,7 @@ class SilentNetworkCorrupt(Fault):
         pass
 
     def preflight(self, target: "Target", auto_install: bool = False) -> None:
-        """Check BCC is installed; optionally install via apt-get."""
+        """Check BCC is installed and deploy bundled BPF scripts if needed."""
         from chaos_jungle.faults.base import PreflightError
 
         code, _, _ = target.run("dpkg -l python3-bpfcc 2>/dev/null | grep -q '^ii'")
@@ -191,12 +232,13 @@ class SilentNetworkCorrupt(Fault):
                     "apt-get install bpfcc-tools python3-bpfcc"
                 )
 
-        # Also check the BPF source file exists on target
-        code, _, _ = target.run(f"test -f {self.flow_modify_path}")
+        # Deploy bundled BPF scripts (no-op if already done or path overridden)
+        bpf_path = self._get_bpf_path(target)
+        code, _, _ = target.run(f"test -f {bpf_path}")
         if code != 0:
             raise PreflightError(
-                f"SilentNetworkCorrupt: BPF source not found at {self.flow_modify_path}\n"
-                f"Fix: git clone https://github.com/RENCI-NRIG/chaos-jungle ~/chaos-jungle"
+                f"SilentNetworkCorrupt: BPF script not found at {bpf_path} after deploy.\n"
+                f"Check that target.put() succeeded."
             )
 
     def _detect_iface(self, target: "Target") -> str:
