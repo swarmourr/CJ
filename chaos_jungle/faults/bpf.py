@@ -24,6 +24,53 @@ if TYPE_CHECKING:
 _XDP_FLOW_MODIFY = "~/chaos-jungle/bpf/bcc/xdp_flow_modify.py"
 
 
+def iface_for_ip(ip: str, target: "Target") -> str:
+    """Return the network interface name that owns the given IP address.
+
+    Useful when you know the virtual IP of a network link (e.g. from a
+    topology file) but need the interface name to pass to
+    :class:`SilentNetworkCorrupt`.
+
+    Parameters
+    ----------
+    ip :
+        IPv4 address to look up, e.g. ``"10.100.1.2"``.
+    target :
+        Target to run the lookup on.
+
+    Returns
+    -------
+    str
+        Interface name, e.g. ``"eth1"``.
+
+    Raises
+    ------
+    RuntimeError
+        If no interface on the target has that IP.
+
+    Examples
+    --------
+    ::
+
+        from chaos_jungle.targets import SSHTarget
+        from chaos_jungle.faults.bpf import iface_for_ip, SilentNetworkCorrupt
+
+        target = SSHTarget("node1", user="ubuntu")
+        iface = iface_for_ip("10.100.1.2", target)
+        fault = SilentNetworkCorrupt(rate=5000, iface=iface)
+    """
+    _, stdout, _ = target.run(
+        f"ip -o addr show | awk '$4 ~ /^{ip}(\\/|$)/ {{print $2; exit}}'"
+    )
+    iface = stdout.strip()
+    if not iface:
+        raise RuntimeError(
+            f"iface_for_ip: no interface found with IP {ip!r} on target.\n"
+            f"  Run 'ip addr show' on the target to list available interfaces."
+        )
+    return iface
+
+
 class SilentNetworkCorrupt(Fault):
     """Silently corrupt network packet payloads using eBPF/XDP.
 
@@ -44,7 +91,13 @@ class SilentNetworkCorrupt(Fault):
         Kernel hook to attach to. Either ``"tc"`` (default) or
         ``"xdp"``. XDP is faster but requires compatible NIC drivers.
     iface : str, optional
-        Network interface. Auto-detected if not given.
+        Network interface name, e.g. ``"eth1"``. Auto-detected via
+        ``ip route`` if neither ``iface`` nor ``link_ip`` is given.
+    link_ip : str, optional
+        Virtual IP address of the link to corrupt, e.g. ``"10.100.1.2"``.
+        When given, the interface is resolved automatically via
+        :func:`iface_for_ip` at start time — no need to know the
+        interface name in advance. Mutually exclusive with ``iface``.
     flow_modify_path : str, optional
         Path to ``xdp_flow_modify.py`` on the target machine.
 
@@ -63,6 +116,8 @@ class SilentNetworkCorrupt(Fault):
     --------
     >>> fault = SilentNetworkCorrupt(rate=5000)
     >>> fault = SilentNetworkCorrupt(rate=1000, hook="xdp")
+    >>> # Resolve interface from virtual link IP (IRIS-style topology)
+    >>> fault = SilentNetworkCorrupt(rate=5000, link_ip="10.100.1.2")
     """
 
     dependencies = ["python3-bpfcc"]
@@ -72,18 +127,27 @@ class SilentNetworkCorrupt(Fault):
         rate: int = 5000,
         hook: str = "tc",
         iface: str = "",
+        link_ip: str = "",
         flow_modify_path: str = _XDP_FLOW_MODIFY,
     ) -> None:
         if hook not in ("tc", "xdp"):
             raise ValueError(f"hook must be 'tc' or 'xdp', got {hook!r}")
+        if iface and link_ip:
+            raise ValueError(
+                "SilentNetworkCorrupt: provide either 'iface' or 'link_ip', not both."
+            )
         self.rate = rate
         self.hook = hook
         self.iface = iface
+        self.link_ip = link_ip
         self.flow_modify_path = flow_modify_path
         self._pid_file = "/tmp/cj_bpf.pid"
 
     def start(self, target: "Target") -> None:
-        iface = self.iface or self._detect_iface(target)
+        if self.link_ip:
+            iface = iface_for_ip(self.link_ip, target)
+        else:
+            iface = self.iface or self._detect_iface(target)
         hook_flag = "-t" if self.hook == "tc" else ""
 
         # Launch BPF program in background, write PID to file
@@ -143,4 +207,4 @@ class SilentNetworkCorrupt(Fault):
         return iface
 
     def _parameters(self) -> dict:
-        return {"rate": self.rate, "hook": self.hook, "iface": self.iface}
+        return {"rate": self.rate, "hook": self.hook, "iface": self.iface, "link_ip": self.link_ip}

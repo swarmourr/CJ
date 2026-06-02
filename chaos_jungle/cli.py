@@ -419,10 +419,13 @@ def export(session, sessions, fmt, output, out_dir, split):
 @click.option("--remote-dir", default="~/.chaos-jungle",
               help="Remote directory to fetch from. Default: ~/.chaos-jungle")
 @click.option("--files", "-f", default="chaos_jungle.db",
-              help="Comma-separated list of filenames to fetch. Default: chaos_jungle.db")
+              help="Comma-separated filenames to fetch. Default: chaos_jungle.db")
+@click.option("--glob", "-g", "glob_patterns", default="", metavar="PATTERNS",
+              help="Comma-separated glob patterns expanded on the remote "
+                   "(e.g. '*_wget_*.log,*_diff_*.log').")
 @click.option("--export-csv/--no-export-csv", default=True,
               help="After fetching the DB, also export all sessions to CSV. Default: yes")
-def fetch(target, output_dir, remote_dir, files, export_csv):
+def fetch(target, output_dir, remote_dir, files, glob_patterns, export_csv):
     """Fetch result files from a remote SSH target.
 
     Downloads files from the remote chaos-jungle directory to a local
@@ -431,118 +434,49 @@ def fetch(target, output_dir, remote_dir, files, export_csv):
 
     \b
     Examples:
-      # fetch DB only
+      # fetch DB only (default)
       chaos-jungle fetch --target ssh://ubuntu@10.0.0.5
 
-      # fetch DB + a custom log file, save to ./results/
+      # fetch DB + named files + glob-matched logs
       chaos-jungle fetch --target ssh://ubuntu@10.0.0.5 \\
-          --files "chaos_jungle.db,cj.log" --output-dir ./results/
+          --files "chaos_jungle.db,cj.db" \\
+          --glob "*_wget_*.log,*_diff_*.log,*_cj.log" \\
+          --output-dir ./results/
 
       # fetch without auto-exporting to CSV
       chaos-jungle fetch --target ssh://ubuntu@10.0.0.5 --no-export-csv
     """
-    import os
+    from chaos_jungle.fetch import fetch as _fetch
+
+    file_list = [f.strip() for f in files.split(",") if f.strip()]
+    pattern_list = [p.strip() for p in glob_patterns.split(",") if p.strip()]
 
     tgt = _make_target(target)
-    os.makedirs(output_dir, exist_ok=True)
-
     try:
-        tgt.connect()
+        result = _fetch(
+            tgt,
+            output_dir=output_dir,
+            remote_dir=remote_dir,
+            files=file_list,
+            glob_patterns=pattern_list,
+            export_csv=export_csv,
+        )
     except Exception as e:
-        click.echo(f"[chaos-jungle] ERROR connecting to {target}: {e}", err=True)
+        click.echo(f"[chaos-jungle] ERROR: {e}", err=True)
         sys.exit(1)
 
-    # Resolve remote home dir (handles ~ expansion on remote)
-    try:
-        _, home_out, _ = tgt.run("echo $HOME")
-        remote_home = home_out.strip()
-        resolved_dir = remote_dir.replace("~", remote_home)
-    except Exception:
-        resolved_dir = remote_dir
+    for local_path in result.fetched:
+        click.echo(f"[chaos-jungle] Fetched  →  {local_path}")
+    for remote_path in result.missing:
+        click.echo(f"[chaos-jungle] MISSING  {remote_path} (skipped)", err=True)
+    for remote_path, err in result.errors.items():
+        click.echo(f"[chaos-jungle] ERROR    {remote_path}: {err}", err=True)
 
-    fetched = []
-    for filename in [f.strip() for f in files.split(",") if f.strip()]:
-        remote_path = f"{resolved_dir}/{filename}"
-        local_path = os.path.join(output_dir, filename)
-        try:
-            tgt.get(remote_path, local_path)
-            click.echo(f"[chaos-jungle] Fetched  {remote_path}  →  {local_path}")
-            fetched.append(local_path)
-        except FileNotFoundError:
-            click.echo(f"[chaos-jungle] MISSING  {remote_path} (skipped)", err=True)
-        except Exception as e:
-            click.echo(f"[chaos-jungle] ERROR fetching {remote_path}: {e}", err=True)
+    if result.csv_path:
+        click.echo(f"[chaos-jungle] CSV      →  {result.csv_path}")
 
-    tgt.disconnect()
-
-    # Auto-export CSV from the fetched DB
-    if export_csv:
-        db_path = os.path.join(output_dir, "chaos_jungle.db")
-        if os.path.isfile(db_path):
-            try:
-                from chaos_jungle.db.session_db import SessionDB as _SDB
-                remote_db = _SDB(path=db_path)
-                rows = remote_db.list_sessions()
-                if not rows:
-                    click.echo("[chaos-jungle] DB is empty — no sessions to export.")
-                else:
-                    import csv as csv_mod, io as io_mod
-                    from datetime import datetime as _dt
-
-                    all_rows: list[dict] = []
-                    metric_keys: list[str] = []
-
-                    for sess_row in rows:
-                        sid = sess_row["id"]
-                        data = remote_db.export_session(sid)
-                        sess = data["session"]
-                        duration_s = ""
-                        if sess.get("started_at") and sess.get("stopped_at"):
-                            try:
-                                t0 = _dt.fromisoformat(sess["started_at"])
-                                t1 = _dt.fromisoformat(sess["stopped_at"])
-                                duration_s = round((t1 - t0).total_seconds(), 1)
-                            except ValueError:
-                                pass
-
-                        results = remote_db.get_results(sid)
-                        faults = data["faults"] or [{"kind": "", "parameters": {}}]
-
-                        for fault in faults:
-                            base = {
-                                "session_id": sess["id"],
-                                "name": sess["name"],
-                                "status": sess["status"],
-                                "started_at": sess.get("started_at", ""),
-                                "stopped_at": sess.get("stopped_at", ""),
-                                "duration_s": duration_s,
-                                "fault_kind": fault["kind"],
-                                "fault_parameters": json.dumps(fault["parameters"]),
-                            }
-                            metrics: dict = {}
-                            if results:
-                                metrics = results[0].get("metrics", {}) if isinstance(results[0].get("metrics"), dict) else {}
-                            base.update(metrics)
-                            for k in metrics:
-                                if k not in metric_keys:
-                                    metric_keys.append(k)
-                            all_rows.append(base)
-
-                    base_cols = ["session_id", "name", "status", "started_at", "stopped_at",
-                                 "duration_s", "fault_kind", "fault_parameters"]
-                    fieldnames = base_cols + metric_keys
-                    csv_path = os.path.join(output_dir, "chaos_sessions.csv")
-                    with open(csv_path, "w", newline="") as fh:
-                        writer = csv_mod.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
-                        writer.writeheader()
-                        for row in all_rows:
-                            writer.writerow(row)
-                    click.echo(f"[chaos-jungle] Exported {len(all_rows)} row(s) → {csv_path}")
-            except Exception as e:
-                click.echo(f"[chaos-jungle] WARNING: could not auto-export CSV: {e}", err=True)
-
-    if fetched:
-        click.echo(f"[chaos-jungle] Done. Files saved in: {os.path.abspath(output_dir)}")
+    if result.fetched:
+        click.echo(f"[chaos-jungle] Done. Files saved in: {result.output_dir}")
 
 
 # ── suite ─────────────────────────────────────────────────────────

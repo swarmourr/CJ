@@ -29,46 +29,29 @@ def _require_rate(value: str, name: str) -> None:
         )
 
 
-def _default_iface(target: "Target") -> str:
-    """Detect the default network interface on the target machine.
+def _all_ifaces(target: "Target") -> list[str]:
+    """Return all non-loopback UP interfaces on the target.
 
-    Tries three methods in order, returning the first that works:
+    Used when no ``iface`` is specified — the fault is applied to every
+    active interface so no traffic path is missed.
 
-    1. ``ip route show default`` — standard Linux routing table
-    2. ``ip route get 8.8.8.8`` — interface used to reach the internet
-    3. ``ip link show`` — first non-loopback interface that is UP
-
-    Raises ``RuntimeError`` only if all three methods fail.
+    Returns a list of interface names, e.g. ``["eth0", "eth1", "ens3"]``.
+    Raises ``RuntimeError`` if no interfaces are found.
     """
-    # Method 1: default route
     _, out, _ = target.run(
-        "ip route show default 2>/dev/null | awk '/default/{print $5}' | head -1"
+        "ip -o link show up 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1"
     )
-    iface = out.strip()
-    if iface:
-        return iface
-
-    # Method 2: route to external IP
-    _, out, _ = target.run(
-        "ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i==\"dev\") print $(i+1)}' | head -1"
-    )
-    iface = out.strip()
-    if iface:
-        return iface
-
-    # Method 3: first non-loopback UP interface
-    _, out, _ = target.run(
-        "ip link show 2>/dev/null | awk -F': ' '/^[0-9]+:/{dev=$2} /UP/{if(dev && dev!=\"lo\"){print dev; exit}}'"
-    )
-    iface = out.strip().split("@")[0]  # strip alias suffix e.g. eth0@if5 → eth0
-    if iface and iface != "lo":
-        return iface
-
-    raise RuntimeError(
-        "Could not detect a network interface on the target.\n"
-        "  Fix A: pass iface= explicitly, e.g. NetworkDelay('100ms', iface='eth0')\n"
-        "  Fix B: run 'ip link show' on the target and check interface names."
-    )
+    ifaces = [
+        line.strip() for line in out.splitlines()
+        if line.strip() and line.strip() != "lo"
+    ]
+    if not ifaces:
+        raise RuntimeError(
+            "Could not detect any network interfaces on the target.\n"
+            "  Fix A: pass iface= explicitly, e.g. NetworkDelay('100ms', iface='eth0')\n"
+            "  Fix B: run 'ip -o link show up' on the target to list available interfaces."
+        )
+    return ifaces
 
 
 class NetworkDelay(Fault):
@@ -99,26 +82,27 @@ class NetworkDelay(Fault):
         self.delay = delay
         self.jitter = jitter
         self.iface = iface
-        self._resolved_iface: str = ""
+        self._resolved_ifaces: list[str] = []
 
-    def _iface(self, target: "Target") -> str:
-        if not self._resolved_iface:
-            self._resolved_iface = self.iface or _default_iface(target)
-        return self._resolved_iface
+    def _ifaces(self, target: "Target") -> list[str]:
+        if not self._resolved_ifaces:
+            self._resolved_ifaces = [self.iface] if self.iface else _all_ifaces(target)
+        return self._resolved_ifaces
 
     def start(self, target: "Target") -> None:
-        iface = self._iface(target)
         jitter_part = f" {self.jitter}" if self.jitter else ""
-        target.sudo(f"tc qdisc add dev {iface} root netem delay {self.delay}{jitter_part}")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc add dev {iface} root netem delay {self.delay}{jitter_part}")
 
     def stop(self, target: "Target") -> None:
-        target.sudo(f"tc qdisc del dev {self._iface(target)} root 2>/dev/null || true")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc del dev {iface} root 2>/dev/null || true")
 
     def revert(self, target: "Target") -> None:
         pass  # stateless — stop() is sufficient
 
     def _parameters(self) -> dict:
-        return {"delay": self.delay, "jitter": self.jitter, "iface": self._resolved_iface or self.iface}
+        return {"delay": self.delay, "jitter": self.jitter, "iface": ",".join(self._resolved_ifaces) or self.iface}
 
 
 class NetworkLoss(Fault):
@@ -142,24 +126,26 @@ class NetworkLoss(Fault):
         _require_rate(rate, "rate")
         self.rate = rate
         self.iface = iface
-        self._resolved_iface: str = ""
+        self._resolved_ifaces: list[str] = []
 
-    def _iface(self, target: "Target") -> str:
-        if not self._resolved_iface:
-            self._resolved_iface = self.iface or _default_iface(target)
-        return self._resolved_iface
+    def _ifaces(self, target: "Target") -> list[str]:
+        if not self._resolved_ifaces:
+            self._resolved_ifaces = [self.iface] if self.iface else _all_ifaces(target)
+        return self._resolved_ifaces
 
     def start(self, target: "Target") -> None:
-        target.sudo(f"tc qdisc add dev {self._iface(target)} root netem loss {self.rate}")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc add dev {iface} root netem loss {self.rate}")
 
     def stop(self, target: "Target") -> None:
-        target.sudo(f"tc qdisc del dev {self._iface(target)} root 2>/dev/null || true")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc del dev {iface} root 2>/dev/null || true")
 
     def revert(self, target: "Target") -> None:
         pass
 
     def _parameters(self) -> dict:
-        return {"rate": self.rate, "iface": self._resolved_iface or self.iface}
+        return {"rate": self.rate, "iface": ",".join(self._resolved_ifaces) or self.iface}
 
 
 class NetworkCorrupt(Fault):
@@ -183,24 +169,26 @@ class NetworkCorrupt(Fault):
         _require_rate(rate, "rate")
         self.rate = rate
         self.iface = iface
-        self._resolved_iface: str = ""
+        self._resolved_ifaces: list[str] = []
 
-    def _iface(self, target: "Target") -> str:
-        if not self._resolved_iface:
-            self._resolved_iface = self.iface or _default_iface(target)
-        return self._resolved_iface
+    def _ifaces(self, target: "Target") -> list[str]:
+        if not self._resolved_ifaces:
+            self._resolved_ifaces = [self.iface] if self.iface else _all_ifaces(target)
+        return self._resolved_ifaces
 
     def start(self, target: "Target") -> None:
-        target.sudo(f"tc qdisc add dev {self._iface(target)} root netem corrupt {self.rate}")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc add dev {iface} root netem corrupt {self.rate}")
 
     def stop(self, target: "Target") -> None:
-        target.sudo(f"tc qdisc del dev {self._iface(target)} root 2>/dev/null || true")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc del dev {iface} root 2>/dev/null || true")
 
     def revert(self, target: "Target") -> None:
         pass
 
     def _parameters(self) -> dict:
-        return {"rate": self.rate, "iface": self._resolved_iface or self.iface}
+        return {"rate": self.rate, "iface": ",".join(self._resolved_ifaces) or self.iface}
 
 
 class NetworkDuplicate(Fault):
@@ -224,21 +212,23 @@ class NetworkDuplicate(Fault):
         _require_rate(rate, "rate")
         self.rate = rate
         self.iface = iface
-        self._resolved_iface: str = ""
+        self._resolved_ifaces: list[str] = []
 
-    def _iface(self, target: "Target") -> str:
-        if not self._resolved_iface:
-            self._resolved_iface = self.iface or _default_iface(target)
-        return self._resolved_iface
+    def _ifaces(self, target: "Target") -> list[str]:
+        if not self._resolved_ifaces:
+            self._resolved_ifaces = [self.iface] if self.iface else _all_ifaces(target)
+        return self._resolved_ifaces
 
     def start(self, target: "Target") -> None:
-        target.sudo(f"tc qdisc add dev {self._iface(target)} root netem duplicate {self.rate}")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc add dev {iface} root netem duplicate {self.rate}")
 
     def stop(self, target: "Target") -> None:
-        target.sudo(f"tc qdisc del dev {self._iface(target)} root 2>/dev/null || true")
+        for iface in self._ifaces(target):
+            target.sudo(f"tc qdisc del dev {iface} root 2>/dev/null || true")
 
     def revert(self, target: "Target") -> None:
         pass
 
     def _parameters(self) -> dict:
-        return {"rate": self.rate, "iface": self._resolved_iface or self.iface}
+        return {"rate": self.rate, "iface": ",".join(self._resolved_ifaces) or self.iface}

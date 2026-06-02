@@ -71,6 +71,8 @@ from chaos_jungle.faults import (
     MCPFault,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
+from chaos_jungle.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
+from chaos_jungle.faults.bpf import iface_for_ip
 
 __version__ = "0.1.0"
 
@@ -119,4 +121,11 @@ __all__ = [
     # Preflight / auto-install
     "detect_pkg_manager",
     "PKG_MAP",
+    # Fetch / data collection
+    "fetch",
+    "collect_logs",
+    "export_db_to_csv",
+    "FetchResult",
+    # Network utilities
+    "iface_for_ip",
 ]
