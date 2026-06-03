@@ -372,3 +372,102 @@ Fault reference
    * - ``MCPFault``
      - MCP server failure
      - Tool server resilience, agent-to-agent calls
+
+Measurement reference
+---------------------
+
+What each fault injects, what metric to capture, and what a passing result
+looks like.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 25 25 30
+
+   * - Fault
+     - What is injected
+     - What to measure
+     - Expected output
+   * - ``LLMLatency``
+     - N-second sleep before forwarding
+     - ``elapsed_s`` delta vs baseline
+     - ``elapsed_s >= baseline + delay_s``
+   * - ``LLMRateLimit``
+     - HTTP 429 after the first *n* requests
+     - Count of blocked calls, index of first failure
+     - Calls ``[0..n-1]`` succeed; ``[n..]`` return 429
+   * - ``LLMTimeout``
+     - Connection held for *T* s then HTTP 504
+     - ``elapsed_s``, error type received by agent
+     - Agent raises timeout exception before *T* expires
+   * - ``LLMUnavailable``
+     - HTTP 503 on every call
+     - Error type, retry count by agent
+     - All calls return 503; agent degrades gracefully
+   * - ``LLMResponseCorrupt`` ``truncate``
+     - Response body cut in half
+     - JSON parse error raised
+     - Agent raises ``JSONDecodeError`` or receives partial text
+   * - ``LLMResponseCorrupt`` ``empty``
+     - Response replaced with ``{}``
+     - JSON parse error or empty content field
+     - Agent raises ``KeyError`` or receives empty reply
+   * - ``LLMResponseCorrupt`` ``invalid_json``
+     - Response replaced with a raw string
+     - JSON parse error raised
+     - Agent raises ``JSONDecodeError``
+   * - ``LLMHallucination`` (static)
+     - Hardcoded wrong text replaces answer
+     - Plausibility score, detection rate, propagation
+     - Injected text appears in reply verbatim
+   * - ``LLMHallucination`` (generated)
+     - Second LLM generates a plausible wrong answer
+     - Plausibility score, similarity to real answer, detection rate, propagation to follow-up
+     - Reply is wrong but convincing; undetected by naive fact-check
+   * - ``LLMStreamInterrupt``
+     - SSE stream closed after *n* chunks
+     - Chunks received, completeness of reply
+     - Reply is truncated; agent handles partial response
+   * - ``LLMTokenStarvation``
+     - ``max_tokens`` forced to *n* before forwarding
+     - Word count of reply vs baseline, ``finish_reason``
+     - Reply is very short; ``finish_reason = "length"``
+   * - ``ToolFault``
+     - HTTP 400 error when tool result is submitted
+     - Agent retry count, fallback behaviour
+     - Agent receives tool error; handles or raises
+   * - ``MCPFault`` ``tool_error``
+     - JSON-RPC error on every MCP call
+     - Error code received, agent fallback
+     - Agent gets ``-32000``; handles gracefully
+   * - ``MCPFault`` ``unavailable``
+     - HTTP 503 on every MCP call
+     - Error type, agent fallback
+     - Agent sees service down
+   * - ``MCPFault`` ``timeout``
+     - MCP connection held *T* s then HTTP 504
+     - ``elapsed_s``, agent timeout behaviour
+     - Agent times out before *T*
+
+Hallucination outputs
+~~~~~~~~~~~~~~~~~~~~~
+
+For ``LLMHallucination`` the infrastructure metrics (status code, elapsed)
+are not enough.  Capture these semantic metrics:
+
+.. code-block:: python
+
+   {
+       "prompt":              "What is the capital of France?",
+       "real_answer":         "Paris",
+       "hallucinated_answer": "Lyon is the historical capital of France.",
+       "plausibility":        0.82,   # 0-1 judged by a second LLM call
+       "detected_by_agent":   False,  # did any downstream check flag it?
+       "propagated":          True,   # did the error affect a follow-up answer?
+       "follow_up_answer":    "France uses the Franc, centered in Lyon.",
+       "ground_truth":        "Paris",
+       "similarity_to_real":  0.12,   # low = very different from real answer
+   }
+
+``plausibility`` and ``detected_by_agent`` require a second LLM call acting
+as a judge.  ``propagated`` requires feeding the hallucinated answer back as
+context and checking whether the downstream answer still matches ground truth.
