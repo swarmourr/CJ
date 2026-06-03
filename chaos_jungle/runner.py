@@ -3,6 +3,8 @@
 from __future__ import annotations
 import threading
 import time
+from dataclasses import dataclass, field
+from typing import Callable
 
 from chaos_jungle._duration import parse_duration
 from chaos_jungle.db.session_db import SessionDB
@@ -11,6 +13,70 @@ from chaos_jungle.scenario import Scenario
 from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
 from chaos_jungle.targets.logging import LoggingTarget
+
+
+@dataclass
+class MeasurementResult:
+    """Result returned by :meth:`ChaosRunner.measure`.
+
+    Attributes
+    ----------
+    scenario : str
+        Scenario name.
+    session_id : int
+        Database session id of the fault run.
+    baseline : dict
+        Average metrics from workload runs *without* any fault.
+    fault : dict
+        Average metrics from workload runs *with* the fault active.
+    delta : dict
+        ``fault[k] - baseline[k]`` for every numeric metric.
+        Positive = fault made things worse; negative = better.
+    n_baseline : int
+        Number of baseline trials.
+    n_fault : int
+        Number of fault trials.
+    """
+
+    scenario: str
+    session_id: int
+    baseline: dict
+    fault: dict
+    delta: dict
+    n_baseline: int
+    n_fault: int
+    raw_baseline: list = field(default_factory=list, repr=False)
+    raw_fault: list = field(default_factory=list, repr=False)
+
+    def passed(self, key: str, threshold: float) -> bool:
+        """Return True if ``abs(delta[key]) <= threshold``."""
+        return abs(self.delta.get(key, 0.0)) <= threshold
+
+    def summary(self) -> str:
+        """Human-readable table of baseline / fault / delta per metric."""
+        lines = [
+            f"Scenario : {self.scenario}",
+            f"Trials   : {self.n_baseline} baseline / {self.n_fault} fault",
+            "",
+        ]
+        for k in sorted(set(self.baseline) | set(self.fault)):
+            b = self.baseline.get(k, "—")
+            f = self.fault.get(k, "—")
+            d = self.delta.get(k)
+            d_str = f"  Δ {d:+.4g}" if d is not None else ""
+            lines.append(f"  {k:<30} baseline={b}  fault={f}{d_str}")
+        return "\n".join(lines)
+
+
+def _avg_metrics(runs: list[dict]) -> dict:
+    """Average numeric values across multiple workload runs."""
+    if not runs:
+        return {}
+    result = {}
+    for k in runs[0]:
+        vals = [r[k] for r in runs if isinstance(r.get(k), (int, float))]
+        result[k] = round(sum(vals) / len(vals), 6) if vals else runs[0].get(k)
+    return result
 
 
 class ChaosRunner:
@@ -109,7 +175,11 @@ class ChaosRunner:
             print(f"[chaos-jungle] Duration reached — stopping chaos")
             self.stop()
 
-    def start(self, duration: str | int | float | None = None) -> "ChaosRunner":
+    def start(
+        self,
+        duration: str | int | float | None = None,
+        start_after: float = 0.0,
+    ) -> "ChaosRunner":
         """Inject all faults in the scenario.
 
         Opens a database session, runs preflight checks if enabled,
@@ -121,12 +191,25 @@ class ChaosRunner:
             If given, a background timer will automatically stop and
             revert all faults after this duration. Accepts the same
             formats as :meth:`run`. Use this for fire-and-forget mode.
+        start_after : float, optional
+            Seconds to wait before injecting the fault. The call returns
+            immediately and injection happens in a background thread.
+            Useful to inject a fault mid-workload::
+
+                runner.start(start_after=30, duration=60)
+                run_my_long_job()   # fault hits after 30 s, clears after 90 s
 
         Returns
         -------
         ChaosRunner
             Self, for chaining.
         """
+        if start_after > 0:
+            print(f"[chaos-jungle] Fault injection deferred — starting in {start_after}s")
+            t = threading.Timer(start_after, lambda: self.start(duration=duration))
+            t.daemon = True
+            t.start()
+            return self
         self.target.connect()
 
         # guardrails — scenario + runtime checks
@@ -298,6 +381,85 @@ class ChaosRunner:
             ],
             "errors": errors,
         }
+
+    def measure(
+        self,
+        workload: Callable[[], dict],
+        n_baseline: int = 1,
+        n_fault: int = 1,
+    ) -> "MeasurementResult":
+        """Run *workload* under baseline and fault conditions and compare.
+
+        The workload callable must return a ``dict`` of numeric (or
+        string) metrics each time it is called::
+
+            def my_workload():
+                t0 = time.time()
+                errors = run_transfer()
+                return {"duration_s": time.time() - t0, "errors": errors}
+
+            result = runner.measure(my_workload, n_baseline=3, n_fault=3)
+            print(result.summary())
+
+        Parameters
+        ----------
+        workload : callable
+            Zero-argument callable returning a metrics dict.
+        n_baseline : int
+            How many times to run the workload *without* any fault.
+            More trials reduce noise. Default ``1``.
+        n_fault : int
+            How many times to run the workload *with* the fault active.
+            Default ``1``.
+
+        Returns
+        -------
+        MeasurementResult
+            Contains averaged baseline/fault metrics and their delta.
+        """
+        # ── 1. Baseline runs (no fault) ───────────────────────────
+        print(f"[chaos-jungle] Measuring baseline ({n_baseline} trial(s)) ...")
+        raw_baseline = []
+        for i in range(n_baseline):
+            raw_baseline.append(workload())
+        baseline = _avg_metrics(raw_baseline)
+
+        # ── 2. Fault runs ─────────────────────────────────────────
+        print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
+        self.start()
+        raw_fault = []
+        try:
+            for i in range(n_fault):
+                raw_fault.append(workload())
+        finally:
+            self.stop()
+
+        fault = _avg_metrics(raw_fault)
+
+        # ── 3. Delta ──────────────────────────────────────────────
+        delta = {
+            k: round(fault[k] - baseline[k], 6)
+            for k in baseline
+            if k in fault and isinstance(fault.get(k), (int, float))
+                         and isinstance(baseline.get(k), (int, float))
+        }
+
+        result = MeasurementResult(
+            scenario=self.scenario.name,
+            session_id=self._session_id,
+            baseline=baseline,
+            fault=fault,
+            delta=delta,
+            n_baseline=n_baseline,
+            n_fault=n_fault,
+            raw_baseline=raw_baseline,
+            raw_fault=raw_fault,
+        )
+
+        # ── 4. Persist to DB ──────────────────────────────────────
+        self.record_result({"baseline": baseline, "fault": fault, "delta": delta})
+
+        return result
 
     def record_result(self, metrics: dict) -> None:
         """Attach workflow outcome metrics to the current session.

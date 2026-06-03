@@ -44,7 +44,7 @@ Measure style (auto-records return dict as results)::
 """
 
 from chaos_jungle.scenario import Scenario
-from chaos_jungle.runner import ChaosRunner
+from chaos_jungle.runner import ChaosRunner, MeasurementResult
 from chaos_jungle.suite import ExperimentSuite
 from chaos_jungle.decorators import chaos, chaos_session, chaos_measure
 from chaos_jungle.metrics import Metric, PingLatency, CommandMetric, FileIntegrity, metric, ScriptMetric
@@ -80,6 +80,7 @@ __all__ = [
     # Core
     "Scenario",
     "ChaosRunner",
+    "MeasurementResult",
     "ExperimentSuite",
     # Decorators
     "chaos",
