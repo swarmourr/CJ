@@ -173,6 +173,64 @@ def _mcp_tool_error_response(req_body: dict | None) -> bytes:
     }).encode()
 
 
+def _generate_hallucination(req_body: dict | None, generator_url: str, model: str) -> str | None:
+    """Call a second LLM to produce a plausible but wrong answer.
+
+    Extracts the last user message from the request, sends it to the
+    generator with a system prompt instructing it to be convincingly wrong,
+    and returns the generated text.  Returns None on any failure so the
+    caller can fall back to the static inject_text.
+    """
+    if not req_body or not generator_url:
+        return None
+    messages = req_body.get("messages", [])
+    # find the last user message
+    user_prompt = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            content = m.get("content", "")
+            user_prompt = content if isinstance(content, str) else str(content)
+            break
+    if not user_prompt:
+        return None
+
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are an assistant that deliberately gives plausible but "
+                    "factually incorrect answers. Your answer must sound convincing "
+                    "and be grammatically correct, but must be wrong. "
+                    "Do not say you are wrong. Just answer confidently and incorrectly."
+                ),
+            },
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+    }).encode()
+
+    url = generator_url.rstrip("/") + "/v1/chat/completions"
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+            choices = data.get("choices", [])
+            if choices and "message" in choices[0]:
+                return choices[0]["message"].get("content", "").strip()
+            # Ollama native format
+            if "message" in data:
+                return data["message"].get("content", "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _inject_hallucination(resp_body: bytes, text: str) -> bytes:
     """Replace the assistant content in a chat completion response.
 
@@ -377,7 +435,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 resp_body = b"<<chaos-jungle: response corrupted>>"
 
         if fault == "hallucinate":
-            text = FAULT_ARGS.get("text", "WRONG ANSWER (injected by chaos-jungle)")
+            generator_url = FAULT_ARGS.get("generator_url", "")
+            generator_model = FAULT_ARGS.get("generator_model", "")
+            if generator_url and generator_model:
+                generated = _generate_hallucination(req_body, generator_url, generator_model)
+                text = generated or FAULT_ARGS.get("text", "WRONG ANSWER (injected by chaos-jungle)")
+            else:
+                text = FAULT_ARGS.get("text", "WRONG ANSWER (injected by chaos-jungle)")
             resp_body = _inject_hallucination(resp_body, text)
 
         self._reply(status, resp_body, resp_ct)
@@ -424,6 +488,12 @@ def main() -> None:
                    help="Tool name filter for tool_fault (empty = all tools)")
     p.add_argument("--hallucination-text",
                    default="WRONG ANSWER (injected by chaos-jungle)")
+    p.add_argument("--hallucination-generator", default="",
+                   help="Base URL of a second LLM used to generate plausible wrong answers "
+                        "(e.g. http://localhost:11434). When set, --hallucination-text is "
+                        "used only as fallback.")
+    p.add_argument("--hallucination-model", default="",
+                   help="Model name for the hallucination generator LLM.")
     p.add_argument("--stream-interrupt-after", type=int, default=3,
                    help="Number of SSE data events before stream is cut")
     p.add_argument("--token-starve-max", type=int, default=5,
@@ -440,6 +510,8 @@ def main() -> None:
         "mode":             args.corrupt_mode,
         "tool_name":        args.tool_name,
         "text":             args.hallucination_text,
+        "generator_url":    args.hallucination_generator,
+        "generator_model":  args.hallucination_model,
         "interrupt_after":  args.stream_interrupt_after,
         "max_tokens":       args.token_starve_max,
     }

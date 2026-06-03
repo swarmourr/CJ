@@ -476,8 +476,19 @@ class LLMHallucination(_LLMProxyFault):
 
     Examples
     --------
+    >>> # Static injected text (original behaviour)
     >>> fault = LLMHallucination("The capital of France is Berlin.")
-    >>> fault = LLMHallucination("I don't know anything about that topic.")
+
+    >>> # LLM-generated plausible wrong answer via Ollama
+    >>> fault = LLMHallucination(generator_url="http://localhost:11434",
+    ...                          generator_model="llama3.2")
+
+    >>> # LLM generator with static fallback
+    >>> fault = LLMHallucination(
+    ...     inject_text="Paris is a city in Germany.",
+    ...     generator_url="http://localhost:11434",
+    ...     generator_model="llama3.2",
+    ... )
     """
 
     _fault_name = "hallucinate"
@@ -485,6 +496,8 @@ class LLMHallucination(_LLMProxyFault):
     def __init__(
         self,
         inject_text: str = "WRONG ANSWER (injected by chaos-jungle)",
+        generator_url: str = "",
+        generator_model: str = "",
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
@@ -493,10 +506,22 @@ class LLMHallucination(_LLMProxyFault):
             raise ValueError("LLMHallucination 'inject_text' must be a non-empty string.")
         super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
         self.inject_text = inject_text
+        self.generator_url = generator_url
+        self.generator_model = generator_model
         self._extra_args = ["--hallucination-text", inject_text]
+        if generator_url and generator_model:
+            self._extra_args += [
+                "--hallucination-generator", generator_url,
+                "--hallucination-model", generator_model,
+            ]
 
     def _parameters(self) -> dict:
-        return {**super()._parameters(), "inject_text": self.inject_text}
+        return {
+            **super()._parameters(),
+            "inject_text": self.inject_text,
+            "generator_url": self.generator_url,
+            "generator_model": self.generator_model,
+        }
 
 
 class LLMStreamInterrupt(_LLMProxyFault):
