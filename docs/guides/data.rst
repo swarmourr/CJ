@@ -208,8 +208,11 @@ StorageCorrupt defaults and options
      - Search ``directory`` recursively for matching files.
    * - ``cj_storage_path``
      - str
-     - ``~/chaos-jungle/storage/cj_storage.py``
-     - Path to ``cj_storage.py`` on the *target* machine.
+     - *(auto-deployed)*
+     - **Do not set.** The scripts are bundled inside the package and
+       deployed automatically to ``~/.chaos-jungle/storage/`` on the
+       target at ``start()`` time. Only override if you have a custom
+       build of ``cj_storage.py`` at a specific path.
 
 ``StorageCorrupt`` uses a **crontab** on the target machine to schedule
 periodic bit-flips. Each corrupted byte is recorded in ``cj.db`` before
