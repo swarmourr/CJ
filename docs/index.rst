@@ -21,6 +21,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    guides/ssh
    guides/http
    guides/separate-mode
+   guides/measurement
    guides/dashboard
    guides/metrics
    guides/data
