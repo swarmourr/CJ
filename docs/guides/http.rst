@@ -33,6 +33,30 @@ To run as a systemd service:
 
    sudo systemctl enable --now cj-daemon
 
+Where does each piece run?
+--------------------------
+
+.. important::
+
+   ``HTTPTarget`` only sends **fault control commands** to ``worker1``.
+   Your Python script — including any ``run_my_pipeline()`` call — runs on
+   **your local machine**, not on ``worker1``.
+
+.. code-block:: text
+
+   Your machine                        worker1:7777
+   ─────────────────────────────       ────────────────────────────
+   runner.start()  ── POST /start ──►  NetworkDelay injected ✓
+   run_my_pipeline()                   (no involvement)
+     │
+     └─ only affected if it talks
+        to worker1 (HTTP, TCP, etc.)
+   runner.stop()   ── POST /stop  ──►  NetworkDelay removed ✓
+
+Use ``HTTPTarget`` when your workload runs **somewhere else** but
+communicates with ``worker1`` — for example, a data-transfer pipeline that
+reads from or writes to ``worker1``.
+
 Control from your machine
 --------------------------
 
@@ -45,8 +69,19 @@ Control from your machine
 
    runner = ChaosRunner(scenario, target)
    runner.start()
+
+   # This runs on YOUR machine.
+   # It is affected by the fault only if it communicates with worker1.
    run_my_pipeline()
+
    runner.stop()
+
+To run a command **on worker1** through the daemon, use the CLI:
+
+.. code-block:: bash
+
+   chaos-jungle exec --target http://worker1:7777 \
+       --cmd "python3 /home/ubuntu/pipeline.py"
 
 CLI
 ---

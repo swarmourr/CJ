@@ -68,6 +68,36 @@ Copy your SSH key to the remote machine if not already done:
    # or for a specific key:
    ssh-copy-id -i ~/.ssh/id_ed25519.pub ubuntu@worker1
 
+Where does each piece run?
+--------------------------
+
+.. important::
+
+   ``SSHTarget`` runs **fault commands** on ``worker1`` over SSH.
+   Your Python script — including any ``run_my_pipeline()`` call — still
+   runs on **your local machine**.
+
+   To run a command on ``worker1`` itself, use ``target.run()``.
+
+.. code-block:: text
+
+   Your machine                        worker1 (SSH)
+   ─────────────────────────────       ────────────────────────────
+   runner.start()  ── SSH cmd ──────►  NetworkLoss injected ✓
+   run_my_pipeline()                   (no involvement)
+     │
+     └─ affected only if it sends
+        traffic to/from worker1
+   runner.stop()   ── SSH cmd ──────►  NetworkLoss removed ✓
+
+To run the pipeline **on worker1**:
+
+.. code-block:: python
+
+   runner.start()
+   target.run("python3 /home/ubuntu/my_pipeline.py")   # executes ON worker1
+   runner.stop()
+
 Usage
 -----
 
@@ -81,8 +111,11 @@ Usage
    runner = ChaosRunner(scenario, target)
    runner.start()
 
-   # run your workload on another machine or locally
+   # Option A — pipeline runs locally, affected if it talks to worker1
    run_my_pipeline()
+
+   # Option B — pipeline runs ON worker1
+   # target.run("python3 /home/ubuntu/my_pipeline.py")
 
    runner.stop()
 

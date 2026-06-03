@@ -35,3 +35,34 @@ Requirements
 
 * ``sudo`` access for ``tc qdisc`` commands
 * ``iproute2`` installed (``apt-get install iproute2``)
+
+Choosing a target
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 25 25 30
+
+   * - Target
+     - Fault runs on
+     - Pipeline runs on
+     - When to use
+   * - ``LocalTarget()``
+     - your machine
+     - your machine
+     - Single-machine testing, CI/CD
+   * - ``SSHTarget("worker1")``
+     - worker1 (via SSH)
+     - your machine (or worker1 via ``target.run()``)
+     - Remote node, no daemon needed
+   * - ``HTTPTarget("worker1:7777")``
+     - worker1 (via HTTP daemon)
+     - your machine
+     - Remote node with daemon, firewall-friendly
+
+.. note::
+
+   In all three cases, ``run_my_pipeline()`` written in your Python script
+   runs on **your local machine**.  To run a command on the remote node use
+   ``target.run("...")`` (SSHTarget) or the ``chaos-jungle exec`` CLI
+   (HTTPTarget).
