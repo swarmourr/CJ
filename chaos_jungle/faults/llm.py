@@ -131,7 +131,7 @@ class _LLMProxyFault(Fault):
 
         # Redirect the LLM client to the proxy
         self._saved_env = os.environ.get(self.base_url_env)
-        os.environ[self.base_url_env] = f"http://127.0.0.1:{self.port}"
+        os.environ[self.base_url_env] = f"http://127.0.0.1:{self.port}/v1"
 
     def stop(self, target: "Target") -> None:  # noqa: ARG002
         # Restore original env var
