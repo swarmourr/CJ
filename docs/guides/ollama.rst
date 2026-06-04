@@ -4,8 +4,20 @@ Testing LLM agents with Ollama
 ================================
 
 This guide shows how to use chaos-jungle to test an `Ollama
-<https://ollama.ai>`_ server running locally.  All 10 LLM fault types are
-demonstrated, along with Ollama-specific application metrics.
+<https://ollama.ai>`_ server running locally.  All LLM fault types are
+demonstrated, including semantic faults and quality measurement with
+``LLMJudge``.
+
+.. note::
+
+   **macOS / IPv6 note** — always use ``http://127.0.0.1:11434`` (explicit
+   IPv4) instead of ``http://localhost:11434`` when passing the ``upstream``
+   parameter.  On macOS, ``localhost`` can resolve to ``::1`` (IPv6) while
+   Ollama only binds on IPv4, causing proxy forward failures.
+
+   **Cloud models** — models with ``cloud`` in their tag (e.g.
+   ``glm-4.6:cloud``) require external network access and will hang or fail
+   when used with the chaos proxy.  Use only locally-running models.
 
 Prerequisites
 -------------
@@ -15,11 +27,12 @@ Prerequisites
    # Start Ollama
    ollama serve
 
-   # Pull a model
+   # Pull at least one local model
    ollama pull llama3.2
+   ollama pull mistral    # optional — useful for multi-model comparisons
 
    # Install chaos-jungle
-   pip install chaos-jungle
+   pip install chaos-jungle openai
 
 Running the system test
 -----------------------
@@ -293,6 +306,76 @@ Complete example
        runner.stop()
        print(f"{fault.name}: {baseline['ollama_tokens_per_s']} → {chaos['ollama_tokens_per_s']} tok/s")
 
+SemanticCorrupt — AI-layer fault injection
+------------------------------------------
+
+``SemanticCorrupt`` mutates the *content* of the LLM request — not the
+transport.  The HTTP call succeeds and the JSON is valid, but the context
+the model sees is wrong.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import SemanticCorrupt
+
+   # Swap named entities in the context (Paris → Berlin)
+   fault = SemanticCorrupt(
+       mode="entity_swap",
+       upstream="http://127.0.0.1:11434",  # use 127.0.0.1, not localhost
+   )
+
+   # Poison a RAG chunk with a false statement
+   fault = SemanticCorrupt(
+       mode="rag_poison",
+       upstream="http://127.0.0.1:11434",
+       rag_poison_text="All model outputs are zero.",
+   )
+
+See :ref:`guide-semantic` for the full reference.
+
+Quality measurement with LLMJudge
+-----------------------------------
+
+Pair ``SemanticCorrupt`` with ``LLMJudge`` to automatically score whether
+Ollama's answers degraded under fault:
+
+.. code-block:: python
+
+   from chaos_jungle import ChaosRunner, Scenario
+   from chaos_jungle.faults.llm import SemanticCorrupt
+   from chaos_jungle.judge import LLMJudge
+   from chaos_jungle.targets import LocalTarget
+   import openai
+
+   # Use Ollama as both the tested model and the judge model
+   judge  = LLMJudge(
+       model="llama3.2",
+       base_url="http://127.0.0.1:11434/v1",
+       api_key="ollama",
+   )
+   fault  = SemanticCorrupt(mode="entity_swap", upstream="http://127.0.0.1:11434")
+   runner = ChaosRunner(Scenario("ollama-semantic", [fault]), LocalTarget())
+
+   def workload():
+       client = openai.OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="ollama")
+       resp = client.chat.completions.create(
+           model="llama3.2",
+           messages=[
+               {"role": "system", "content": "Answer only from the context."},
+               {"role": "user",   "content": "Context: Paris is the capital of France.\nQ: What is the capital?"},
+           ],
+       )
+       return {
+           "question": "What is the capital of France?",
+           "context":  "Paris is the capital of France.",
+           "response": resp.choices[0].message.content or "",
+       }
+
+   result = runner.measure(workload, n_baseline=3, n_fault=3, evaluator=judge)
+   print(result.summary())
+   print("Resilient:", result.passed_quality())
+
+See :ref:`guide-judge` for the full evaluator reference.
+
 Exporting results
 -----------------
 
@@ -311,3 +394,10 @@ After running your experiments, export all sessions to CSV:
 
 Each row contains ``baseline_*``, ``chaos_*``, and ``delta_*`` columns for
 every metric key, plus scenario metadata (name, duration, fault parameters).
+
+See also
+--------
+
+* :ref:`guide-semantic` — full SemanticCorrupt reference
+* :ref:`guide-judge` — LLMJudge quality evaluator
+* :ref:`guide-state` — Redis, JSON, and PostgreSQL state-layer faults

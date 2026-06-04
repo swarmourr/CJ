@@ -13,3 +13,7 @@ Faults
 .. automodule:: chaos_jungle.faults.llm
    :members:
    :undoc-members:
+
+.. automodule:: chaos_jungle.faults.state
+   :members:
+   :undoc-members:

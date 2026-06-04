@@ -1,6 +1,58 @@
 Changelog
 =========
 
+0.4.0 (2026-06-04)
+------------------
+
+**New features**
+
+* **SemanticCorrupt** — injects semantic-layer faults into LLM request
+  payloads without breaking HTTP or JSON structure.  Four modes:
+
+  - ``entity_swap`` — replaces named entities in context messages
+  - ``context_truncate`` — cuts context to ~50 %
+  - ``inject_distractor`` — inserts a contradictory instruction mid-context
+  - ``rag_poison`` — appends false statements to retrieved context chunks
+
+* **State-layer faults** (``chaos_jungle.faults.state``):
+
+  - ``RedisStateCorrupt`` — mutates Redis keys matching a glob pattern via
+    ``redis-cli``; supports nullify / delete / negate / type_mismatch /
+    inject mutations; auto-reverts on ``stop()``
+  - ``JsonStateCorrupt`` — mutates a dot-path field in a JSON checkpoint
+    file; supports the same five mutation modes
+  - ``PostgresStateCorrupt`` — runs a parameterised ``UPDATE`` via ``psql``;
+    supports an optional ``condition`` (WHERE clause)
+
+* **LLMJudge evaluator** (``chaos_jungle.judge``):
+
+  - ``LLMJudge.score()`` returns a ``JudgeScore`` with four quality metrics:
+    ``faithfulness``, ``hallucination``, ``coherence``, ``guardrail_violation``
+  - Works with any OpenAI-compatible endpoint (OpenAI, Ollama, Azure)
+  - Integrated into ``ChaosRunner.measure()`` via the ``evaluator=`` parameter
+  - ``MeasurementResult`` gains ``judge_baseline``, ``judge_fault``,
+    ``judge_delta`` fields and ``passed_quality()`` helper
+  - ``average_scores()`` helper to aggregate multiple ``JudgeScore`` objects
+
+* **Full command output capture**:
+
+  - New ``commands`` table in ``SessionDB`` stores untruncated ``stdout``
+    and ``stderr`` for every command run through ``LoggingTarget``
+  - ``SessionDB.record_command()`` / ``get_commands()`` API
+  - ``ChaosRunner.commands(failed_only=False)`` convenience accessor
+  - ``export_session()`` now includes the ``commands`` list
+
+* New guides: :ref:`guide-semantic`, :ref:`guide-state`, :ref:`guide-judge`
+* Ollama guide updated with macOS IPv6 note and semantic/judge examples
+
+**Bug fixes**
+
+* **Proxy base URL** — the fault proxy now sets
+  ``OPENAI_BASE_URL=http://127.0.0.1:<port>/v1`` (previously omitted
+  ``/v1``).  Without ``/v1``, the openai Python SDK routed requests to
+  ``/chat/completions`` instead of ``/v1/chat/completions``, causing 404
+  on Ollama and all non-OpenAI-hosted endpoints.
+
 0.3.0 (2026-05-31)
 ------------------
 

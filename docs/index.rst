@@ -26,6 +26,9 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    guides/metrics
    guides/data
    guides/llm
+   guides/semantic
+   guides/state
+   guides/judge
    guides/ollama
    guides/paper-study
 
@@ -34,6 +37,7 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
    :caption: API Reference
 
    api/faults
+   api/judge
    api/targets
    api/scenario
    api/runner
