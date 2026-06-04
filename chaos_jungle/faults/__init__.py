@@ -20,6 +20,12 @@ from chaos_jungle.faults.llm import (
     LLMStreamInterrupt,
     LLMTokenStarvation,
     MCPFault,
+    SemanticCorrupt,
+)
+from chaos_jungle.faults.state import (
+    RedisStateCorrupt,
+    JsonStateCorrupt,
+    PostgresStateCorrupt,
 )
 
 __all__ = [
@@ -41,4 +47,8 @@ __all__ = [
     "LLMStreamInterrupt",
     "LLMTokenStarvation",
     "MCPFault",
+    "SemanticCorrupt",
+    "RedisStateCorrupt",
+    "JsonStateCorrupt",
+    "PostgresStateCorrupt",
 ]

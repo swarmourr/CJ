@@ -87,7 +87,9 @@ class LoggingTarget(Target):
         out: str,
         err: str,
     ) -> None:
-        # trim long output to avoid bloating the DB
+        privileged = prefix == "#"
+
+        # 1. Short summary event (backwards-compatible, trimmed for readability)
         def _trim(s: str, n: int = 400) -> str:
             s = s.strip()
             return s if len(s) <= n else s[:n] + f"… (+{len(s)-n} chars)"
@@ -99,10 +101,19 @@ class LoggingTarget(Target):
             parts.append(f"stderr: {_trim(err)}")
 
         status = "OK" if code == 0 else "ERROR"
-        message = f"[cmd:{status}] " + " | ".join(parts)
-
         self._db.add_event(
             self._session_id,
-            message,
+            f"[cmd:{status}] " + " | ".join(parts),
             fault_id=self.fault_id,
+        )
+
+        # 2. Full structured record — untruncated stdout + stderr
+        self._db.record_command(
+            session_id=self._session_id,
+            cmd=cmd,
+            exit_code=code,
+            stdout=out,
+            stderr=err,
+            fault_id=self.fault_id,
+            privileged=privileged,
         )

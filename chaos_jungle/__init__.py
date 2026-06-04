@@ -69,10 +69,15 @@ from chaos_jungle.faults import (
     LLMStreamInterrupt,
     LLMTokenStarvation,
     MCPFault,
+    SemanticCorrupt,
+    RedisStateCorrupt,
+    JsonStateCorrupt,
+    PostgresStateCorrupt,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 from chaos_jungle.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
 from chaos_jungle.faults.bpf import iface_for_ip
+from chaos_jungle.judge import LLMJudge, JudgeScore, average_scores
 
 __version__ = "0.1.0"
 
@@ -129,4 +134,13 @@ __all__ = [
     "FetchResult",
     # Network utilities
     "iface_for_ip",
+    # Semantic / state faults
+    "SemanticCorrupt",
+    "RedisStateCorrupt",
+    "JsonStateCorrupt",
+    "PostgresStateCorrupt",
+    # Judge evaluator
+    "LLMJudge",
+    "JudgeScore",
+    "average_scores",
 ]

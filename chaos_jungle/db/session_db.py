@@ -82,6 +82,21 @@ class SessionDB:
                 recorded_at  TEXT    NOT NULL,
                 metrics      TEXT    NOT NULL DEFAULT '{}'
             );
+
+            CREATE TABLE IF NOT EXISTS commands (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id  INTEGER NOT NULL REFERENCES sessions(id),
+                fault_id    INTEGER REFERENCES faults(id),
+                timestamp   TEXT    NOT NULL,
+                privileged  INTEGER NOT NULL DEFAULT 0,
+                cmd         TEXT    NOT NULL,
+                exit_code   INTEGER NOT NULL,
+                stdout      TEXT    NOT NULL DEFAULT '',
+                stderr      TEXT    NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_commands_session
+                ON commands(session_id);
         """)
         self._conn.commit()
 
@@ -239,6 +254,7 @@ class SessionDB:
             "session": dict(session),
             "faults": fault_list,
             "events": [dict(e) for e in events],
+            "commands": self.get_commands(session_id),
         }
 
     # ── Results ───────────────────────────────────────────────────
@@ -292,6 +308,101 @@ class SessionDB:
                 pass
             out.append(row)
         return out
+
+    # ── Commands ──────────────────────────────────────────────────
+
+    def record_command(
+        self,
+        session_id: int,
+        cmd: str,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+        fault_id: int | None = None,
+        privileged: bool = False,
+    ) -> int:
+        """Store the full output of a shell command executed during a session.
+
+        Unlike :meth:`add_event`, this stores stdout and stderr as separate
+        columns with no truncation, making them queryable and exportable.
+
+        Parameters
+        ----------
+        session_id : int
+        cmd : str
+            The shell command that was run.
+        exit_code : int
+            Return code of the command.
+        stdout : str
+            Full standard output (not trimmed).
+        stderr : str
+            Full standard error (not trimmed).
+        fault_id : int, optional
+            Associate with a specific fault record.
+        privileged : bool
+            ``True`` if the command was run with ``sudo``.
+
+        Returns
+        -------
+        int
+            Command record id.
+        """
+        cur = self._conn.execute(
+            "INSERT INTO commands "
+            "(session_id, fault_id, timestamp, privileged, cmd, exit_code, stdout, stderr) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id,
+                fault_id,
+                _now(),
+                1 if privileged else 0,
+                cmd,
+                exit_code,
+                stdout,
+                stderr,
+            ),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_commands(
+        self,
+        session_id: int,
+        fault_id: int | None = None,
+        failed_only: bool = False,
+    ) -> list[dict]:
+        """Return command records for a session.
+
+        Parameters
+        ----------
+        session_id : int
+        fault_id : int, optional
+            Filter to a specific fault. Returns all faults if ``None``.
+        failed_only : bool
+            If ``True``, return only commands that exited non-zero.
+
+        Returns
+        -------
+        list[dict]
+            Each dict has keys: ``id``, ``session_id``, ``fault_id``,
+            ``timestamp``, ``privileged``, ``cmd``, ``exit_code``,
+            ``stdout``, ``stderr``.
+        """
+        clauses = ["session_id = ?"]
+        params: list = [session_id]
+
+        if fault_id is not None:
+            clauses.append("fault_id = ?")
+            params.append(fault_id)
+        if failed_only:
+            clauses.append("exit_code != 0")
+
+        where = " AND ".join(clauses)
+        rows = self._conn.execute(
+            f"SELECT * FROM commands WHERE {where} ORDER BY id",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._conn.close()

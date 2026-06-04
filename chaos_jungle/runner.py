@@ -14,6 +14,11 @@ from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
 from chaos_jungle.targets.logging import LoggingTarget
 
+# Lazy import to avoid circular dependency — judge.py imports nothing from runner
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from chaos_jungle.judge import JudgeScore, LLMJudge
+
 
 @dataclass
 class MeasurementResult:
@@ -36,6 +41,14 @@ class MeasurementResult:
         Number of baseline trials.
     n_fault : int
         Number of fault trials.
+    judge_baseline : JudgeScore or None
+        Average quality scores from the judge evaluator during baseline runs.
+        ``None`` if no evaluator was provided to :meth:`ChaosRunner.measure`.
+    judge_fault : JudgeScore or None
+        Average quality scores from the judge evaluator during fault runs.
+    judge_delta : dict
+        Difference between fault and baseline judge scores (fault - baseline).
+        Positive hallucination delta = fault caused more hallucination.
     """
 
     scenario: str
@@ -47,10 +60,35 @@ class MeasurementResult:
     n_fault: int
     raw_baseline: list = field(default_factory=list, repr=False)
     raw_fault: list = field(default_factory=list, repr=False)
+    judge_baseline: "JudgeScore | None" = field(default=None, repr=False)
+    judge_fault: "JudgeScore | None" = field(default=None, repr=False)
+    judge_delta: dict = field(default_factory=dict)
 
     def passed(self, key: str, threshold: float) -> bool:
         """Return True if ``abs(delta[key]) <= threshold``."""
         return abs(self.delta.get(key, 0.0)) <= threshold
+
+    def passed_quality(
+        self,
+        faithfulness_min: float = 0.7,
+        hallucination_max: float = 0.3,
+    ) -> bool:
+        """Return True if the fault did not degrade response quality below thresholds.
+
+        Requires an evaluator to have been passed to :meth:`ChaosRunner.measure`.
+
+        Parameters
+        ----------
+        faithfulness_min : float
+            Minimum acceptable faithfulness during fault runs. Default ``0.7``.
+        hallucination_max : float
+            Maximum acceptable hallucination during fault runs. Default ``0.3``.
+        """
+        if self.judge_fault is None:
+            raise RuntimeError(
+                "No judge scores available — pass evaluator= to ChaosRunner.measure()."
+            )
+        return self.judge_fault.passed(faithfulness_min, hallucination_max)
 
     def summary(self) -> str:
         """Human-readable table of baseline / fault / delta per metric."""
@@ -65,6 +103,28 @@ class MeasurementResult:
             d = self.delta.get(k)
             d_str = f"  Δ {d:+.4g}" if d is not None else ""
             lines.append(f"  {k:<30} baseline={b}  fault={f}{d_str}")
+
+        if self.judge_baseline is not None and self.judge_fault is not None:
+            lines.append("")
+            lines.append("  Quality scores (LLM-as-a-Judge):")
+            jb, jf = self.judge_baseline, self.judge_fault
+            for metric, b_val, f_val in [
+                ("faithfulness", jb.faithfulness, jf.faithfulness),
+                ("hallucination", jb.hallucination, jf.hallucination),
+                ("coherence", jb.coherence, jf.coherence),
+            ]:
+                delta = round(f_val - b_val, 4)
+                d_str = f"  Δ {delta:+.4g}"
+                lines.append(
+                    f"  {metric:<30} baseline={b_val:.3f}  fault={f_val:.3f}{d_str}"
+                )
+            lines.append(
+                f"  {'guardrail_violation':<30} baseline={jb.guardrail_violation}  "
+                f"fault={jf.guardrail_violation}"
+            )
+            if jf.reasoning:
+                lines.append(f"\n  Judge note: {jf.reasoning}")
+
         return "\n".join(lines)
 
 
@@ -387,6 +447,7 @@ class ChaosRunner:
         workload: Callable[[], dict],
         n_baseline: int = 1,
         n_fault: int = 1,
+        evaluator: "LLMJudge | None" = None,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -401,6 +462,24 @@ class ChaosRunner:
             result = runner.measure(my_workload, n_baseline=3, n_fault=3)
             print(result.summary())
 
+        For AI quality evaluation, include ``"question"``, ``"context"``,
+        and ``"response"`` keys in the returned dict and pass an
+        :class:`~chaos_jungle.judge.LLMJudge` as *evaluator*::
+
+            judge = LLMJudge(model="gpt-4o-mini")
+
+            def my_ai_workload():
+                response = call_my_agent("What is the capital of France?")
+                return {
+                    "question": "What is the capital of France?",
+                    "context": "France is a Western European country. Its capital is Paris.",
+                    "response": response,
+                    "duration_s": 1.2,
+                }
+
+            result = runner.measure(my_ai_workload, n_baseline=3, n_fault=3, evaluator=judge)
+            print(result.summary())   # includes faithfulness / hallucination scores
+
         Parameters
         ----------
         workload : callable
@@ -411,25 +490,34 @@ class ChaosRunner:
         n_fault : int
             How many times to run the workload *with* the fault active.
             Default ``1``.
+        evaluator : LLMJudge, optional
+            An :class:`~chaos_jungle.judge.LLMJudge` instance. When provided,
+            each workload result that contains ``"question"``, ``"context"``,
+            and ``"response"`` keys is scored for faithfulness, hallucination,
+            and coherence. Scores are averaged and included in
+            :class:`MeasurementResult`.
 
         Returns
         -------
         MeasurementResult
-            Contains averaged baseline/fault metrics and their delta.
+            Contains averaged baseline/fault metrics, their delta, and
+            optionally LLM quality scores when *evaluator* is provided.
         """
+        from chaos_jungle.judge import average_scores  # lazy import
+
         # ── 1. Baseline runs (no fault) ───────────────────────────
         print(f"[chaos-jungle] Measuring baseline ({n_baseline} trial(s)) ...")
-        raw_baseline = []
-        for i in range(n_baseline):
+        raw_baseline: list[dict] = []
+        for _ in range(n_baseline):
             raw_baseline.append(workload())
         baseline = _avg_metrics(raw_baseline)
 
         # ── 2. Fault runs ─────────────────────────────────────────
         print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
         self.start()
-        raw_fault = []
+        raw_fault: list[dict] = []
         try:
-            for i in range(n_fault):
+            for _ in range(n_fault):
                 raw_fault.append(workload())
         finally:
             self.stop()
@@ -444,6 +532,46 @@ class ChaosRunner:
                          and isinstance(baseline.get(k), (int, float))
         }
 
+        # ── 4. LLM quality evaluation (optional) ──────────────────
+        judge_baseline_score = None
+        judge_fault_score = None
+        judge_delta: dict = {}
+
+        if evaluator is not None:
+            print(f"[chaos-jungle] Evaluating quality ({n_baseline} baseline + {n_fault} fault trial(s)) ...")
+
+            b_scores = [
+                evaluator.score(
+                    question=r.get("question", ""),
+                    context=r.get("context", ""),
+                    response=r.get("response", ""),
+                )
+                for r in raw_baseline
+                if "response" in r
+            ]
+            f_scores = [
+                evaluator.score(
+                    question=r.get("question", ""),
+                    context=r.get("context", ""),
+                    response=r.get("response", ""),
+                )
+                for r in raw_fault
+                if "response" in r
+            ]
+
+            if b_scores:
+                judge_baseline_score = average_scores(b_scores)
+            if f_scores:
+                judge_fault_score = average_scores(f_scores)
+
+            if judge_baseline_score and judge_fault_score:
+                jb, jf = judge_baseline_score, judge_fault_score
+                judge_delta = {
+                    "faithfulness": round(jf.faithfulness - jb.faithfulness, 4),
+                    "hallucination": round(jf.hallucination - jb.hallucination, 4),
+                    "coherence": round(jf.coherence - jb.coherence, 4),
+                }
+
         result = MeasurementResult(
             scenario=self.scenario.name,
             session_id=self._session_id,
@@ -454,10 +582,18 @@ class ChaosRunner:
             n_fault=n_fault,
             raw_baseline=raw_baseline,
             raw_fault=raw_fault,
+            judge_baseline=judge_baseline_score,
+            judge_fault=judge_fault_score,
+            judge_delta=judge_delta,
         )
 
-        # ── 4. Persist to DB ──────────────────────────────────────
-        self.record_result({"baseline": baseline, "fault": fault, "delta": delta})
+        # ── 5. Persist to DB ──────────────────────────────────────
+        db_result: dict = {"baseline": baseline, "fault": fault, "delta": delta}
+        if judge_delta:
+            db_result["judge_delta"] = judge_delta
+            if judge_fault_score:
+                db_result["judge_fault"] = judge_fault_score.to_dict()
+        self.record_result(db_result)
 
         return result
 
@@ -487,6 +623,63 @@ class ChaosRunner:
         self.db.add_event(
             self._session_id,
             f"Result recorded: {metrics}",
+        )
+
+    def commands(
+        self,
+        fault_id: int | None = None,
+        failed_only: bool = False,
+    ) -> list[dict]:
+        """Return all command records captured during the current session.
+
+        Every ``run()`` and ``sudo()`` call made by faults is stored in full
+        (untruncated stdout + stderr) in a dedicated ``commands`` table.
+
+        Parameters
+        ----------
+        fault_id : int, optional
+            Filter to a specific fault record id.
+        failed_only : bool
+            If ``True``, return only commands that exited non-zero.
+
+        Returns
+        -------
+        list[dict]
+            Each dict contains:
+
+            * ``cmd``       — the shell command
+            * ``exit_code`` — return code
+            * ``stdout``    — full standard output
+            * ``stderr``    — full standard error
+            * ``privileged``— ``1`` if run with sudo, ``0`` otherwise
+            * ``timestamp`` — ISO-8601 UTC time
+            * ``fault_id``  — associated fault id (or ``None``)
+
+        Examples
+        --------
+        Print all commands from the last run::
+
+            runner.stop()
+            for cmd in runner.commands():
+                print(cmd["cmd"], "→", cmd["exit_code"])
+
+        Print only failed commands::
+
+            for cmd in runner.commands(failed_only=True):
+                print(cmd["cmd"])
+                print(cmd["stderr"])
+
+        Print commands for a specific fault::
+
+            for cmd in runner.commands(fault_id=runner._fault_ids[0]):
+                print(cmd["stdout"])
+        """
+        if self._session_id is None:
+            raise RuntimeError("No active session — call start() first")
+        return self.db.get_commands(
+            self._session_id,
+            fault_id=fault_id,
+            failed_only=failed_only,
         )
 
     def export(self, fmt: str = "dict") -> dict | str:
