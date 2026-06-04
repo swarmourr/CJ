@@ -37,9 +37,6 @@ class StorageCorrupt(Fault):
         Crontab frequency, e.g. ``"10m"`` (every 10 min) or ``"2h"``.
     recursive : bool, optional
         Search directory recursively. Default ``True``.
-    cj_storage_path : str, optional
-        Override path to ``cj_storage.py`` on the target. Defaults to
-        ``"__bundled__"`` which auto-deploys the bundled scripts.
 
     Notes
     -----
@@ -63,7 +60,6 @@ class StorageCorrupt(Fault):
         directory: str,
         interval: str = "10m",
         recursive: bool = True,
-        cj_storage_path: str = _BUNDLED,
     ) -> None:
         if not pattern or not pattern.strip():
             raise ValueError(
@@ -89,7 +85,6 @@ class StorageCorrupt(Fault):
         self.directory = directory.rstrip("/")
         self.interval = interval.strip()
         self.recursive = recursive
-        self.cj_storage_path = cj_storage_path
         self._deployed_path: str | None = None
 
     # ------------------------------------------------------------------

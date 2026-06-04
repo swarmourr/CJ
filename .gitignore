@@ -54,3 +54,5 @@ id_ed25519
 # Experiment results (generated data, not source)
 results/
 FAULTS.md
+SCENARIOS.md
+scenarios/
