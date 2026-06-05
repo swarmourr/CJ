@@ -82,6 +82,17 @@ from chaos_jungle.faults import (
     IOStress,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
+from chaos_jungle.intercept import (
+    inject,
+    Behavior,
+    Latency,
+    Jitter,
+    RateLimit as InterceptRateLimit,
+    Unavailable,
+    Timeout as InterceptTimeout,
+    CorruptResponse,
+    DEFAULT_LLM_HOSTS,
+)
 from chaos_jungle.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
 from chaos_jungle.faults.bpf import iface_for_ip
 from chaos_jungle.judge import LLMJudge, JudgeScore, average_scores
@@ -159,4 +170,14 @@ __all__ = [
     "LLMJudge",
     "JudgeScore",
     "average_scores",
+    # HTTP transport intercept (provider-agnostic)
+    "inject",
+    "Behavior",
+    "Latency",
+    "Jitter",
+    "InterceptRateLimit",
+    "Unavailable",
+    "InterceptTimeout",
+    "CorruptResponse",
+    "DEFAULT_LLM_HOSTS",
 ]

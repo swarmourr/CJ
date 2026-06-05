@@ -59,6 +59,7 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    :caption: LLM / AI Faults
 
    guides/llm
+   guides/intercept
    guides/semantic
    guides/state
    guides/judge
