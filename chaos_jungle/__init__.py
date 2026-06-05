@@ -84,6 +84,7 @@ from chaos_jungle.faults import (
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 from chaos_jungle.intercept import (
     inject,
+    door,
     Behavior,
     Latency,
     Jitter,
@@ -172,6 +173,7 @@ __all__ = [
     "average_scores",
     # HTTP transport intercept (provider-agnostic)
     "inject",
+    "door",
     "Behavior",
     "Latency",
     "Jitter",

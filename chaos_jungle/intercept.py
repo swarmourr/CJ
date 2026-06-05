@@ -527,8 +527,127 @@ def inject(
         _unpatch()
 
 
+def door(
+    *behaviors: Behavior,
+    fault_duration: float = 30,
+    rest_duration: float = 30,
+    cycles: int = 3,
+    workload: Callable[[], dict] | None = None,
+    urls: list[str] | None = None,
+) -> list[dict]:
+    """
+    Cycle between normal and fault states N times using the HTTP intercept layer.
+
+    No proxy or SSH target needed — works with any SDK that uses httpx or requests.
+
+    Each cycle:
+
+    1. **Fault ON** — activate all *behaviors*, optionally call *workload*,
+       wait for *fault_duration* seconds.
+    2. **Rest** — deactivate behaviors, optionally call *workload* again to
+       observe recovery, wait for *rest_duration* seconds.
+
+    Repeat *cycles* times.
+
+    Parameters
+    ----------
+    *behaviors:
+        One or more :class:`Behavior` instances (``Latency``, ``RateLimit``, …).
+    fault_duration : float
+        Seconds to keep faults active per cycle. Default ``30``.
+    rest_duration : float
+        Seconds to rest (no fault) between cycles. Default ``30``.
+    cycles : int
+        Number of fault / rest cycles. Default ``3``.
+    workload : callable, optional
+        Zero-argument callable returning a ``dict`` of metrics.
+        Called once during each fault phase and once during each rest phase.
+    urls : list[str], optional
+        URL substrings to intercept. Defaults to :data:`DEFAULT_LLM_HOSTS`.
+
+    Returns
+    -------
+    list[dict]
+        One entry per phase per cycle::
+
+            [
+              {"cycle": 1, "phase": "fault", "metrics": {...}},
+              {"cycle": 1, "phase": "rest",  "metrics": {}},
+              ...
+            ]
+
+    Examples
+    --------
+    Pure timing (no workload)::
+
+        from chaos_jungle.intercept import door, Latency
+
+        door(Latency(3.0), fault_duration=30, rest_duration=30, cycles=5)
+
+    With a workload::
+
+        def call_llm():
+            import time, openai
+            t0 = time.time()
+            openai.OpenAI().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "ping"}],
+            )
+            return {"duration_s": round(time.time() - t0, 2)}
+
+        results = door(Latency(3.0), fault_duration=30, rest_duration=10,
+                       cycles=3, workload=call_llm)
+
+        for r in results:
+            print(r["cycle"], r["phase"], r.get("metrics", {}))
+    """
+    results: list[dict] = []
+
+    behavior_names = ", ".join(repr(b) for b in behaviors)
+    print(
+        f"[chaos-jungle] Door test START — {cycles} cycle(s)  "
+        f"fault={fault_duration:.0f}s / rest={rest_duration:.0f}s  "
+        f"behaviors=[{behavior_names}]"
+    )
+
+    for i in range(1, cycles + 1):
+        print(f"\n[chaos-jungle] ── Cycle {i}/{cycles} ─────────────────────────")
+
+        # ── Fault phase ───────────────────────────────────────────
+        print(f"[chaos-jungle]   FAULT ON  ({fault_duration:.0f}s)")
+        fault_metrics: dict = {}
+        with inject(*behaviors, urls=urls):
+            t0 = time.time()
+            if workload is not None:
+                fault_metrics = workload() or {}
+            elapsed = time.time() - t0
+            remaining = fault_duration - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+        results.append({"cycle": i, "phase": "fault", "metrics": fault_metrics})
+
+        # ── Rest phase ────────────────────────────────────────────
+        if rest_duration > 0:
+            print(f"[chaos-jungle]   REST     ({rest_duration:.0f}s)")
+            rest_metrics: dict = {}
+            t0 = time.time()
+            if workload is not None:
+                rest_metrics = workload() or {}
+            elapsed = time.time() - t0
+            remaining = rest_duration - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+            results.append({"cycle": i, "phase": "rest", "metrics": rest_metrics})
+
+    print(f"\n[chaos-jungle] Door test DONE — {cycles} cycle(s) completed.")
+    return results
+
+
 __all__ = [
     "inject",
+    "door",
     "DEFAULT_LLM_HOSTS",
     "Behavior",
     "Latency",

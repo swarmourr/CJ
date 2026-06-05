@@ -597,6 +597,155 @@ class ChaosRunner:
 
         return result
 
+    def door(
+        self,
+        fault_duration: "str | int | float" = 30,
+        rest_duration: "str | int | float" = 30,
+        cycles: int = 3,
+        workload: "Callable[[], dict] | None" = None,
+    ) -> "list[dict]":
+        """Cycle between normal and fault states N times (door open / door closed).
+
+        Each cycle:
+
+        1. **Fault ON** — inject all faults, optionally run *workload*, wait for
+           *fault_duration*.
+        2. **Rest** — revert all faults, optionally run *workload* again to
+           observe recovery, wait for *rest_duration*.
+
+        Repeat *cycles* times.
+
+        Parameters
+        ----------
+        fault_duration : str or int or float
+            How long to keep faults active per cycle.
+            Accepts ``"30s"``, ``"2m"``, or a plain number of seconds.
+            Default ``30``.
+        rest_duration : str or int or float
+            How long to rest (no fault) between cycles.
+            The workload is run at the start of the rest window if provided.
+            Default ``30``.
+        cycles : int
+            Number of fault / rest cycles. Default ``3``.
+        workload : callable, optional
+            Zero-argument callable that returns a ``dict`` of metrics.
+            Called once at the start of each **fault** phase and once at the
+            start of each **rest** phase.  Return values are recorded to the
+            session database and included in the result list.
+
+        Returns
+        -------
+        list[dict]
+            One dict per phase (fault + rest) per cycle::
+
+                [
+                  {"cycle": 1, "phase": "fault", "metrics": {...}, "session_id": 5},
+                  {"cycle": 1, "phase": "rest",  "metrics": {...}, "session_id": 5},
+                  {"cycle": 2, "phase": "fault", "metrics": {...}, "session_id": 6},
+                  ...
+                ]
+
+        Examples
+        --------
+        No workload — pure timing::
+
+            runner = ChaosRunner(
+                Scenario("door", [NetworkDelay("200ms")]),
+                SSHTarget("worker1"),
+            )
+            runner.door(fault_duration=30, rest_duration=30, cycles=5)
+
+        With workload — measure impact and recovery::
+
+            def call_llm():
+                t0 = time.time()
+                resp = openai.OpenAI().chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": "ping"}],
+                )
+                return {"duration_s": round(time.time() - t0, 2), "ok": 1}
+
+            results = runner.door(
+                fault_duration="30s",
+                rest_duration="30s",
+                cycles=3,
+                workload=call_llm,
+            )
+
+            for r in results:
+                print(r["cycle"], r["phase"], r["metrics"])
+
+        With the intercept layer (no proxy setup needed)::
+
+            from chaos_jungle.intercept import door, Latency
+
+            results = door(
+                Latency(3.0),
+                fault_duration=30,
+                rest_duration=30,
+                cycles=3,
+                workload=call_llm,
+            )
+        """
+        fault_s = parse_duration(fault_duration)
+        rest_s = parse_duration(rest_duration)
+        results: list[dict] = []
+
+        print(
+            f"[chaos-jungle] Door test START — {cycles} cycle(s), "
+            f"fault={fault_s:.0f}s / rest={rest_s:.0f}s"
+        )
+
+        for i in range(1, cycles + 1):
+            print(f"\n[chaos-jungle] ── Cycle {i}/{cycles} ─────────────────────────")
+
+            # ── Fault phase ───────────────────────────────────────
+            print(f"[chaos-jungle]   FAULT ON  ({fault_s:.0f}s)")
+            self.start()
+            fault_metrics: dict = {}
+            try:
+                t0 = time.time()
+                if workload is not None:
+                    fault_metrics = workload() or {}
+                elapsed = time.time() - t0
+                remaining = fault_s - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+            finally:
+                self.stop()
+
+            if fault_metrics:
+                self.record_result({**fault_metrics, "_phase": "fault", "_cycle": i})
+
+            results.append({
+                "cycle":      i,
+                "phase":      "fault",
+                "metrics":    fault_metrics,
+                "session_id": self._session_id,
+            })
+
+            # ── Rest phase ────────────────────────────────────────
+            if rest_s > 0:
+                print(f"[chaos-jungle]   REST     ({rest_s:.0f}s)")
+                rest_metrics: dict = {}
+                t0 = time.time()
+                if workload is not None:
+                    rest_metrics = workload() or {}
+                elapsed = time.time() - t0
+                remaining = rest_s - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+
+                results.append({
+                    "cycle":      i,
+                    "phase":      "rest",
+                    "metrics":    rest_metrics,
+                    "session_id": self._session_id,
+                })
+
+        print(f"\n[chaos-jungle] Door test DONE — {cycles} cycle(s) completed.")
+        return results
+
     def record_result(self, metrics: dict) -> None:
         """Attach workflow outcome metrics to the current session.
 
