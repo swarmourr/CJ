@@ -34,6 +34,7 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
 
    quickstart
    concepts
+   guides/strategies
    examples
 
 .. toctree::

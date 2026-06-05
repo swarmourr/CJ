@@ -111,7 +111,16 @@ class Behavior:
     Base class for intercept-level fault behaviors.
 
     Subclass and override ``before`` and/or ``after`` to define custom faults.
+
+    Parameters
+    ----------
+    probability : float
+        Fraction of matching requests this behavior fires on.
+        ``1.0`` (default) means every request; ``0.10`` means 10% of requests.
+        The decision is made independently per request using a uniform random draw.
     """
+
+    probability: float = 1.0
 
     def before(self, url: str) -> None:
         """
@@ -135,34 +144,51 @@ class Behavior:
 
 class Latency(Behavior):
     """
-    Add fixed latency before every matching request.
+    Add fixed latency before matching requests.
 
     Parameters
     ----------
     seconds:
         How long to sleep before forwarding the request.
+    probability:
+        Fraction of requests this behavior fires on.
+        ``1.0`` = always (default); ``0.10`` = 10% of requests.
 
     Example
     -------
     ::
 
+        # Always add 3 s latency
         with inject(Latency(3.0)):
+            client.chat.completions.create(...)
+
+        # Add 3 s latency to 20% of requests
+        with inject(Latency(3.0, probability=0.20)):
             client.chat.completions.create(...)
     """
 
-    def __init__(self, seconds: float) -> None:
+    def __init__(self, seconds: float, probability: float = 1.0) -> None:
         self.seconds = seconds
+        self.probability = probability
 
     def before(self, url: str) -> None:
         time.sleep(self.seconds)
 
     def __repr__(self) -> str:
-        return f"Latency({self.seconds}s)"
+        p = f", p={self.probability:.0%}" if self.probability < 1.0 else ""
+        return f"Latency({self.seconds}s{p})"
 
 
 class Jitter(Behavior):
     """
     Add random latency uniformly sampled between ``min_s`` and ``max_s``.
+
+    Parameters
+    ----------
+    min_s, max_s:
+        Latency range in seconds.
+    probability:
+        Fraction of requests this behavior fires on. Default ``1.0``.
 
     Example
     -------
@@ -172,15 +198,17 @@ class Jitter(Behavior):
             client.chat.completions.create(...)
     """
 
-    def __init__(self, min_s: float, max_s: float) -> None:
+    def __init__(self, min_s: float, max_s: float, probability: float = 1.0) -> None:
         self.min_s = min_s
         self.max_s = max_s
+        self.probability = probability
 
     def before(self, url: str) -> None:
         time.sleep(random.uniform(self.min_s, self.max_s))
 
     def __repr__(self) -> str:
-        return f"Jitter({self.min_s}-{self.max_s}s)"
+        p = f", p={self.probability:.0%}" if self.probability < 1.0 else ""
+        return f"Jitter({self.min_s}-{self.max_s}s{p})"
 
 
 class RateLimit(Behavior):
@@ -194,6 +222,8 @@ class RateLimit(Behavior):
         Default ``0`` means every request gets a 429 immediately.
     retry_after_s:
         Value for the ``Retry-After`` response header (seconds).
+    probability:
+        Fraction of requests this behavior fires on. Default ``1.0``.
 
     Example
     -------
@@ -205,9 +235,10 @@ class RateLimit(Behavior):
                 client.chat.completions.create(...)
     """
 
-    def __init__(self, after_n: int = 0, retry_after_s: int = 60) -> None:
+    def __init__(self, after_n: int = 0, retry_after_s: int = 60, probability: float = 1.0) -> None:
         self.after_n = after_n
         self.retry_after_s = retry_after_s
+        self.probability = probability
         self._count = 0
         self._lock = threading.Lock()
 
@@ -248,17 +279,28 @@ class RateLimit(Behavior):
 
 class Unavailable(Behavior):
     """
-    Return HTTP 503 Service Unavailable for every matching request.
+    Return HTTP 503 Service Unavailable for matching requests.
 
-    Simulates a total LLM API outage.
+    Parameters
+    ----------
+    probability:
+        Fraction of requests this behavior fires on. Default ``1.0``.
 
     Example
     -------
     ::
 
+        # All requests fail
         with inject(Unavailable()):
-            result = agent.run("question")   # should raise or retry
+            result = agent.run("question")
+
+        # 30% of requests fail
+        with inject(Unavailable(probability=0.30)):
+            result = agent.run("question")
     """
+
+    def __init__(self, probability: float = 1.0) -> None:
+        self.probability = probability
 
     def after(self, url: str, response: Any) -> Any:
         payload = {
@@ -270,7 +312,8 @@ class Unavailable(Behavior):
         return _mock_response(503, payload, response)
 
     def __repr__(self) -> str:
-        return "Unavailable()"
+        p = f", p={self.probability:.0%}" if self.probability < 1.0 else ""
+        return f"Unavailable({p.lstrip(', ')})"
 
 
 class Timeout(Behavior):
@@ -280,13 +323,26 @@ class Timeout(Behavior):
     Raises ``httpx.TimeoutException`` for httpx-based SDKs,
     ``requests.exceptions.Timeout`` for requests-based SDKs.
 
+    Parameters
+    ----------
+    probability:
+        Fraction of requests this behavior fires on. Default ``1.0``.
+
     Example
     -------
     ::
 
+        # Every request times out
         with inject(Timeout()):
-            client.chat.completions.create(...)  # raises TimeoutError
+            client.chat.completions.create(...)
+
+        # 15% of requests time out
+        with inject(Timeout(probability=0.15)):
+            client.chat.completions.create(...)
     """
+
+    def __init__(self, probability: float = 1.0) -> None:
+        self.probability = probability
 
     def before(self, url: str) -> None:
         if _HAS_HTTPX:
@@ -300,7 +356,8 @@ class Timeout(Behavior):
         raise TimeoutError(f"chaos-jungle: injected timeout for {url}")
 
     def __repr__(self) -> str:
-        return "Timeout()"
+        p = f"p={self.probability:.0%}" if self.probability < 1.0 else ""
+        return f"Timeout({p})"
 
 
 class CorruptResponse(Behavior):
@@ -311,14 +368,26 @@ class CorruptResponse(Behavior):
     corrupted JSON so the SDK's response parser will fail or return
     nonsense to the caller.
 
+    Parameters
+    ----------
+    probability:
+        Fraction of requests this behavior fires on. Default ``1.0``.
+
     Example
     -------
     ::
 
+        # Every response is corrupted
         with inject(CorruptResponse()):
             reply = client.chat.completions.create(...)
-            # reply.choices[0].message.content == "<<CORRUPTED>>"
+
+        # 5% of responses are corrupted
+        with inject(CorruptResponse(probability=0.05)):
+            reply = client.chat.completions.create(...)
     """
+
+    def __init__(self, probability: float = 1.0) -> None:
+        self.probability = probability
 
     CORRUPT_BODY = json.dumps({
         "id": "chaos-corrupt",
@@ -346,7 +415,8 @@ class CorruptResponse(Behavior):
         return response
 
     def __repr__(self) -> str:
-        return "CorruptResponse()"
+        p = f"p={self.probability:.0%}" if self.probability < 1.0 else ""
+        return f"CorruptResponse({p})"
 
 
 # ── Thread-local intercept stack ──────────────────────────────────────────────
@@ -378,20 +448,36 @@ class _Stack:
 
 # ── Core apply logic ──────────────────────────────────────────────────────────
 
+def _sample(layers: list[list[Behavior]]) -> list[list[Behavior]]:
+    """
+    Apply per-behavior probability sampling.
+
+    For each behavior, roll a uniform random number once per request.
+    Both ``before`` and ``after`` are either both called or both skipped
+    so a single fault decision is consistent across the full request cycle.
+    """
+    return [
+        [b for b in layer if b.probability >= 1.0 or random.random() < b.probability]
+        for layer in layers
+    ]
+
+
 def _run(url: str, call: Callable[[], Any]) -> Any:
     layers = _Stack.matching(url)
     if not layers:
         return call()
 
+    fired = _sample(layers)
+
     # before hooks — any can raise to abort the request
-    for layer in layers:
+    for layer in fired:
         for b in layer:
             b.before(url)
 
     response = call()
 
     # after hooks — can replace the response
-    for layer in layers:
+    for layer in fired:
         for b in layer:
             response = b.after(url, response)
 
@@ -403,13 +489,15 @@ async def _run_async(url: str, coro_factory: Callable) -> Any:
     if not layers:
         return await coro_factory()
 
-    for layer in layers:
+    fired = _sample(layers)
+
+    for layer in fired:
         for b in layer:
             b.before(url)
 
     response = await coro_factory()
 
-    for layer in layers:
+    for layer in fired:
         for b in layer:
             response = b.after(url, response)
 
