@@ -1,7 +1,7 @@
 .. _api-daemon:
 
-Daemon
-======
+Daemon API
+==========
 
 ``cj-daemon`` is a lightweight FastAPI service that runs on a remote machine
 and accepts fault control commands from your local machine via ``HTTPTarget``.

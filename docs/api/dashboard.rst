@@ -1,7 +1,7 @@
 .. _api-dashboard:
 
-Dashboard
-=========
+Dashboard API
+=============
 
 The dashboard is a self-contained FastAPI web UI that reads from the local
 SQLite database and shows sessions, faults, events, metrics, and which system
