@@ -42,6 +42,7 @@ intersphinx_mapping = {
 # ── Theme ─────────────────────────────────────────────────────────
 html_theme = "furo"
 html_title = "chaos-jungle"
+html_logo = "_static/logo.png"
 html_static_path = ["_static"]
 
 # ── sphinx-click ─────────────────────────────────────────────────
