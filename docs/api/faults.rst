@@ -17,3 +17,11 @@ Faults
 .. automodule:: chaos_jungle.faults.state
    :members:
    :undoc-members:
+
+.. automodule:: chaos_jungle.faults.process
+   :members:
+   :undoc-members:
+
+.. automodule:: chaos_jungle.faults.resources
+   :members:
+   :undoc-members:

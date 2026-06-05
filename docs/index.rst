@@ -1,9 +1,32 @@
 chaos-jungle
 ============
 
-A generic chaos engineering framework for injecting faults into
-distributed systems — network delays, packet loss, storage corruption —
-on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
+A chaos engineering framework for injecting faults across every layer of
+modern systems — network links, storage, OS processes, system resources,
+LLM APIs, semantic context, and agent state — on any Linux machine or
+macOS laptop, controlled via Python, SSH, or HTTP daemon.
+
+.. list-table::
+   :widths: 33 33 33
+   :header-rows: 0
+
+   * - **Infrastructure**
+     - **LLM / AI**
+     - **Observability**
+   * - Network (tc / BPF)
+     - API faults (latency, rate-limit, corrupt)
+     - Session database (SQLite)
+   * - Storage (bit-flip)
+     - Semantic (entity swap, RAG poison)
+     - Web dashboard
+   * - Processes & services
+     - Agent state (Redis, JSON, Postgres)
+     - CSV export
+   * - CPU / memory / disk
+     - Quality scoring (LLMJudge)
+     - CI/CD quality gates
+
+----
 
 .. toctree::
    :maxdepth: 2
@@ -15,21 +38,40 @@ on any Linux machine, controlled locally, via SSH, or via HTTP daemon.
 
 .. toctree::
    :maxdepth: 2
-   :caption: How-to Guides
+   :caption: Setup & Targets
 
    guides/local
    guides/ssh
    guides/http
    guides/separate-mode
-   guides/measurement
-   guides/dashboard
-   guides/metrics
-   guides/data
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Infrastructure Faults
+
+   guides/network
+   guides/storage
+   guides/process
+   guides/resources
+
+.. toctree::
+   :maxdepth: 2
+   :caption: LLM / AI Faults
+
    guides/llm
    guides/semantic
    guides/state
    guides/judge
    guides/ollama
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Measurement & Results
+
+   guides/measurement
+   guides/metrics
+   guides/dashboard
+   guides/data
    guides/paper-study
 
 .. toctree::

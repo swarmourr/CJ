@@ -73,6 +73,13 @@ from chaos_jungle.faults import (
     RedisStateCorrupt,
     JsonStateCorrupt,
     PostgresStateCorrupt,
+    ProcessKill,
+    ServiceFault,
+    ContainerKill,
+    DiskFull,
+    CPUStress,
+    MemoryStress,
+    IOStress,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 from chaos_jungle.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
@@ -139,6 +146,15 @@ __all__ = [
     "RedisStateCorrupt",
     "JsonStateCorrupt",
     "PostgresStateCorrupt",
+    # Process / service / container
+    "ProcessKill",
+    "ServiceFault",
+    "ContainerKill",
+    # Resource exhaustion
+    "DiskFull",
+    "CPUStress",
+    "MemoryStress",
+    "IOStress",
     # Judge evaluator
     "LLMJudge",
     "JudgeScore",

@@ -22,41 +22,180 @@ Installation
    # on systems with externally managed Python (Ubuntu 23+, Debian 12+)
    pip install --break-system-packages git+https://github.com/swarmourr/CJ.git
 
-   # or with sudo
-   sudo pip install git+https://github.com/swarmourr/CJ.git --break-system-packages
-
 **With extras:**
 
 .. code-block:: bash
 
-   # docs
-   pip install "chaos-jungle[docs]"
-
-   # dev
-   pip install "chaos-jungle[dev]"
+   pip install "chaos-jungle[docs]"   # Sphinx docs
+   pip install "chaos-jungle[dev]"    # dev tools
 
 Requirements
 ~~~~~~~~~~~~
 
 * Python 3.9+
-* Linux on the **target** machine (for ``tc`` and ``dd``)
-* ``sudo`` access on the target for privileged commands
+* **macOS or Linux** — LLM / AI faults work on both
+* **Linux only** — network, storage, process, and resource faults
+* ``sudo`` on the target machine for privileged commands
 
-First example — local machine
-------------------------------
 
-Inject 100 ms network delay on your local machine while running a command:
+Choose your starting point
+--------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - What you want to test
+     - Target
+     - Linux required?
+   * - LLM API (latency, rate-limit, corrupt response)
+     - ``LocalTarget``
+     - No — works on macOS
+   * - Semantic fault (RAG poison, entity swap)
+     - ``LocalTarget``
+     - No — works on macOS
+   * - Network delay / loss
+     - ``SSHTarget``
+     - Yes
+   * - Process / service crash
+     - ``SSHTarget``
+     - Yes
+   * - CPU / memory / disk pressure
+     - ``SSHTarget``
+     - Yes
+
+
+Example 1 — LLM latency (macOS, no setup)
+------------------------------------------
+
+Inject a 3-second delay into every call to a local Ollama model and verify
+your application's timeout logic fires correctly.
 
 .. code-block:: python
 
-   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay, LocalTarget
+   import os, time
+   os.environ["OPENAI_BASE_URL"] = "http://127.0.0.1:11434/v1"
+   os.environ["OPENAI_API_KEY"]  = "ollama"
 
-   scenario = Scenario("local-delay", faults=[NetworkDelay("100ms")])
-   runner = ChaosRunner(scenario, LocalTarget())
+   from chaos_jungle import ChaosRunner, Scenario, LLMLatency, LocalTarget
+   import openai
 
-   runner.start()
-   # your code here
-   runner.stop()
+   fault  = LLMLatency(delay_s=3.0, port=18001, upstream="http://127.0.0.1:11434")
+   runner = ChaosRunner(Scenario("llm-latency", [fault]), LocalTarget())
+
+   def workload():
+       t0 = time.time()
+       try:
+           resp = openai.OpenAI().chat.completions.create(
+               model="qwen2.5:latest",
+               messages=[{"role": "user", "content": "What is 2+2?"}],
+               timeout=5.0,
+           )
+           return {"success": 1, "duration_s": round(time.time()-t0, 2)}
+       except Exception:
+           return {"success": 0, "duration_s": round(time.time()-t0, 2)}
+
+   result = runner.measure(workload, n_baseline=3, n_fault=3)
+   print(result.summary())
+   # fault_mean("duration_s") should be ≈ baseline + 3 s
+
+
+Example 2 — semantic quality measurement (macOS, no setup)
+-----------------------------------------------------------
+
+Inject entity swaps into LLM context and measure the quality drop using a
+local judge model.
+
+.. code-block:: python
+
+   import os
+   os.environ["OPENAI_BASE_URL"] = "http://127.0.0.1:11434/v1"
+   os.environ["OPENAI_API_KEY"]  = "ollama"
+
+   from chaos_jungle import ChaosRunner, Scenario, SemanticCorrupt, LLMJudge, LocalTarget
+   import openai
+
+   CONTEXT  = "France is in Western Europe. Its capital is Paris."
+   QUESTION = "What is the capital of France?"
+
+   judge  = LLMJudge(model="qwen2.5:latest")
+   fault  = SemanticCorrupt(mode="entity_swap", port=18050,
+                            upstream="http://127.0.0.1:11434")
+   runner = ChaosRunner(Scenario("semantic-qa", [fault]), LocalTarget())
+
+   def workload():
+       resp = openai.OpenAI().chat.completions.create(
+           model="qwen2.5:latest",
+           messages=[
+               {"role": "system", "content": "Answer ONLY from the context."},
+               {"role": "user",   "content": f"Context: {CONTEXT}\nQuestion: {QUESTION}"},
+           ],
+       )
+       return {
+           "question": QUESTION,
+           "context":  CONTEXT,
+           "response": resp.choices[0].message.content or "",
+       }
+
+   result = runner.measure(workload, n_baseline=3, n_fault=3, evaluator=judge)
+   print(result.summary())
+   print("Quality gate passed:", result.passed_quality(min_faithfulness=0.70))
+
+
+Example 3 — network delay on a remote machine (Linux, SSH)
+-----------------------------------------------------------
+
+Measure the latency impact of a 200 ms delay on an HTTP service running on
+a remote Ubuntu machine.
+
+.. code-block:: python
+
+   import time, requests
+   from chaos_jungle import ChaosRunner, Scenario, NetworkDelay, SSHTarget
+
+   target = SSHTarget("192.168.1.100", user="ubuntu")
+   fault  = NetworkDelay("200ms", jitter="20ms")
+   runner = ChaosRunner(Scenario("net-delay", [fault]), target)
+
+   def workload():
+       t0 = time.time()
+       r  = requests.get("http://192.168.1.100:8080/api/ping", timeout=5.0)
+       return {
+           "duration_s": round(time.time()-t0, 2),
+           "success":    int(r.status_code == 200),
+       }
+
+   result = runner.measure(workload, n_baseline=5, n_fault=5)
+   print(result.summary())
+   # fault_mean("duration_s") ≈ baseline_mean + 0.2 s
+
+
+Example 4 — service crash (Linux, SSH)
+---------------------------------------
+
+Stop nginx, measure health-check failures, then restore it automatically.
+
+.. code-block:: python
+
+   import time, requests
+   from chaos_jungle import ChaosRunner, Scenario, ServiceFault, SSHTarget
+
+   target = SSHTarget("192.168.1.100", user="ubuntu")
+   fault  = ServiceFault("nginx", action="stop")
+   runner = ChaosRunner(Scenario("nginx-stop", [fault]), target)
+
+   def workload():
+       try:
+           r = requests.get("http://192.168.1.100/health", timeout=2.0)
+           return {"success": int(r.status_code == 200)}
+       except Exception:
+           return {"success": 0}
+
+   result = runner.measure(workload, n_baseline=5, n_fault=5)
+   print(result.summary())
+   # fault_mean("success") should be 0.0 (nginx is down)
+   # After stop() nginx is automatically restarted
+
 
 Using the decorator
 -------------------
@@ -72,6 +211,7 @@ Using the decorator
 
    my_experiment()   # chaos starts, function runs, chaos stops automatically
 
+
 Using the context manager
 --------------------------
 
@@ -84,42 +224,6 @@ Using the context manager
        run_my_pipeline()
        print(session.export("json"))
 
-Measure style — auto-record results
--------------------------------------
-
-``@chaos_measure`` runs the function under chaos **and** automatically
-saves its return dict as workflow metrics linked to the session. The
-metrics appear in the dashboard and in exported CSV files.
-
-.. code-block:: python
-
-   from chaos_jungle.decorators import chaos_measure
-   from chaos_jungle import NetworkDelay
-
-   @chaos_measure(NetworkDelay("100ms"), scenario_name="E1")
-   def run_experiment():
-       run_my_pipeline()
-       # return a dict → auto-stored as results
-       return {
-           "files_transferred": 120,
-           "retries":             3,
-           "throughput_mbps":   42.1,
-       }
-
-   summary = run_experiment()
-   print(summary["duration_s"], "s of chaos")
-   print(summary["fn_result"])   # the dict above
-
-Capture stdout as well:
-
-.. code-block:: python
-
-   @chaos_measure(NetworkDelay("100ms"), capture_output=True)
-   def run_experiment():
-       ...
-
-   summary = run_experiment()
-   print(summary["captured_output"])   # everything printed during the run
 
 CLI — separate mode
 --------------------
@@ -137,36 +241,29 @@ Start chaos independently from your workload:
    # Terminal 1 — stop chaos
    chaos-jungle stop
 
-Remote machine (SSH)
----------------------
+Remote machine (SSH):
 
 .. code-block:: bash
 
    chaos-jungle start --scenario net-delay --delay 100ms \
        --target ssh://ubuntu@worker1
 
-Remote machine (HTTP daemon)
------------------------------
-
-On the remote machine:
+Remote machine (HTTP daemon):
 
 .. code-block:: bash
 
+   # On the remote machine
    cj-daemon --port 7777 --token mysecret
 
-On your machine:
-
-.. code-block:: bash
-
+   # From your machine
    chaos-jungle start --scenario net-delay --delay 100ms \
        --target http://worker1:7777
 
-Or in Python:
 
-.. code-block:: python
+What next?
+----------
 
-   from chaos_jungle import HTTPTarget, NetworkDelay, Scenario, ChaosRunner
-
-   target = HTTPTarget("http://worker1:7777", token="mysecret")
-   runner = ChaosRunner(Scenario("net-delay", [NetworkDelay("100ms")]), target)
-   runner.start()
+* **Guides** — see the fault-specific guides for detailed parameters,
+  what to observe, and pass/fail criteria
+* **Concepts** — understand the Fault / Target / Scenario / Runner model
+* **API Reference** — full class and method documentation

@@ -1,6 +1,37 @@
 Changelog
 =========
 
+0.5.0 (2026-06-04)
+------------------
+
+**New features**
+
+* **Process, service & container faults** (``chaos_jungle.faults.process``):
+
+  - ``ProcessKill(pattern, signal)`` — kills OS processes matching a command
+    pattern via ``pkill -f``; captures killed PIDs for reporting
+  - ``ServiceFault(service, action)`` — stops, restarts, kills, or masks a
+    systemd service; auto-restores on ``stop()``
+  - ``ContainerKill(container, action)`` — kills, stops, pauses, or removes
+    a Docker container; auto-restores on ``stop()``
+
+* **Resource exhaustion faults** (``chaos_jungle.faults.resources``):
+
+  - ``DiskFull(path, size_mb)`` — fills a filesystem via ``dd if=/dev/zero``;
+    fill file removed on ``stop()``
+  - ``CPUStress(cores, duration_s)`` — saturates N CPU cores via
+    ``stress-ng --cpu``; killed on ``stop()``
+  - ``MemoryStress(mb, duration_s)`` — allocates N MiB of RAM via
+    ``stress-ng --vm``; killed on ``stop()``
+  - ``IOStress(workers, duration_s, path)`` — generates disk I/O load via
+    ``stress-ng --hdd``; killed on ``stop()``
+
+**Documentation**
+
+* New guide: :ref:`guide-process` — process / service / container faults
+* New guide: :ref:`guide-resources` — CPU / memory / disk / I/O exhaustion
+* API reference updated: ``faults.process``, ``faults.resources``
+
 0.4.0 (2026-06-04)
 ------------------
 

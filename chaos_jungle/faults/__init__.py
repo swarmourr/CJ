@@ -27,16 +27,30 @@ from chaos_jungle.faults.state import (
     JsonStateCorrupt,
     PostgresStateCorrupt,
 )
+from chaos_jungle.faults.process import (
+    ProcessKill,
+    ServiceFault,
+    ContainerKill,
+)
+from chaos_jungle.faults.resources import (
+    DiskFull,
+    CPUStress,
+    MemoryStress,
+    IOStress,
+)
 
 __all__ = [
     "Fault",
     "PreflightError",
+    # Network
     "NetworkDelay",
     "NetworkLoss",
     "NetworkCorrupt",
     "NetworkDuplicate",
-    "StorageCorrupt",
     "SilentNetworkCorrupt",
+    # Storage
+    "StorageCorrupt",
+    # LLM
     "LLMLatency",
     "LLMRateLimit",
     "LLMTimeout",
@@ -48,7 +62,17 @@ __all__ = [
     "LLMTokenStarvation",
     "MCPFault",
     "SemanticCorrupt",
+    # State
     "RedisStateCorrupt",
     "JsonStateCorrupt",
     "PostgresStateCorrupt",
+    # Process / service / container
+    "ProcessKill",
+    "ServiceFault",
+    "ContainerKill",
+    # Resource exhaustion
+    "DiskFull",
+    "CPUStress",
+    "MemoryStress",
+    "IOStress",
 ]
