@@ -1,19 +1,24 @@
-Metrics — measuring chaos impact
-=================================
+.. _guide-metrics:
 
-chaos-jungle provides a ``Metric`` interface for defining *what to measure*
-and *how to measure it*. Pass a list of metrics to
-:func:`~chaos_jungle.decorators.chaos_measure` and the framework:
+Metrics
+========
 
-1. Collects **baseline** values *before* chaos starts.
-2. Collects **chaos** values *after* the function returns (while chaos is still
-   active, before revert).
-3. Merges everything into one result record in the database and the dashboard.
+chaos-jungle provides two measurement systems:
+
+* **Infrastructure metrics** (``Metric`` classes) — measure system-level
+  signals: ping latency, TCP connections, file integrity, custom commands.
+  Used with ``@chaos_measure``.
+* **AI quality metrics** (``LLMJudge``) — score LLM response quality:
+  faithfulness, hallucination, coherence, guardrail compliance.
+  Used with ``runner.measure(evaluator=judge)``.
 
 ----
 
-Built-in metrics
------------------
+Infrastructure metrics
+-----------------------
+
+Built-in metric classes
+~~~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -21,7 +26,7 @@ Built-in metrics
 
    * - Class
      - Parameters
-     - Returns
+     - Keys returned
    * - ``PingLatency``
      - ``host``, ``count=5``
      - ``avg_ms``, ``min_ms``, ``max_ms``, ``samples``
@@ -31,19 +36,16 @@ Built-in metrics
    * - ``FileIntegrity``
      - ``pattern``, ``directory``, ``checksum_file=None``
      - ``files_found``, ``files_corrupted``
-   * - ``ThroughputMetric``
-     - ``url``
-     - ``speed_mbps``, ``time_s``
+   * - ``ScriptMetric``
+     - ``name``, ``script`` or ``remote_script``
+     - output of your script (JSON or key=value)
 
-----
-
-Quick example
---------------
+Quick example:
 
 .. code-block:: python
 
    from chaos_jungle.decorators import chaos_measure
-   from chaos_jungle.faults import NetworkDelay
+   from chaos_jungle import NetworkDelay
    from chaos_jungle.metrics import PingLatency, CommandMetric
 
    @chaos_measure(
@@ -62,40 +64,35 @@ Quick example
        run_pipeline()
        return {"jobs_completed": 42}
 
-   summary = run_experiment()
-
+   summary  = run_experiment()
    baseline = summary["metrics"]["baseline"]
    chaos    = summary["metrics"]["chaos"]
 
-   print(f"Latency:     {baseline['ping_avg_ms']} ms  →  {chaos['ping_avg_ms']} ms")
-   print(f"Connections: {baseline['tcp_open_connections']}  →  {chaos['tcp_open_connections']}")
+   print(f"Latency:     {baseline['ping_avg_ms']} ms → {chaos['ping_avg_ms']} ms")
+   print(f"Connections: {baseline['tcp_open_connections']} → {chaos['tcp_open_connections']}")
 
-The result stored in the database (and CSV export) looks like:
+The result stored in the database:
 
 .. code-block:: python
 
    {
-       "baseline_ping_avg_ms":         0.2,
-       "baseline_ping_min_ms":         0.1,
-       "baseline_ping_max_ms":         0.4,
-       "baseline_ping_samples":        5,
-       "baseline_tcp_open_connections": 12,
-       "chaos_ping_avg_ms":          108.6,
-       "chaos_ping_min_ms":          100.1,
-       "chaos_ping_max_ms":          115.3,
-       "chaos_ping_samples":           5,
-       "chaos_tcp_open_connections":   8,
-       "fn_jobs_completed":            42,
+       "baseline_ping_avg_ms":           0.2,
+       "baseline_ping_min_ms":           0.1,
+       "baseline_ping_max_ms":           0.4,
+       "baseline_ping_samples":          5,
+       "baseline_tcp_open_connections":  12,
+       "chaos_ping_avg_ms":             108.6,
+       "chaos_ping_min_ms":             100.1,
+       "chaos_ping_max_ms":             115.3,
+       "chaos_ping_samples":             5,
+       "chaos_tcp_open_connections":     8,
+       "fn_jobs_completed":             42,
    }
 
-----
-
 Custom metrics
----------------
+~~~~~~~~~~~~~~
 
-There are three ways to define application-specific metrics.
-
-**Option 1 — ``@metric`` decorator** (recommended for inline functions):
+**Option 1 — ``@metric`` decorator** (recommended):
 
 .. code-block:: python
 
@@ -108,27 +105,12 @@ There are three ways to define application-specific metrics.
            data = json.loads(r.read())
        return {"mbps": data["bits_per_second"] / 1e6}
 
-   # Use with @chaos_measure exactly like a built-in metric
    @chaos_measure(NetworkDelay("100ms"), metrics=[my_throughput])
    def run():
        run_pipeline()
 
-The function receives the active ``target`` as its only argument. It must
-return a plain ``dict``.  The decorated name is automatically registered in
-a global registry accessible via :func:`~chaos_jungle.metrics.get_metric`.
-
-The ``@metric`` decorator supports three calling forms:
-
-.. code-block:: python
-
-   @metric("my_name")          # explicit name
-   def measure_x(_): ...
-
-   @metric                     # uses the function name
-   def error_rate(_): ...
-
-   @metric(name="connections") # keyword form
-   def open_conns(_): ...
+The function receives the active ``target`` as its only argument and must
+return a plain ``dict``.
 
 **Option 2 — ``ScriptMetric``** (run a shell/Python script on the target):
 
@@ -136,29 +118,22 @@ The ``@metric`` decorator supports three calling forms:
 
    from chaos_jungle.metrics import ScriptMetric
 
-   # Upload a local script, run it, parse stdout automatically
    m = ScriptMetric("app", script="./scripts/measure_app.sh")
 
    @chaos_measure(NetworkDelay("100ms"), metrics=[m])
    def run():
        run_pipeline()
 
-The script must print to stdout in JSON or ``key=value`` format:
+The script must print JSON or ``key=value`` to stdout:
 
 .. code-block:: bash
 
    # measure_app.sh
    echo '{"error_rate": 0.02, "throughput_mbps": 850.3}'
-   # or:
-   echo "error_rate=0.02"
-   echo "throughput_mbps=850.3"
 
-``ScriptMetric`` uploads the script once (cached after first upload), executes
-it on the target, and parses the output.  It supports local ``.sh`` / ``.py``
-files, scripts already on the target (``remote_script=``), and custom
-interpreters.
+``ScriptMetric`` parameters:
 
-.. list-table:: ScriptMetric parameters
+.. list-table::
    :header-rows: 1
    :widths: 20 15 65
 
@@ -167,7 +142,7 @@ interpreters.
      - Description
    * - ``name``
      - required
-     - Metric name prefix — keys become ``<name>_<key>`` in the CSV
+     - Metric name prefix — keys become ``<name>_<key>``
    * - ``script``
      - ``""``
      - Local path to upload and run on the target
@@ -176,7 +151,7 @@ interpreters.
      - Path already on the target (mutually exclusive with ``script``)
    * - ``interpreter``
      - ``"auto"``
-     - ``"bash"`` / ``"python3"`` / ``""`` (direct exec) — auto-detected from extension
+     - ``"bash"`` / ``"python3"`` / ``""`` — auto-detected from extension
    * - ``parse``
      - ``"auto"``
      - ``"json"`` / ``"keyvalue"`` / ``"auto"`` (tries JSON first)
@@ -192,7 +167,6 @@ interpreters.
    from chaos_jungle.targets.base import Target
 
    class OpenConnections(Metric):
-       """Count established TCP connections on the target."""
        name = "tcp"
 
        def collect(self, target: Target) -> dict:
@@ -202,9 +176,7 @@ interpreters.
            except ValueError:
                return {"open_connections": 0}
 
-
    class RetransmitRate(Metric):
-       """Parse TCP retransmit count from /proc/net/snmp."""
        name = "tcp_retrans"
 
        def collect(self, target: Target) -> dict:
@@ -216,25 +188,15 @@ interpreters.
            except ValueError:
                return {"retransmits": 0}
 
-Use them exactly like built-ins:
-
-.. code-block:: python
-
-   @chaos_measure(
-       NetworkDelay("100ms"),
-       metrics=[OpenConnections(), RetransmitRate()],
-   )
+   @chaos_measure(NetworkDelay("100ms"), metrics=[OpenConnections(), RetransmitRate()])
    def run():
        run_pipeline()
 
-----
-
 Metrics on remote targets
---------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 All ``collect(target)`` calls receive the same target the runner uses.
-For an ``SSHTarget``, ``target.run(cmd)`` executes on the remote machine —
-so metrics measure the *remote* host automatically, no extra setup needed:
+For an ``SSHTarget``, ``target.run(cmd)`` executes on the remote machine:
 
 .. code-block:: python
 
@@ -248,25 +210,135 @@ so metrics measure the *remote* host automatically, no extra setup needed:
        target=target,
        metrics=[
            PingLatency("storage-node", count=5),
-           FileIntegrity("*.pdb", "/scratch/data",
-                         checksum_file="/scratch/ref.md5"),
+           FileIntegrity("*.pdb", "/scratch/data", checksum_file="/scratch/ref.md5"),
        ],
    )
    def run_remote():
        run_pipeline()
 
-----
-
-Standalone metric collection
-------------------------------
-
-You can also call metrics directly outside of a decorator:
+Standalone collection (outside a decorator):
 
 .. code-block:: python
 
    from chaos_jungle.metrics import PingLatency
    from chaos_jungle.targets import LocalTarget
 
-   m = PingLatency("8.8.8.8", count=3)
+   m      = PingLatency("8.8.8.8", count=3)
    result = m.collect(LocalTarget())
    print(result)  # {"avg_ms": 12.3, "min_ms": 10.1, "max_ms": 14.7, "samples": 3}
+
+----
+
+AI quality metrics (LLMJudge)
+-------------------------------
+
+``LLMJudge`` scores LLM responses on four quality dimensions using a second
+"judge" model.  Use it with ``runner.measure(evaluator=judge)`` to get
+baseline vs. fault quality deltas automatically.
+
+Quality dimensions
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Metric
+     - Meaning
+   * - ``faithfulness``
+     - 0–1: how closely the answer follows the provided context
+   * - ``hallucination``
+     - 0–1: fraction of the answer that is fabricated or contradicts the context
+   * - ``coherence``
+     - 0–1: grammatical and logical coherence of the response
+   * - ``guardrail_violation``
+     - True / False: did the model follow an injected instruction?
+
+Basic usage:
+
+.. code-block:: python
+
+   import openai, os
+   os.environ["OPENAI_BASE_URL"] = "http://127.0.0.1:11434/v1"
+   os.environ["OPENAI_API_KEY"]  = "ollama"
+
+   from chaos_jungle import ChaosRunner, Scenario, SemanticCorrupt, LLMJudge, LocalTarget
+
+   CONTEXT  = "France is in Western Europe. Its capital is Paris."
+   QUESTION = "What is the capital of France?"
+
+   judge  = LLMJudge(model="qwen2.5:latest")
+   fault  = SemanticCorrupt(mode="entity_swap", port=18050,
+                            upstream="http://127.0.0.1:11434")
+   runner = ChaosRunner(Scenario("quality-test", [fault]), LocalTarget())
+
+   def workload():
+       resp = openai.OpenAI().chat.completions.create(
+           model="qwen2.5:latest",
+           messages=[
+               {"role": "system", "content": "Answer ONLY from the context."},
+               {"role": "user",   "content": f"Context: {CONTEXT}\nQuestion: {QUESTION}"},
+           ],
+       )
+       return {
+           "question": QUESTION,
+           "context":  CONTEXT,
+           "response": resp.choices[0].message.content or "",
+       }
+
+   result = runner.measure(workload, n_baseline=3, n_fault=3, evaluator=judge)
+   print(result.summary())
+
+Output::
+
+   Scenario : quality-test
+   Trials   : 3 baseline / 3 fault
+
+     faithfulness        baseline=0.95   fault=0.18   Δ -0.77
+     hallucination       baseline=0.02   fault=0.91   Δ +0.89
+     coherence           baseline=0.94   fault=0.88   Δ -0.06
+     guardrail_violation baseline=False  fault=False
+
+Score a single response directly:
+
+.. code-block:: python
+
+   from chaos_jungle import LLMJudge
+
+   judge = LLMJudge(model="qwen2.5:latest")
+   score = judge.score(
+       question="What is the capital of France?",
+       context="France is in Western Europe. Its capital is Paris.",
+       response="The capital of France is Berlin.",
+   )
+   print(score.faithfulness)        # 0.05  (answer contradicts context)
+   print(score.hallucination)       # 0.95  (Berlin is fabricated)
+   print(score.guardrail_violation) # False
+
+Average scores across multiple responses:
+
+.. code-block:: python
+
+   from chaos_jungle import average_scores
+
+   scores = [judge.score(...) for ... in responses]
+   avg    = average_scores(scores)
+   print(avg.faithfulness)   # mean across all responses
+
+Quality gate in CI:
+
+.. code-block:: python
+
+   result = runner.measure(workload, n_baseline=5, n_fault=5, evaluator=judge)
+
+   assert result.passed_quality(
+       min_faithfulness=0.70,
+       max_hallucination=0.30,
+   ), f"Quality gate failed: {result.summary()}"
+
+See also
+--------
+
+* :ref:`guide-measurement` — ``runner.measure()`` API and CI gates
+* :ref:`guide-judge` — ``LLMJudge`` full API reference
+* :ref:`guide-llm` — LLM API fault parameters
