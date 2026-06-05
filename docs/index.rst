@@ -33,6 +33,7 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    :caption: Getting Started
 
    quickstart
+   architecture
    concepts
    examples
 
