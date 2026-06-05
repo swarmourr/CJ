@@ -72,7 +72,6 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    guides/metrics
    guides/dashboard
    guides/data
-   guides/paper-study
 
 .. toctree::
    :maxdepth: 2
