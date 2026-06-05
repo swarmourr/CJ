@@ -1,57 +1,279 @@
-Separate mode guide
-===================
+.. _guide-separate-mode:
 
-In separate mode, chaos and your workload are completely independent.
-You start chaos, run anything you want, then stop chaos.
+Separate Mode
+=============
 
-CLI
----
+In separate mode, chaos and your workload run **independently**.  You start
+the fault injection, run any command or script you want without modifying
+it, then stop chaos when you're done.
+
+This is the most flexible mode — no code changes required in your
+application.
+
+When to use separate mode
+--------------------------
+
+* Your workload is a shell script, binary, or third-party tool you cannot
+  modify
+* You want to inject faults into a long-running service (not a single
+  function call)
+* You want to start and stop chaos from different terminals or scripts
+* You are running a manual test and want full control over timing
+
+
+CLI — quick start
+------------------
 
 .. code-block:: bash
 
-   # start chaos (returns immediately)
-   chaos-jungle start --scenario net-delay \
-       --delay 100ms --jitter 10ms
+   # Terminal 1 — start chaos (returns immediately)
+   chaos-jungle start --scenario net-delay --delay 100ms --jitter 10ms
 
-   # run anything — chaos is ON
+   # Terminal 2 — run your workload under chaos (unchanged)
    bash my-workflow.sh
-   kubectl apply -f job.yml
-   python my-app.py
+   # or: python my_app.py
+   # or: kubectl apply -f job.yml
 
-   # stop chaos
+   # Terminal 1 — stop chaos when done
    chaos-jungle stop
 
-   # check what happened
+   # Inspect what happened
    chaos-jungle list
-   chaos-jungle export --session 1
+   chaos-jungle export --session 1 --format json
+
+
+CLI — all fault types
+----------------------
+
+**Network faults (Linux, requires sudo):**
+
+.. code-block:: bash
+
+   # 200 ms delay
+   chaos-jungle start --scenario net-delay --delay 200ms
+
+   # 5 % packet loss
+   chaos-jungle start --scenario net-loss --loss 5%
+
+   # Remote machine via SSH
+   chaos-jungle start --scenario remote-delay --delay 100ms \
+       --target ssh://ubuntu@worker1
+
+   chaos-jungle stop --target ssh://ubuntu@worker1
+
+**LLM faults (macOS, no sudo):**
+
+.. code-block:: bash
+
+   # Slow LLM API — every call is delayed 3 s
+   chaos-jungle start --scenario llm-slow --llm-latency 3.0
+
+   # Rate limit — return 429 after 5 calls
+   chaos-jungle start --scenario llm-ratelimit --llm-rate-limit 5
+
+   # Full outage — every call returns 503
+   chaos-jungle start --scenario llm-outage --llm-unavailable
+
+   # Now run your AI application normally — it will see the degraded API
+   python my_agent.py
+
+   chaos-jungle stop
+
+**Process / service faults (Linux, SSH):**
+
+.. code-block:: bash
+
+   # Stop nginx on a remote machine
+   chaos-jungle start --scenario svc-stop \
+       --service nginx --service-action stop \
+       --target ssh://ubuntu@worker1
+
+   # Run your health-check script
+   bash check_health.sh
+
+   # Restore nginx
+   chaos-jungle stop --target ssh://ubuntu@worker1
+
+**Resource exhaustion (Linux, SSH):**
+
+.. code-block:: bash
+
+   # Saturate 4 CPU cores for 5 minutes
+   chaos-jungle start --scenario cpu-stress \
+       --cpu-cores 4 --cpu-duration 300 \
+       --target ssh://ubuntu@worker1
+
+   # Run your workload under CPU pressure
+   python my_inference_job.py
+
+   chaos-jungle stop --target ssh://ubuntu@worker1
+
 
 Python API
-----------
+-----------
+
+**Single process — start then stop later:**
 
 .. code-block:: python
 
-   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay, LocalTarget
+   from chaos_jungle import ChaosRunner, Scenario, NetworkDelay, LocalTarget
 
-   # Process / script 1 — start chaos
    runner = ChaosRunner(
        Scenario("net-delay", [NetworkDelay("100ms")]),
-       LocalTarget()
+       LocalTarget(),
+   )
+   runner.start()   # returns immediately — chaos is ON
+
+   # ... run your workload ...
+
+   runner.stop()    # chaos OFF — faults reverted
+
+**Two separate scripts — start in one, stop in another:**
+
+.. code-block:: python
+
+   # script_a.py — start chaos
+   from chaos_jungle import ChaosRunner, Scenario, NetworkLoss, LocalTarget
+
+   runner = ChaosRunner(
+       Scenario("loss-test", [NetworkLoss("5%")]),
+       LocalTarget(),
    )
    runner.start()
-   # returns immediately — chaos is now ON
+   print("Chaos started. Run your workload, then run script_b.py to stop.")
 
-   # Process / script 2 — stop chaos (from a different script)
-   stopper = ChaosRunner.attach()
+.. code-block:: python
+
+   # script_b.py — attach to the running session and stop it
+   from chaos_jungle import ChaosRunner
+
+   stopper = ChaosRunner.attach()   # finds the most recent running session
    stopper.stop()
+   print("Chaos stopped and reverted.")
+
+**LLM fault in separate mode:**
+
+.. code-block:: python
+
+   from chaos_jungle import ChaosRunner, Scenario, LLMLatency, LocalTarget
+
+   runner = ChaosRunner(
+       Scenario("llm-slow", [LLMLatency(delay_s=3.0, port=18001,
+                                        upstream="http://127.0.0.1:11434")]),
+       LocalTarget(),
+   )
+   runner.start()
+
+   # Your AI app is now running through a slow proxy — no code changes needed
+   import subprocess
+   subprocess.run(["python", "my_agent.py"])
+
+   runner.stop()
+
+**SSH target — separate mode on a remote machine:**
+
+.. code-block:: python
+
+   from chaos_jungle import ChaosRunner, Scenario, CPUStress, SSHTarget
+
+   target = SSHTarget("10.0.0.5", user="ubuntu")
+   runner = ChaosRunner(
+       Scenario("cpu-pressure", [CPUStress(cores=4, duration_s=300)]),
+       target,
+   )
+   runner.start()
+
+   # Run any remote command under CPU pressure
+   target.run("python3 /app/inference_job.py")
+
+   runner.stop()
+
 
 How it works
 ------------
 
-``start()`` writes the active session to ``~/.chaos-jungle/chaos_jungle.db``
-with status ``running``.
+.. code-block:: text
 
-``ChaosRunner.attach()`` reads the most recent running session from the
-same database and returns a runner bound to that session.
+   runner.start()
+        │
+        ├─ writes session to ~/.chaos-jungle/chaos_jungle.db  (status=running)
+        ├─ injects fault on target (tc rule / proxy process / pkill / dd)
+        └─ returns immediately
 
-``stop()`` on the attached runner stops all faults and marks the session
-as ``reverted``.
+   ChaosRunner.attach()
+        │
+        └─ reads most recent session with status=running from the DB
+           returns a runner bound to that session
+
+   stopper.stop()
+        │
+        ├─ removes fault from target (tc del / kill proxy / systemctl start)
+        └─ marks session as  status=reverted  in DB
+
+Checking the status
+--------------------
+
+.. code-block:: bash
+
+   # List all sessions (most recent first)
+   chaos-jungle list
+
+   # Show events for a specific session
+   chaos-jungle export --session 3 --format json
+
+.. code-block:: python
+
+   from chaos_jungle import ChaosRunner
+
+   runner = ChaosRunner.attach()
+   print(runner.session_id)     # active session ID
+   print(runner.export("json")) # full event log
+
+
+Duration-based automatic stop
+-------------------------------
+
+Let chaos stop itself after a fixed time — no second terminal needed:
+
+.. code-block:: bash
+
+   # Stop automatically after 10 minutes
+   chaos-jungle start --scenario net-delay --delay 100ms --duration 10m
+
+.. code-block:: python
+
+   runner.start(duration="10m")   # returns immediately; stops after 10 min
+
+   # blocking version — waits until duration expires
+   runner.run("10m")
+
+
+Recording results
+------------------
+
+Attach metrics to the session for later export:
+
+.. code-block:: python
+
+   runner.start()
+   # ... workload ...
+   runner.record_result({
+       "jobs_completed": 120,
+       "jobs_failed":      3,
+       "retries":          7,
+   })
+   runner.stop()
+
+.. code-block:: bash
+
+   # Export to CSV (includes the recorded metrics as columns)
+   chaos-jungle export --format csv
+
+See also
+--------
+
+* :ref:`guide-network` — network fault parameters
+* :ref:`guide-process` — process / service / container faults
+* :ref:`guide-resources` — CPU / memory / disk exhaustion
+* :ref:`guide-llm` — LLM API fault parameters
+* :ref:`guide-ssh` — SSHTarget setup and authentication
