@@ -14,6 +14,29 @@ mechanisms are available:
   checksum is recalculated, producing **silent** data corruption.  TCP
   delivers the packet intact but the payload is wrong.
 
+.. code-block:: text
+
+   ┌──────────────────────────────────────────────────────────────────┐
+   │                      YOUR  APPLICATION                          │
+   └───────────────────────────────┬──────────────────────────────────┘
+                                   │ TCP/IP
+   ┌───────────────────────────────▼──────────────────────────────────┐
+   │                   LINUX  KERNEL  NETWORK  STACK                  │
+   │                                                                  │
+   │  ╔══════════════════════════════╗   ╔══════════════════════════╗  │
+   │  ║        tc  netem  qdisc      ║   ║      BPF / XDP  hook     ║  │
+   │  ╠══════════════════════════════╣   ╠══════════════════════════╣  │
+   │  ║  delay   ── add latency      ║   ║  flips bits BEFORE       ║  │
+   │  ║  loss    ── drop packets     ║   ║  checksum recalculation  ║  │
+   │  ║  corrupt ── flip + recheck   ║   ║                          ║  │
+   │  ║  dup     ── clone packets    ║   ║  TCP sees valid packet   ║  │
+   │  ║                              ║   ║  payload is silently bad ║  │
+   │  ║  checksum fixed → visible    ║   ║  checksum ok → invisible ║  │
+   │  ╚══════════════════════════════╝   ╚══════════════════════════╝  │
+   └───────────────────────────────┬──────────────────────────────────┘
+                                   │
+                           Physical / Virtual NIC
+
 .. list-table::
    :header-rows: 1
    :widths: 30 40 30
@@ -170,6 +193,24 @@ processes the same request or response twice, the result must be unchanged.
 
 SilentNetworkCorrupt
 --------------------
+
+.. code-block:: text
+
+   NetworkCorrupt  (tc netem)           SilentNetworkCorrupt  (BPF/XDP)
+   ──────────────────────────           ─────────────────────────────────
+   packet leaves NIC                    packet leaves NIC
+        │                                    │
+        ▼                                    ▼
+   [ tc netem ]                         [ BPF hook ]
+    flip bit in payload                  flip bit in payload
+    recalculate TCP checksum             checksum NOT updated
+        │                                    │
+        ▼                                    ▼
+   destination receives packet          destination receives packet
+   kernel sees BAD checksum             kernel sees GOOD checksum
+   TCP drops + retransmits              TCP delivers to application
+   ─────────────────────────            ────────────────────────────
+   VISIBLE — tests retry logic          SILENT — tests integrity checks
 
 Flips bits using a BPF / XDP hook *before* the TCP checksum is recalculated.
 The kernel sees a valid packet — TCP delivers it — but the payload bytes are

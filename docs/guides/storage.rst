@@ -39,17 +39,31 @@ How StorageCorrupt works
 
 .. code-block:: text
 
-   crontab entry (every 10 min)
+   runner.start()
         │
         ▼
-   cj_corrupt.py  ──► select random byte in *.pdb
-        │              ──► read original byte → save to cj.db
-        │              ──► write flipped byte to file (via dd)
+   ╔══════════════════════════════════════════════════════════════╗
+   ║  crontab  (fires every interval, e.g. 10 min)               ║
+   ║                                                              ║
+   ║  cj_corrupt.py                                               ║
+   ║    ① find files matching glob pattern                        ║
+   ║    ② read original byte  ──► save to ~/.chaos-jungle/cj.db  ║
+   ║    ③ flip bit via dd     ──► overwrite byte in file          ║
+   ╚══════════════════════════════════════════════════════════════╝
+        │  file silently has wrong bytes
         ▼
-   Your pipeline reads the corrupted file
+   ┌──────────────────────────────────────────────────────────────┐
+   │  Your pipeline reads the file                                │
+   │                                                              │
+   │  with integrity check     │  without integrity check         │
+   │  ────────────────────     │  ──────────────────────          │
+   │  detects bad checksum     │  processes wrong data silently   │
+   │  logs error, skips file   │  produces incorrect result       │
+   └──────────────────────────────────────────────────────────────┘
         │
         ▼
-   runner.revert()  ──► restore original bytes from cj.db
+   runner.stop()    ──► removes crontab  (no new corruptions)
+   runner.revert()  ──► restores every flipped byte from cj.db
 
 
 Basic usage

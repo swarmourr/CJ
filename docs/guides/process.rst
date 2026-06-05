@@ -12,6 +12,23 @@ a whole machine.
 All three faults target an ``SSHTarget`` (or a ``LocalTarget`` with
 appropriate permissions).  ``sudo`` is required for ``ServiceFault``.
 
+.. code-block:: text
+
+   ╔══════════════════════════════════════════════════════════════════╗
+   ║                    TARGET  MACHINE  LAYERS                      ║
+   ╠══════════════════════╦═══════════════════╦════════════════════════╣
+   ║   OS  PROCESSES      ║  SYSTEMD  UNITS   ║  DOCKER  CONTAINERS   ║
+   ║                      ║                   ║                        ║
+   ║  ProcessKill         ║  ServiceFault     ║  ContainerKill         ║
+   ║                      ║                   ║                        ║
+   ║  pkill -f <pattern>  ║  systemctl stop   ║  docker kill / stop    ║
+   ║  kill -<signal>      ║  systemctl mask   ║  docker pause          ║
+   ║                      ║  systemctl kill   ║  docker rm -f          ║
+   ║                      ║                   ║                        ║
+   ║  irreversible        ║  auto-restored    ║  auto-restarted        ║
+   ║  (no sudo needed)    ║  (sudo needed)    ║  (docker group needed) ║
+   ╚══════════════════════╩═══════════════════╩════════════════════════╝
+
 Available faults
 ----------------
 
@@ -79,6 +96,22 @@ unless the target process runs as root.
 
 ServiceFault
 ------------
+
+.. code-block:: text
+
+   runner.start()              [workload runs]          runner.stop()
+        │                            │                       │
+        ▼                            ▼                       ▼
+   ╔══════════════╗          ╔═══════════════╗        ╔══════════════╗
+   ║ systemctl    ║          ║    SERVICE    ║        ║ systemctl    ║
+   ║ stop/mask/   ║          ║               ║        ║ start /      ║
+   ║ kill/restart ║          ║  DOWN / DEAD  ║        ║ unmask       ║
+   ╚══════════════╝          ╚═══════════════╝        ╚══════════════╝
+        │                            │                       │
+        └──── does your app  ────────┘                       │
+              surface errors?                           service back
+              retry? fall back?                         to original
+                                                           state
 
 Stops, restarts, kills, or masks a systemd unit.  On ``stop()`` the service
 is restored to its original state.

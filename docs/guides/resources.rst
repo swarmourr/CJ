@@ -13,6 +13,27 @@ All faults use ``stress-ng`` (CPU / memory / I/O) or standard POSIX
 ``coreutils`` (disk) on the target machine.  They run in the background and
 are cleaned up automatically on ``stop()`` / ``revert()``.
 
+.. code-block:: text
+
+   ┌──────────────────────────────────────────────────────────────────┐
+   │                      TARGET  MACHINE                            │
+   │                                                                  │
+   │  ┌─────────────────────────┐    ┌───────────────────────────┐   │
+   │  │   YOUR  APPLICATION     │    │   CJ  STRESS  WORKERS     │   │
+   │  │                         │    │                           │   │
+   │  │  inference / embedding  │    │  CPUStress  ── tight loop │   │
+   │  │  agent calls / pipeline │    │  MemStress  ── vm alloc   │   │
+   │  │                         │    │  IOStress   ── hdd write  │   │
+   │  └──────────┬──────────────┘    │  DiskFull   ── dd zeros   │   │
+   │             │  competes for     └───────────────────────────┘   │
+   │             ▼                                                    │
+   │  ╔══════════════════════════════════════════════════════════╗    │
+   │  ║              SHARED  KERNEL  RESOURCES                   ║    │
+   │  ╠══════════════╦═════════════╦══════════════╦═════════════╣    │
+   │  ║   CPU cores  ║    RAM      ║   Disk I/O   ║  Disk space ║    │
+   │  ╚══════════════╩═════════════╩══════════════╩═════════════╝    │
+   └──────────────────────────────────────────────────────────────────┘
+
 Available faults
 ----------------
 
