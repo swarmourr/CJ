@@ -8,30 +8,31 @@ observe, and evaluate faults across any layer of a modern system.
 
 .. code-block:: text
 
-   ┌─────────────────────────────────────────────────────────────────┐
-   │                        CONTROL PLANE                           │
-   │  Scenario ─── ChaosRunner ─── ExperimentSuite                  │
-   │  decorators (@chaos, @chaos_measure) · inject() · door()        │
-   └────────────────────┬────────────────────────────────────────────┘
-                        │
-          ┌─────────────┼──────────────┐
-          ▼             ▼              ▼
-   ┌─────────────┐ ┌──────────┐ ┌──────────────────┐
-   │  TRANSPORT  │ │  TARGET  │ │  EVALUATION       │
-   │   PLANE     │ │  PLANE   │ │  PLANE            │
-   │             │ │          │ │                   │
-   │ HTTP proxy  │ │ Local    │ │ LLMJudge          │
-   │ httpx patch │ │ SSH      │ │ Metrics           │
-   │ OS-level    │ │ HTTP/    │ │ Quality gates     │
-   │ (tc / BPF)  │ │ cj-daemon│ │ runner.measure()  │
-   └──────┬──────┘ └────┬─────┘ └────────┬──────────┘
-          │             │                │
-          └─────────────┼────────────────┘
-                        ▼
-   ┌─────────────────────────────────────────────────────────────────┐
-   │                         DATA PLANE                              │
-   │  SQLite session DB  ──►  Web dashboard  ──►  CSV export         │
-   └─────────────────────────────────────────────────────────────────┘
+   ╔══════════════════════════════════════════════════════════════════╗
+   ║                       CONTROL  PLANE                            ║
+   ║                                                                  ║
+   ║   Scenario ──── ChaosRunner ──── ExperimentSuite                ║
+   ║   @chaos · @chaos_measure · inject() · door()                   ║
+   ╚═══════════════════════╤══════════════════════════════════════════╝
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+   ╔═══════════════╗ ╔════════════╗ ╔═══════════════════╗
+   ║  TRANSPORT    ║ ║   TARGET   ║ ║   EVALUATION      ║
+   ║    PLANE      ║ ║   PLANE    ║ ║     PLANE         ║
+   ╠═══════════════╣ ╠════════════╣ ╠═══════════════════╣
+   ║  HTTP proxy   ║ ║  Local     ║ ║  LLMJudge         ║
+   ║  httpx patch  ║ ║  SSH       ║ ║  Metrics          ║
+   ║  OS / BPF     ║ ║  HTTP      ║ ║  Quality gates    ║
+   ╚═══════╤═══════╝ ╚══════╤═════╝ ╚═════════╤═════════╝
+           │                │                 │
+           └────────────────┼─────────────────┘
+                            ▼
+   ╔══════════════════════════════════════════════════════════════════╗
+   ║                        DATA  PLANE                              ║
+   ║                                                                  ║
+   ║   SQLite DB  ──►  Web Dashboard  ──►  CSV Export  ──►  CLI      ║
+   ╚══════════════════════════════════════════════════════════════════╝
 
 ----
 
@@ -69,12 +70,19 @@ Lifecycle of a single experiment:
 
 .. code-block:: text
 
-   1. preflight  — check tools (tc, stress-ng, docker …) are available
-   2. start      — inject all faults in scenario order
-   3. [workload] — user's code runs under active faults
-   4. stop       — remove faults in reverse order
-   5. revert     — undo any persistent side-effects (file restores, etc.)
-   6. record     — write session, events, results to SQLite
+   ╔═══════════╗     ╔═══════════╗     ╔═══════════╗
+   ║ PREFLIGHT ║────►║   START   ║────►║ WORKLOAD  ║
+   ║           ║     ║           ║     ║           ║
+   ║ check     ║     ║ inject    ║     ║ your code ║
+   ║ tools     ║     ║ faults    ║     ║ runs here ║
+   ╚═══════════╝     ╚═══════════╝     ╚═════╤═════╝
+                                             │
+   ╔═══════════╗     ╔═══════════╗     ╔═════▼═════╗
+   ║  RECORD   ║◄────║  REVERT   ║◄────║   STOP    ║
+   ║           ║     ║           ║     ║           ║
+   ║ write to  ║     ║ undo side ║     ║ remove    ║
+   ║ SQLite    ║     ║ effects   ║     ║ faults    ║
+   ╚═══════════╝     ╚═══════════╝     ╚═══════════╝
 
 ----
 
@@ -91,15 +99,21 @@ target and ``sudo``.
 
 .. code-block:: text
 
-   Your app
-      │
-   [ Linux kernel — tc/netem / BPF / stress-ng / systemctl / docker ]
-      │
-   Network / Storage / CPU / Memory / Disk
-
-Faults at this level: ``NetworkDelay``, ``NetworkLoss``, ``StorageCorrupt``,
-``CPUStress``, ``MemoryStress``, ``IOStress``, ``ProcessKill``,
-``ServiceFault``, ``ContainerKill``.
+   ┌──────────────────────────────────────────────────────┐
+   │                  YOUR  APPLICATION                   │
+   └────────────────────────┬─────────────────────────────┘
+              syscalls / file I/O / network packets
+   ┌────────────────────────▼─────────────────────────────┐
+   │               LINUX  KERNEL  LAYER                   │
+   │                                                      │
+   │  ╔══════════════╗  ╔═══════════╗  ╔═══════════════╗  │
+   │  ║   tc/netem   ║  ║    BPF    ║  ║  stress-ng    ║  │
+   │  ║              ║  ║           ║  ║  systemctl    ║  │
+   │  ║ NetworkDelay ║  ║ SilentNet ║  ║  docker       ║  │
+   │  ║ NetworkLoss  ║  ║ Corrupt   ║  ║  pkill        ║  │
+   │  ╚══════════════╝  ╚═══════════╝  ╚═══════════════╝  │
+   └──────────────────────────────────────────────────────┘
+            Network · Storage · CPU · Memory · Disk
 
 ----
 
@@ -111,11 +125,23 @@ forwarding.
 
 .. code-block:: text
 
-   LLM SDK
-      │  (redirected to localhost:port)
-   [ CJ proxy ]
-      ├── apply fault (latency / 429 / 503 / corrupt / hallucinate …)
-      └── forward to real API  ──►  api.openai.com / api.anthropic.com / …
+   ┌──────────────────────────────────────────────────────┐
+   │            LLM  SDK  (any provider)                  │
+   └────────────────────────┬─────────────────────────────┘
+              redirected to localhost:<port>
+   ┌────────────────────────▼─────────────────────────────┐
+   │                    CJ  PROXY                         │
+   │                                                      │
+   │  ① match request URL against fault rules             │
+   │  ② apply fault ─► latency · 429 · 503 · corrupt      │
+   │                    hallucinate · truncate · timeout   │
+   │  ③ forward (or short-circuit)                        │
+   └────────────────────────┬─────────────────────────────┘
+                       HTTPS tunnel
+   ┌────────────────────────▼─────────────────────────────┐
+   │              REAL  API  ENDPOINT                     │
+   │   api.openai.com · api.anthropic.com · ollama …      │
+   └──────────────────────────────────────────────────────┘
 
 Faults at this level: ``LLMLatency``, ``LLMRateLimit``, ``LLMTimeout``,
 ``LLMResponseCorrupt``, ``LLMUnavailable``, ``LLMHallucination``,
@@ -138,12 +164,24 @@ uses them is affected automatically — no proxy port, no SDK reconfiguration.
 
 .. code-block:: text
 
-   LLM SDK  (OpenAI / Anthropic / LiteLLM / LangChain / …)
-      │  uses httpx or requests internally
-   [ CJ transport patch — _CJTransport / _CJAdapter ]
-      ├── apply Behavior.before(url)   (latency / timeout / …)
-      ├── call real send()
-      └── apply Behavior.after(url, response)  (corrupt / 429 / 503 / …)
+   ┌──────────────────────────────────────────────────────────────┐
+   │   LLM SDK  (OpenAI · Anthropic · LiteLLM · LangChain …)     │
+   │                  uses httpx or requests internally           │
+   └──────────────────────────┬───────────────────────────────────┘
+                              │  patched at class level
+   ┌──────────────────────────▼───────────────────────────────────┐
+   │               CJ  TRANSPORT  PATCH                           │
+   │                                                              │
+   │  ① Behavior.before(url) ─── latency · jitter · timeout       │
+   │  ② real send()          ─── actual HTTP/HTTPS request        │
+   │  ③ Behavior.after(url)  ─── corrupt · 429 · 503              │
+   │                                                              │
+   │  probability roll ──► each behavior fires independently      │
+   └──────────────────────────┬───────────────────────────────────┘
+                              │  real TCP connection
+   ┌──────────────────────────▼───────────────────────────────────┐
+   │                   API  ENDPOINT                              │
+   └──────────────────────────────────────────────────────────────┘
 
 Faults at this level: ``Latency``, ``Jitter``, ``RateLimit``,
 ``Unavailable``, ``Timeout``, ``CorruptResponse`` (from ``chaos_jungle.intercept``).
@@ -161,26 +199,35 @@ target handles the transport.
 
 .. code-block:: text
 
-   ChaosRunner
-       │
-       ├── LocalTarget  ──►  subprocess.run()  (same machine)
-       │
-       ├── SSHTarget    ──►  Paramiko SSH  ──►  remote Linux server
-       │
-       └── HTTPTarget   ──►  HTTP POST /exec  ──►  cj-daemon (remote agent)
+   ╔═════════════════════════════════════════════════════════╗
+   ║                     ChaosRunner                         ║
+   ╚══════════════╤═══════════════╤══════════════════╤════════╝
+                  │               │                  │
+        ┌─────────▼──────┐ ┌──────▼───────┐ ┌───────▼──────────┐
+        │  LocalTarget   │ │  SSHTarget   │ │  HTTPTarget      │
+        │                │ │              │ │                  │
+        │ subprocess.run │ │ Paramiko SSH │ │ HTTP POST /exec  │
+        └────────┬───────┘ └──────┬───────┘ └───────┬──────────┘
+                 │                │                 │
+                 ▼                ▼                 ▼
+          same  machine     remote  Linux      cj-daemon :8642
 
-``cj-daemon`` is a lightweight REST agent that you install on machines that
-are behind a firewall or in a CI runner.  It receives ``/exec`` commands from
-``HTTPTarget`` and executes them locally.
+``cj-daemon`` is a lightweight REST agent for machines that are behind a
+firewall or inside a CI runner.
 
 .. code-block:: text
 
-   ┌─────────────────────┐          ┌───────────────────────┐
-   │   Test runner host  │  HTTP    │   Target machine      │
-   │                     │ ───────► │                       │
-   │  ChaosRunner        │          │  cj-daemon  :8642     │
-   │  + HTTPTarget       │ ◄─────── │  → runs tc / stress   │
-   └─────────────────────┘  result  └───────────────────────┘
+   ┌──────────────────────────────┐         ┌──────────────────────────────┐
+   │     TEST  RUNNER  HOST       │         │      TARGET  MACHINE         │
+   │                              │         │                              │
+   │  ┌────────────────────────┐  │  HTTP   │  ┌──────────────────────┐   │
+   │  │  ChaosRunner           │  │ ──────► │  │   cj-daemon :8642    │   │
+   │  │  + HTTPTarget          │  │         │  │                      │   │
+   │  └────────────────────────┘  │ ◄────── │  │  POST /exec          │   │
+   │                              │ result  │  │  → tc · stress-ng    │   │
+   └──────────────────────────────┘         │  │  → systemctl · docker│   │
+                                            │  └──────────────────────┘   │
+                                            └──────────────────────────────┘
 
 ----
 
@@ -193,19 +240,24 @@ whether they execute.
 .. code-block:: text
 
    runner.measure(workload, n_baseline=5, n_fault=5, evaluator=judge)
-        │
-        ├── run workload N times  (no fault)  → baseline metrics
-        ├── inject fault
-        ├── run workload N times  (with fault) → fault metrics
-        └── compute delta → MeasurementResult
-
-``MeasurementResult`` contains:
-
-* raw metric dicts for baseline and fault phases
-* ``delta`` — difference in every numeric metric
-* optional ``LLMJudge`` quality scores (faithfulness, hallucination,
-  coherence, guardrail_violation)
-* ``passed_quality(...)`` — boolean quality gate
+   │
+   ├─► PHASE 1 ─ BASELINE  ── run workload × n_baseline ──► baseline metrics
+   │
+   ├─► PHASE 2 ─ FAULT ON  ── inject faults
+   │
+   ├─► PHASE 3 ─ FAULT     ── run workload × n_fault    ──► fault metrics
+   │
+   ├─► PHASE 4 ─ FAULT OFF ── stop faults
+   │
+   └─► PHASE 5 ─ EVALUATE  ── compute delta + LLMJudge scores
+                                       │
+                    ╔══════════════════▼═══════════════════════╗
+                    ║          MeasurementResult               ║
+                    ╠══════════════════════════════════════════╣
+                    ║  baseline  │  fault  │  delta            ║
+                    ║  judge scores (faithfulness, coherence)  ║
+                    ║  passed_quality(min_faithfulness=0.7)    ║
+                    ╚══════════════════════════════════════════╝
 
 ``LLMJudge`` calls a second "judge" model to evaluate responses — it does not
 run inside your application under test.
@@ -215,26 +267,28 @@ run inside your application under test.
 Data Plane
 ----------
 
-Every experiment writes structured data to a local SQLite database:
+Every experiment writes structured data to a local SQLite database.
 
 .. code-block:: text
 
-   ~/.chaos-jungle/chaos_jungle.db
-   │
-   ├── sessions  — one row per ChaosRunner.start() call
-   ├── faults    — one row per active fault, with kind + parameters
-   ├── events    — timestamped log messages (fault started, stopped, errors)
-   ├── results   — arbitrary JSON blobs from runner.record_result()
-   └── commands  — every shell command executed on every target
-
-Data flows downstream to:
-
-.. code-block:: text
-
-   SQLite DB
-      ├── Web dashboard   (chaos-jungle dashboard)
-      ├── CSV export      (export_db_to_csv)
-      └── CLI summary     (chaos-jungle list)
+   ╔══════════════════════════════════════════════════════════╗
+   ║          ~/.chaos-jungle/chaos_jungle.db                ║
+   ╠══════════════════════════════════════════════════════════╣
+   ║  sessions  ── one row per ChaosRunner.start() call      ║
+   ║  faults    ── one row per active fault + parameters      ║
+   ║  events    ── timestamped log (started · stopped · err)  ║
+   ║  results   ── JSON blobs from runner.record_result()     ║
+   ║  commands  ── every shell command on every target        ║
+   ╚══════════════════════════╤═══════════════════════════════╝
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+       ╔═════════════╗  ╔═══════════╗  ╔═══════════╗
+       ║  Dashboard  ║  ║    CSV    ║  ║    CLI    ║
+       ║   :8080     ║  ║  export   ║  ║  summary  ║
+       ╚═════════════╝  ╚═══════════╝  ╚═══════════╝
+       chaos-jungle      export_db      chaos-jungle
+       dashboard         _to_csv()      list
 
 ----
 
@@ -244,35 +298,36 @@ Component Map
 .. code-block:: text
 
    chaos_jungle/
-   ├── scenario.py        Scenario dataclass
-   ├── runner.py          ChaosRunner, MeasurementResult, door()
-   ├── suite.py           ExperimentSuite
-   ├── decorators.py      @chaos, @chaos_session, @chaos_measure
-   ├── intercept.py       inject(), door(), Behavior subclasses
-   ├── pytest_plugin.py   @pytest.mark.chaos auto-fixture
+   │
+   ├── scenario.py        ── Scenario dataclass
+   ├── runner.py          ── ChaosRunner · MeasurementResult · door()
+   ├── suite.py           ── ExperimentSuite
+   ├── decorators.py      ── @chaos · @chaos_session · @chaos_measure
+   ├── intercept.py       ── inject() · door() · Behavior subclasses
+   ├── pytest_plugin.py   ── @pytest.mark.chaos auto-fixture
    │
    ├── faults/
-   │   ├── network.py     NetworkDelay, NetworkLoss, NetworkCorrupt …
-   │   ├── storage.py     StorageCorrupt
-   │   ├── llm.py         LLMLatency, LLMRateLimit, LLMHallucination …
-   │   ├── semantic.py    SemanticCorrupt
-   │   ├── state.py       RedisStateCorrupt, JsonStateCorrupt …
-   │   ├── process.py     ProcessKill, ServiceFault, ContainerKill
-   │   ├── resources.py   CPUStress, MemoryStress, IOStress, DiskFull
-   │   └── bpf.py         SilentNetworkCorrupt, iface_for_ip
+   │   ├── network.py     ── NetworkDelay · NetworkLoss · NetworkCorrupt …
+   │   ├── storage.py     ── StorageCorrupt
+   │   ├── llm.py         ── LLMLatency · LLMRateLimit · LLMHallucination …
+   │   ├── semantic.py    ── SemanticCorrupt
+   │   ├── state.py       ── RedisStateCorrupt · JsonStateCorrupt …
+   │   ├── process.py     ── ProcessKill · ServiceFault · ContainerKill
+   │   ├── resources.py   ── CPUStress · MemoryStress · IOStress · DiskFull
+   │   └── bpf.py         ── SilentNetworkCorrupt · iface_for_ip
    │
    ├── targets/
-   │   ├── local.py       LocalTarget
-   │   ├── ssh.py         SSHTarget
-   │   └── http.py        HTTPTarget
+   │   ├── local.py       ── LocalTarget
+   │   ├── ssh.py         ── SSHTarget
+   │   └── http.py        ── HTTPTarget
    │
-   ├── metrics.py         PingLatency, CommandMetric, FileIntegrity …
-   ├── judge.py           LLMJudge, JudgeScore, average_scores
-   ├── session_db.py      SQLite schema + helpers
-   ├── dashboard.py       FastAPI web dashboard
-   ├── daemon.py          cj-daemon REST agent
-   ├── guardrails.py      ConflictError / ConflictWarning
-   └── preflight.py       tool detection + auto-install
+   ├── metrics.py         ── PingLatency · CommandMetric · FileIntegrity …
+   ├── judge.py           ── LLMJudge · JudgeScore · average_scores
+   ├── session_db.py      ── SQLite schema + helpers
+   ├── dashboard.py       ── FastAPI web dashboard
+   ├── daemon.py          ── cj-daemon REST agent
+   ├── guardrails.py      ── ConflictError / ConflictWarning
+   └── preflight.py       ── tool detection + auto-install
 
 ----
 
