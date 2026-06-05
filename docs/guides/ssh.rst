@@ -1,5 +1,7 @@
-SSH target guide
-================
+.. _guide-ssh:
+
+SSH Target
+==========
 
 Use ``SSHTarget`` to inject faults on a remote machine over SSH.
 

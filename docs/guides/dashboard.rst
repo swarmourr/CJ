@@ -83,16 +83,16 @@ dashboard server:
      - Used for
    * - ``tc``
      - iproute2
-     - Network fault injection (netem)
+     - Network fault injection (``NetworkDelay``, ``NetworkLoss``, etc.)
    * - ``ip``
      - iproute2
-     - Interface detection
+     - Network interface auto-detection
    * - ``filefrag``
      - e2fsprogs
      - Storage fault — extent info
    * - ``dd``
      - coreutils
-     - Storage fault — bit-flip writes
+     - Storage fault — bit-flip writes; ``DiskFull``
    * - ``inotifywait``
      - inotify-tools
      - Storage fault — file watch
@@ -102,6 +102,18 @@ dashboard server:
    * - ``ssh``
      - openssh-client
      - SSH target support
+   * - ``stress-ng``
+     - stress-ng
+     - ``CPUStress``, ``MemoryStress``, ``IOStress``
+   * - ``docker``
+     - docker-ce / docker.io
+     - ``ContainerKill`` — pause, stop, kill, rm containers
+   * - ``systemctl``
+     - systemd
+     - ``ServiceFault`` — stop, restart, kill, mask services
+   * - ``pkill`` / ``pgrep``
+     - procps
+     - ``ProcessKill`` — pattern-match and signal processes
 
 A green dot means the binary is found; red means it is missing (the
 corresponding fault type will fail preflight).
@@ -216,3 +228,12 @@ You can embed the dashboard inside your own application:
 The dashboard uses `FastAPI <https://fastapi.tiangolo.com>`_ and
 `uvicorn <https://www.uvicorn.org>`_, both installed as dependencies of
 chaos-jungle.
+
+----
+
+See also
+---------
+
+* :ref:`guide-data` — SQLite schema, Python API, and CSV export
+* :ref:`guide-measurement` — ``runner.measure()`` and quality gates
+* :ref:`guide-metrics` — infrastructure and AI quality metrics

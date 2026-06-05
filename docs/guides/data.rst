@@ -1,26 +1,34 @@
-Data Storage and Output
-=======================
+.. _guide-data:
 
-chaos-jungle writes to **two SQLite databases** and never deletes either
-automatically. Both live in ``~/.chaos-jungle/`` by default.
+Data Storage & Export
+======================
+
+Every experiment is automatically recorded to a SQLite database.  No
+configuration is needed — chaos-jungle creates the database on first run and
+appends to it every time you start a session.
+
+----
+
+Database location
+------------------
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 70
+   :widths: 40 60
 
    * - File
      - What it stores
    * - ``~/.chaos-jungle/chaos_jungle.db``
-     - Session metadata, fault records, timestamped event log *(new — managed by chaos-jungle)*
+     - Session metadata, fault records, event log, metrics, commands
    * - ``~/.chaos-jungle/cj.db``
-     - Bit-flip records: which byte was changed and what the original value was *(original chaos-jungle DB — never touched by this framework)*
+     - Bit-flip records for ``StorageCorrupt`` (original byte values for revert)
 
 ----
 
-chaos_jungle.db — session database
-------------------------------------
+Database schema
+----------------
 
-Created automatically on first run. Contains three tables.
+``chaos_jungle.db`` has five tables:
 
 sessions
 ~~~~~~~~
@@ -31,128 +39,70 @@ One row per ``ChaosRunner.start()`` call.
 
    CREATE TABLE sessions (
        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-       name        TEXT    NOT NULL,           -- scenario name
-       started_at  TEXT    NOT NULL,           -- ISO-8601 UTC timestamp
-       stopped_at  TEXT,                       -- NULL while still running
-       status      TEXT    NOT NULL            -- 'running' | 'stopped' | 'reverted'
+       name        TEXT    NOT NULL,
+       started_at  TEXT    NOT NULL,   -- ISO-8601 UTC
+       stopped_at  TEXT,               -- NULL while still running
+       status      TEXT    NOT NULL    -- 'running' | 'stopped' | 'reverted'
    );
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 15 65
-
-   * - Column
-     - Type
-     - Notes
-   * - ``id``
-     - INTEGER
-     - Auto-incrementing primary key.
-   * - ``name``
-     - TEXT
-     - The ``scenario_name`` you passed to ``Scenario()``.
-   * - ``started_at``
-     - TEXT
-     - UTC ISO-8601 string, e.g. ``2025-05-29T14:00:00.123456+00:00``.
-   * - ``stopped_at``
-     - TEXT
-     - ``NULL`` while chaos is still running. Set by ``runner.stop()``.
-   * - ``status``
-     - TEXT
-     - ``"running"`` → ``"reverted"`` on clean stop. ``"stopped"`` if stop ran without full revert.
 
 faults
 ~~~~~~
 
-One row per fault *within* a session. A session with three faults gets
-three rows.
+One row per fault within a session.
 
 .. code-block:: sql
 
    CREATE TABLE faults (
        id          INTEGER PRIMARY KEY AUTOINCREMENT,
        session_id  INTEGER NOT NULL REFERENCES sessions(id),
-       kind        TEXT    NOT NULL,           -- fault class name
-       parameters  TEXT    NOT NULL,           -- JSON dict of fault parameters
+       kind        TEXT    NOT NULL,   -- e.g. "NetworkDelay", "LLMLatency"
+       parameters  TEXT    NOT NULL,   -- JSON dict of fault parameters
        started_at  TEXT    NOT NULL,
        stopped_at  TEXT
    );
 
-.. list-table::
-   :header-rows: 1
-   :widths: 20 15 65
-
-   * - Column
-     - Type
-     - Notes
-   * - ``kind``
-     - TEXT
-     - Class name: ``"NetworkDelay"``, ``"StorageCorrupt"``, etc.
-   * - ``parameters``
-     - TEXT
-     - JSON object. For ``NetworkDelay("100ms", jitter="10ms")`` this is ``{"delay": "100ms", "jitter": "10ms", "iface": null}``.
-
-Example ``parameters`` values by fault type:
+Example ``parameters`` values:
 
 .. code-block:: json
 
-   // NetworkDelay
-   {"delay": "100ms", "jitter": "10ms", "iface": null}
-
-   // NetworkLoss
-   {"rate": "5%", "iface": null}
-
-   // NetworkCorrupt
-   {"rate": "1%", "iface": null}
-
-   // NetworkDuplicate
-   {"rate": "0.5%", "iface": null}
-
-   // StorageCorrupt
-   {"pattern": "*.pdb", "directory": "/scratch/data", "interval": "10m", "recursive": true}
-
-   // SilentNetworkCorrupt
-   {"rate": 5000, "hook": "tc", "iface": null}
+   { "delay": "100ms", "jitter": "10ms", "iface": "eth0" }
+   { "delay_s": 3.0, "port": 18001, "upstream": "http://127.0.0.1:11434" }
+   { "pattern": "*.pdb", "directory": "/data", "interval": "10m" }
+   { "cores": 4, "duration_s": 120 }
+   { "service": "nginx", "action": "stop", "was_active": true }
 
 events
 ~~~~~~
 
-Append-only timestamped log. Every state change — start, stop, error,
-and every shell command run on the target — is written here.
+Append-only timestamped event log.  Every state change and every command
+run on the target is written here.
 
 .. code-block:: sql
 
    CREATE TABLE events (
        id          INTEGER PRIMARY KEY AUTOINCREMENT,
        session_id  INTEGER NOT NULL REFERENCES sessions(id),
-       fault_id    INTEGER REFERENCES faults(id),  -- NULL for session-level events
+       fault_id    INTEGER REFERENCES faults(id),  -- NULL for session-level
        timestamp   TEXT    NOT NULL,
        message     TEXT    NOT NULL
    );
 
-Typical event sequence for one session with one fault:
-
-.. code-block:: text
+Typical event sequence::
 
    Session started: net-delay
    Starting fault: NetworkDelay
-   [cmd:OK] # tc qdisc add dev eth0 root netem delay 100ms | exit=0 | stdout: (none)
+   [cmd:OK] tc qdisc add dev eth0 root netem delay 100ms | exit=0
    Fault started: NetworkDelay
    Stopping fault: NetworkDelay
-   [cmd:OK] # tc qdisc del dev eth0 root | exit=0 | stdout: (none)
+   [cmd:OK] tc qdisc del dev eth0 root | exit=0
    Fault stopped and reverted: NetworkDelay
    Session closed
-
-Every command the framework runs on the target (via ``tc``, ``dd``, etc.)
-is logged as a ``[cmd:OK]`` or ``[cmd:ERROR]`` event, so you can see
-exactly what chaos-jungle did on the machine. These appear in the
-dashboard event log and are included in exports.
 
 results
 ~~~~~~~
 
-Optional table populated by ``runner.record_result()``. Stores arbitrary
-JSON metrics linked to the session — throughput, retries, failure counts,
-latency — anything your workload measures.
+Populated by ``runner.record_result()``.  Stores arbitrary JSON metrics
+linked to the session.
 
 .. code-block:: sql
 
@@ -166,114 +116,38 @@ latency — anything your workload measures.
 .. code-block:: python
 
    runner.record_result({
-       "files_transferred":  120,
-       "files_corrupted":      3,
-       "retries":              7,
-       "throughput_mbps":    42.1,
-       "baseline_latency_ms": 0.2,
-       "chaos_latency_ms":  108.6,
+       "duration_s":      3.21,
+       "success":         1,
+       "faithfulness":    0.18,
+       "hallucination":   0.91,
+       "retries":         3,
+       "throughput_mbps": 42.1,
    })
 
-When you export to CSV, all keys in ``metrics`` become extra columns in
-the output file — no schema changes needed.
+All keys in ``metrics`` become extra columns when you export to CSV.
 
-----
+commands
+~~~~~~~~
 
-StorageCorrupt defaults and options
---------------------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 25 15 15 45
-
-   * - Parameter
-     - Type
-     - Default
-     - Description
-   * - ``pattern``
-     - str
-     - *(required)*
-     - Glob pattern for files to corrupt, e.g. ``"*.pdb"``, ``"*.dat"``.
-   * - ``directory``
-     - str
-     - *(required)*
-     - Absolute path to the directory to watch.
-   * - ``interval``
-     - str
-     - ``"10m"``
-     - How often to flip bits. Accepts ``"5m"``, ``"1h"``, ``"30s"``.
-   * - ``recursive``
-     - bool
-     - ``True``
-     - Search ``directory`` recursively for matching files.
-   * - ``cj_storage_path``
-     - str
-     - *(auto-deployed)*
-     - **Do not set.** The scripts are bundled inside the package and
-       deployed automatically to ``~/.chaos-jungle/storage/`` on the
-       target at ``start()`` time. Only override if you have a custom
-       build of ``cj_storage.py`` at a specific path.
-
-``StorageCorrupt`` uses a **crontab** on the target machine to schedule
-periodic bit-flips. Each corrupted byte is recorded in ``cj.db`` before
-being flipped, so ``runner.stop()`` can restore every file exactly.
-
-cj.db — bit-flip records
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Managed by the original ``cj_storage.py`` script. chaos-jungle never reads
-or writes to it directly. The schema (as created by cj_storage) is:
+Captures every command executed via ``target.run()`` / ``target.sudo()``.
+Useful for auditing exactly what chaos-jungle did on the target machine.
 
 .. code-block:: sql
 
-   CREATE TABLE corrupt (
-       id          INTEGER PRIMARY KEY AUTOINCREMENT,
-       filepath    TEXT NOT NULL,      -- absolute path to the corrupted file
-       offset      INTEGER NOT NULL,   -- byte offset that was flipped
-       original    BLOB NOT NULL,      -- original byte value (1 byte)
-       timestamp   TEXT NOT NULL       -- when the corruption was injected
+   CREATE TABLE commands (
+       id           INTEGER PRIMARY KEY AUTOINCREMENT,
+       session_id   INTEGER NOT NULL REFERENCES sessions(id),
+       cmd          TEXT    NOT NULL,
+       stdout       TEXT,
+       stderr       TEXT,
+       rc           INTEGER,
+       executed_at  TEXT    NOT NULL
    );
 
-When ``runner.stop()`` calls ``cj_storage.py --revert``, each row in
-``corrupt`` is used to write the original byte back with ``dd``.
-
 ----
 
-Querying the database directly
----------------------------------
-
-The SQLite file can be queried with any SQLite client.
-
-.. code-block:: bash
-
-   sqlite3 ~/.chaos-jungle/chaos_jungle.db
-
-   -- all sessions
-   SELECT id, name, status, started_at, stopped_at FROM sessions;
-
-   -- faults in session 3
-   SELECT kind, parameters, started_at, stopped_at
-   FROM faults WHERE session_id = 3;
-
-   -- full event log for session 3
-   SELECT timestamp, message FROM events WHERE session_id = 3 ORDER BY id;
-
-   -- sessions still marked 'running' (may indicate a crashed run)
-   SELECT * FROM sessions WHERE status = 'running';
-
-   -- total chaos time per scenario (seconds)
-   SELECT name,
-          SUM(
-            (julianday(stopped_at) - julianday(started_at)) * 86400
-          ) AS total_s
-   FROM sessions
-   WHERE stopped_at IS NOT NULL
-   GROUP BY name;
-
-----
-
-Python API — reading session data
-------------------------------------
+Python API
+-----------
 
 .. code-block:: python
 
@@ -285,54 +159,63 @@ Python API — reading session data
    for row in db.list_sessions():
        print(row["id"], row["name"], row["status"])
 
-   # export one session as a plain dict (JSON-serializable)
+   # export one session as a JSON-serializable dict
    data = db.export_session(session_id=3)
-
-   print(data["session"])   # dict with id, name, started_at, stopped_at, status
+   print(data["session"])   # id, name, started_at, stopped_at, status
    print(data["faults"])    # list of fault dicts
    print(data["events"])    # list of event dicts
 
-   # read workflow metrics stored by runner.record_result()
-   results = db.get_results(session_id=3)
-   for r in results:
-       print(r["metrics"])  # dict of key/value pairs
+   # read metrics stored by record_result()
+   for r in db.get_results(session_id=3):
+       print(r["metrics"])
 
    # check if chaos is currently running
    active = db.active_session()
    if active:
        print(f"Session {active['id']} is running: {active['name']}")
 
-Export structure (``export_session`` return value):
+Custom database path (e.g. one DB per experiment run):
 
 .. code-block:: python
 
-   {
-       "session": {
-           "id": 3,
-           "name": "net-delay",
-           "started_at": "2025-05-29T14:00:00.000000+00:00",
-           "stopped_at": "2025-05-29T14:10:01.234567+00:00",
-           "status": "reverted"
-       },
-       "faults": [
-           {
-               "id": 5,
-               "session_id": 3,
-               "kind": "NetworkDelay",
-               "parameters": "{\"delay\": \"100ms\", \"jitter\": \"10ms\", \"iface\": null}",
-               "started_at": "2025-05-29T14:00:00.456789+00:00",
-               "stopped_at": "2025-05-29T14:10:00.987654+00:00"
-           }
-       ],
-       "events": [
-           {"id": 9,  "session_id": 3, "fault_id": null, "timestamp": "...", "message": "Session started: net-delay"},
-           {"id": 10, "session_id": 3, "fault_id": 5,    "timestamp": "...", "message": "Starting fault: NetworkDelay"},
-           {"id": 11, "session_id": 3, "fault_id": 5,    "timestamp": "...", "message": "Fault started: NetworkDelay"},
-           {"id": 12, "session_id": 3, "fault_id": 5,    "timestamp": "...", "message": "Stopping fault: NetworkDelay"},
-           {"id": 13, "session_id": 3, "fault_id": 5,    "timestamp": "...", "message": "Fault stopped and reverted: NetworkDelay"},
-           {"id": 14, "session_id": 3, "fault_id": null, "timestamp": "...", "message": "Session closed"}
-       ]
-   }
+   from chaos_jungle.db.session_db import SessionDB
+   from chaos_jungle import ChaosRunner, Scenario, NetworkDelay, LocalTarget
+
+   db     = SessionDB(path="/tmp/experiment-1.db")
+   runner = ChaosRunner(
+       Scenario("custom-db", [NetworkDelay("100ms")]),
+       LocalTarget(),
+       db=db,
+   )
+   runner.run("5m")
+
+----
+
+Querying directly with SQLite
+------------------------------
+
+.. code-block:: bash
+
+   sqlite3 ~/.chaos-jungle/chaos_jungle.db
+
+   -- all sessions
+   SELECT id, name, status, started_at, stopped_at FROM sessions;
+
+   -- faults in session 3
+   SELECT kind, parameters FROM faults WHERE session_id = 3;
+
+   -- full event log for session 3
+   SELECT timestamp, message FROM events WHERE session_id = 3 ORDER BY id;
+
+   -- sessions still marked 'running' (may indicate a crashed run)
+   SELECT * FROM sessions WHERE status = 'running';
+
+   -- total chaos time per scenario in seconds
+   SELECT name,
+          ROUND(SUM((julianday(stopped_at) - julianday(started_at)) * 86400), 1) AS total_s
+   FROM sessions
+   WHERE stopped_at IS NOT NULL
+   GROUP BY name;
 
 ----
 
@@ -341,23 +224,20 @@ CLI — session management
 
 .. code-block:: bash
 
-   # show current running session
+   # show the current running session
    chaos-jungle status
 
-   # list all sessions (all time)
+   # list all sessions
    chaos-jungle list
 
-   # export session 3 → auto-named JSON file on disk
+   # export session 3 → JSON file
    chaos-jungle export --session 3
 
-   # export session 3 → CSV with metrics columns
+   # export session 3 → CSV with metrics columns flattened
    chaos-jungle export --session 3 --format csv
 
    # export all sessions → chaos_sessions.csv
    chaos-jungle export --format csv
-
-   # custom output path
-   chaos-jungle export --session 3 --format json --output run3.json
 
    # stop and revert the most recent session
    chaos-jungle stop
@@ -367,56 +247,79 @@ CLI — session management
 
 ----
 
-CLI — fetching results from remote machines
----------------------------------------------
+Fetching results from a remote machine
+----------------------------------------
 
-After a remote run (SSH target), use ``chaos-jungle fetch`` to pull the
-session database and any log files to a local directory.
+After a run with ``SSHTarget``, pull the database and logs to your machine:
 
 .. code-block:: bash
 
-   # fetch DB and auto-export CSV (default)
+   # fetch DB + auto-export to CSV
    chaos-jungle fetch --target ssh://ubuntu@worker1
 
-   # fetch DB + cj.log, save to ./experiment-1/
+   # fetch DB + storage log, save to ./experiment-1/
    chaos-jungle fetch --target ssh://ubuntu@worker1 \
        --files "chaos_jungle.db,cj.log" \
        --output-dir ./experiment-1/
 
-   # result:
-   #   ./experiment-1/chaos_jungle.db    ← full SQLite DB
-   #   ./experiment-1/cj.log             ← storage bit-flip log
-   #   ./experiment-1/chaos_sessions.csv ← portable CSV with metrics
+Result::
 
-The auto-generated CSV has the same structure as
-``chaos-jungle export --format csv``:
+   ./experiment-1/
+     chaos_jungle.db       ← full SQLite session DB
+     cj.log                ← storage bit-flip log
+     chaos_sessions.csv    ← auto-generated CSV with all metrics
 
-.. code-block:: text
+CSV column layout::
 
    session_id, name, status, started_at, stopped_at, duration_s,
-   fault_kind, fault_parameters, <...metrics from record_result()>
+   fault_kind, fault_parameters, <keys from record_result()>
 
-----
-
-Custom database path
----------------------
-
-If you need multiple independent databases (e.g. one per experiment run):
+In Python:
 
 .. code-block:: python
 
-   from chaos_jungle.db.session_db import SessionDB
-   from chaos_jungle import Scenario, ChaosRunner
-   from chaos_jungle.faults import NetworkDelay
-   from chaos_jungle.targets import LocalTarget
+   from chaos_jungle.targets import SSHTarget
 
-   db = SessionDB(path="/tmp/my-experiment.db")
+   target = SSHTarget("worker1", user="ubuntu")
+   target.connect()
+   target.get("~/.chaos-jungle/chaos_jungle.db", "./results/chaos_jungle.db")
+   target.disconnect()
 
-   runner = ChaosRunner(
-       Scenario("custom-db", [NetworkDelay("100ms")]),
-       LocalTarget(),
-       db=db,
-   )
-   runner.run("5m")
+----
 
-   data = db.export_session(runner._session_id)
+Export structure (``export_session`` return value)
+----------------------------------------------------
+
+.. code-block:: python
+
+   {
+       "session": {
+           "id": 3, "name": "net-delay",
+           "started_at": "2026-06-04T14:00:00+00:00",
+           "stopped_at": "2026-06-04T14:10:01+00:00",
+           "status": "reverted"
+       },
+       "faults": [{
+           "id": 5, "session_id": 3,
+           "kind": "NetworkDelay",
+           "parameters": "{\"delay\": \"100ms\", \"jitter\": \"10ms\"}",
+           "started_at": "...", "stopped_at": "..."
+       }],
+       "events": [
+           {"id": 9,  "message": "Session started: net-delay", ...},
+           {"id": 10, "message": "Starting fault: NetworkDelay", ...},
+           {"id": 11, "message": "Fault started: NetworkDelay", ...},
+           {"id": 12, "message": "Stopping fault: NetworkDelay", ...},
+           {"id": 13, "message": "Fault stopped and reverted: NetworkDelay", ...},
+           {"id": 14, "message": "Session closed", ...}
+       ],
+       "results": [{"metrics": {"duration_s": 3.21, "success": 1}}],
+       "commands": [{"cmd": "tc qdisc add ...", "rc": 0, "stdout": ""}]
+   }
+
+See also
+---------
+
+* :ref:`guide-dashboard` — web UI for browsing sessions and metrics
+* :ref:`guide-measurement` — ``runner.measure()`` and quality gates
+* :ref:`guide-ssh` — fetching results from remote SSH targets
