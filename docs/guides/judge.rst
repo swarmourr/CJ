@@ -1,7 +1,7 @@
 .. _guide-judge:
 
-LLM Judge — Resilience Evaluator
-==================================
+LLM Judge
+=========
 
 Traditional chaos engineering measures system health with binary metrics:
 did the CPU spike? did the request return 500?  For LLM-powered systems,

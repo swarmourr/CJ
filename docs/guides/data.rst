@@ -1,7 +1,7 @@
 .. _guide-data:
 
-Data Storage & Export
-======================
+Data & Export
+=============
 
 Every experiment is automatically recorded to a SQLite database.  No
 configuration is needed — chaos-jungle creates the database on first run and

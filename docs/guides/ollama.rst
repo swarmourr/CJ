@@ -1,7 +1,7 @@
 .. _guide-ollama:
 
-Testing LLM agents with Ollama
-================================
+Ollama
+======
 
 This guide shows how to use chaos-jungle to test an `Ollama
 <https://ollama.ai>`_ server running locally.  All LLM fault types are

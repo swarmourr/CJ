@@ -1,7 +1,7 @@
 .. _guide-resources:
 
-Resource Exhaustion Faults
-===========================
+Resource Faults
+===============
 
 Resource exhaustion faults consume CPU, memory, disk space, or I/O
 bandwidth to simulate a **degraded node** — the same class of scenario

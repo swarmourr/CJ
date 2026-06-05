@@ -1,7 +1,7 @@
 .. _guide-measurement:
 
-Measurement & Quality Gates
-============================
+Measurement
+===========
 
 chaos-jungle turns fault injection into a **quantitative** experiment.
 ``runner.measure()`` runs your workload under both baseline and fault

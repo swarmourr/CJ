@@ -1,7 +1,7 @@
 .. _guide-semantic:
 
-Semantic Fault Injection
-========================
+Semantic Faults
+===============
 
 Standard network and proxy faults (delays, 429s, 503s) test *transport-layer*
 resilience.  ``SemanticCorrupt`` tests *semantic-layer* resilience: the HTTP

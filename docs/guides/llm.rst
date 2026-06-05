@@ -1,7 +1,7 @@
 .. _guide-llm:
 
-LLM Agent & MCP Fault Injection
-================================
+LLM API Faults
+==============
 
 Modern AI applications embed LLM calls deep inside agent loops, tool chains,
 and multi-step workflows.  When the model API is slow, throttled, or down the

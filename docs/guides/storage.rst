@@ -1,7 +1,7 @@
 .. _guide-storage:
 
-Storage Fault Injection
-========================
+Storage Faults
+==============
 
 Storage faults simulate **block-level data corruption** — bit flips that
 corrupt input files on disk without breaking file system metadata.  The file

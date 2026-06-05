@@ -1,7 +1,7 @@
 .. _guide-network:
 
-Network Fault Injection
-========================
+Network Faults
+==============
 
 Network faults simulate real-world link degradation — latency, packet loss,
 corruption, and duplication — without touching application code.  Two

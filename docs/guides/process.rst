@@ -1,7 +1,7 @@
 .. _guide-process:
 
-Process, Service & Container Faults
-=====================================
+Process & Service Faults
+========================
 
 These faults operate at the **OS and runtime layer** — killing processes,
 stopping or crashing systemd services, and killing Docker containers.  They

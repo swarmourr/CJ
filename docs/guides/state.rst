@@ -1,7 +1,7 @@
 .. _guide-state:
 
-State-Layer Fault Injection
-============================
+Agent State Faults
+==================
 
 Network and LLM proxy faults test what happens when the *transport* is
 degraded.  State-layer faults test what happens when the *data* an agent
