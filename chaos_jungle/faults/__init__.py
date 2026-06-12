@@ -38,6 +38,11 @@ from chaos_jungle.faults.resources import (
     MemoryStress,
     IOStress,
 )
+from chaos_jungle.faults.gpu import (
+    GPUThrottle,
+    GPUMemoryPressure,
+    GPUClockLock,
+)
 
 __all__ = [
     "Fault",
@@ -75,4 +80,8 @@ __all__ = [
     "CPUStress",
     "MemoryStress",
     "IOStress",
+    # GPU
+    "GPUThrottle",
+    "GPUMemoryPressure",
+    "GPUClockLock",
 ]

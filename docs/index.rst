@@ -22,7 +22,7 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    * - Processes & services
      - Agent state (Redis, JSON, Postgres)
      - CSV export
-   * - CPU / memory / disk
+   * - CPU / memory / disk / GPU
      - Quality scoring (LLMJudge)
      - CI/CD quality gates
 
@@ -60,6 +60,7 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    guides/storage
    guides/process
    guides/resources
+   guides/gpu
 
 .. toctree::
    :maxdepth: 2

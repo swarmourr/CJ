@@ -60,6 +60,7 @@ include = ["chaos_jungle*"]
 [tool.setuptools.package-data]
 "chaos_jungle.scripts.storage" = ["*.py", "*.cfg"]
 "chaos_jungle.scripts.bpf" = ["*.py", "*.c"]
+"chaos_jungle.scripts.gpu" = ["*.py"]
 
 [tool.black]
 line-length = 100

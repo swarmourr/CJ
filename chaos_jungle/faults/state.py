@@ -507,7 +507,8 @@ class PostgresStateCorrupt(Fault):
         self.mutation = mutation
         self.inject_value = inject_value
         self.condition = condition or "TRUE"
-        self._backup_table = f"_cj_backup_{table.replace('.', '_').replace('\"', '')}"
+        safe_table = table.replace(".", "_").replace('"', "")
+        self._backup_table = f"_cj_backup_{safe_table}"
 
     def _psql(self, sql: str) -> str:
         """Return a psql command string that executes *sql*."""

@@ -25,3 +25,7 @@ Faults
 .. automodule:: chaos_jungle.faults.resources
    :members:
    :undoc-members:
+
+.. automodule:: chaos_jungle.faults.gpu
+   :members:
+   :undoc-members:
