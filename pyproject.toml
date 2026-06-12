@@ -56,14 +56,6 @@ chaos-jungle = "chaos_jungle.pytest_plugin"
 [tool.hatch.build.targets.wheel]
 packages = ["chaos_jungle"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"chaos_jungle/scripts/storage" = "chaos_jungle/scripts/storage"
-"chaos_jungle/scripts/bpf"     = "chaos_jungle/scripts/bpf"
-"chaos_jungle/scripts/gpu"     = "chaos_jungle/scripts/gpu"
-
-[tool.hatch.build.targets.sdist]
-include = ["chaos_jungle/"]
-
 [tool.black]
 line-length = 100
 
