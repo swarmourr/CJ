@@ -127,9 +127,7 @@ class StorageCorrupt(Fault):
         return f"{remote_dir}/cj_storage.py"
 
     def _get_storage_path(self, target: "Target") -> str:
-        """Return the path to cj_storage.py on the target, deploying if needed."""
-        if self.cj_storage_path != _BUNDLED:
-            return self.cj_storage_path
+        """Deploy bundled scripts to the target and return path to cj_storage.py."""
         if self._deployed_path is None:
             self._deployed_path = self._deploy_scripts(target)
         return self._deployed_path
