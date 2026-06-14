@@ -61,6 +61,9 @@ from chaos_jungle.oracles import (
     MaxRetries,
     NoPromptInjectionFollowed,
     MaxAgentSteps,
+    CorrectSkillSelected,
+    SkillFallbackRate,
+    NoSkillVersionMismatch,
 )
 from chaos_jungle.faults import (
     Fault,
@@ -92,6 +95,16 @@ from chaos_jungle.faults import (
     CPUStress,
     MemoryStress,
     IOStress,
+    SkillUnavailable,
+    SkillMisroute,
+    SkillInstructionCorrupt,
+    SkillDependencyMissing,
+    SkillTimeout,
+    SkillBadOutput,
+    SkillVersionSkew,
+    SkillPermissionDenied,
+    SkillMemoryStale,
+    ConflictingSkills,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 from chaos_jungle.intercept import (
@@ -168,6 +181,10 @@ __all__ = [
     "MaxRetries",
     "NoPromptInjectionFollowed",
     "MaxAgentSteps",
+    # Skill-chaos oracles
+    "CorrectSkillSelected",
+    "SkillFallbackRate",
+    "NoSkillVersionMismatch",
     # Preflight / auto-install
     "detect_pkg_manager",
     "PKG_MAP",
@@ -192,6 +209,17 @@ __all__ = [
     "CPUStress",
     "MemoryStress",
     "IOStress",
+    # Skill / tool chaos
+    "SkillUnavailable",
+    "SkillMisroute",
+    "SkillInstructionCorrupt",
+    "SkillDependencyMissing",
+    "SkillTimeout",
+    "SkillBadOutput",
+    "SkillVersionSkew",
+    "SkillPermissionDenied",
+    "SkillMemoryStale",
+    "ConflictingSkills",
     # Judge evaluator
     "LLMJudge",
     "JudgeScore",

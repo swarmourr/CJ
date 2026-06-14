@@ -593,6 +593,203 @@ class MaxAgentSteps(Oracle):
 
 
 # ---------------------------------------------------------------------------
+# Skill-chaos oracles
+# ---------------------------------------------------------------------------
+
+
+class CorrectSkillSelected(Oracle):
+    """Assert that the agent invoked the expected skill (tool) for the task.
+
+    Reads the ``"skill_used"`` key from each run dict and checks it against
+    ``expected``.  Comparison is case-insensitive and strips whitespace.
+
+    Parameters
+    ----------
+    expected : str
+        The skill/tool name that should have been called.
+
+    Examples
+    --------
+    ::
+
+        oracle = CorrectSkillSelected(expected="search_web")
+    """
+
+    name = "CorrectSkillSelected"
+
+    def __init__(self, expected: str) -> None:
+        self.expected = expected.strip().lower()
+
+    def check(self, runs: list[dict], phase: str = "both") -> OracleResult:
+        wrong: list[str] = []
+        missing = 0
+        for i, run in enumerate(runs):
+            used = run.get("skill_used")
+            if used is None:
+                missing += 1
+                continue
+            if str(used).strip().lower() != self.expected:
+                wrong.append(f"run #{i + 1} used '{used}'")
+
+        if wrong:
+            return OracleResult(
+                oracle=self.name,
+                passed=False,
+                score=max(0.0, 1.0 - len(wrong) / len(runs)),
+                phase=phase,
+                reason=(
+                    f"Wrong skill selected in {len(wrong)} run(s) "
+                    f"(expected '{self.expected}'): {', '.join(wrong[:3])}"
+                ),
+            )
+        if missing == len(runs):
+            return OracleResult(
+                oracle=self.name,
+                passed=True,
+                score=1.0,
+                phase=phase,
+                reason="'skill_used' key not present in any run — skipped",
+            )
+        return OracleResult(
+            oracle=self.name,
+            passed=True,
+            score=1.0,
+            phase=phase,
+            reason=(
+                f"Correct skill '{self.expected}' selected "
+                f"in all {len(runs) - missing} run(s) with skill data"
+            ),
+        )
+
+
+class SkillFallbackRate(Oracle):
+    """Assert that the agent did not fall back to a secondary skill too often.
+
+    A *fallback* is recorded when the workload sets ``"skill_fallback": True``
+    in the run dict (or ``"skill_fallback": 1``).
+
+    Parameters
+    ----------
+    max_rate : float
+        Maximum acceptable fraction of runs that used a fallback.
+        ``0.0`` means no fallback tolerated; ``1.0`` means always fine.
+        Default ``0.3`` (30%).
+
+    Examples
+    --------
+    ::
+
+        oracle = SkillFallbackRate(max_rate=0.0)   # never fall back
+        oracle = SkillFallbackRate(max_rate=0.5)   # up to 50% fallback ok
+    """
+
+    name = "SkillFallbackRate"
+
+    def __init__(self, max_rate: float = 0.3) -> None:
+        self.max_rate = max_rate
+
+    def check(self, runs: list[dict], phase: str = "both") -> OracleResult:
+        if not runs:
+            return OracleResult(
+                oracle=self.name, passed=True, score=1.0, phase=phase,
+                reason="No runs to check",
+            )
+        fallbacks = sum(1 for r in runs if r.get("skill_fallback"))
+        rate = fallbacks / len(runs)
+        if rate > self.max_rate:
+            return OracleResult(
+                oracle=self.name,
+                passed=False,
+                score=max(0.0, 1.0 - (rate - self.max_rate) / max(1.0 - self.max_rate, 1e-9)),
+                phase=phase,
+                reason=(
+                    f"Skill fallback rate {rate:.0%} exceeds limit {self.max_rate:.0%} "
+                    f"({fallbacks}/{len(runs)} runs used a fallback)"
+                ),
+            )
+        return OracleResult(
+            oracle=self.name,
+            passed=True,
+            score=1.0,
+            phase=phase,
+            reason=(
+                f"Skill fallback rate {rate:.0%} within limit {self.max_rate:.0%} "
+                f"({fallbacks}/{len(runs)} runs)"
+            ),
+        )
+
+
+class NoSkillVersionMismatch(Oracle):
+    """Assert that no skill version-mismatch errors appeared in responses.
+
+    Scans ``"response"`` and ``"skill_error"`` fields for patterns that
+    indicate the agent received a stale or incompatible tool schema (e.g.
+    unknown parameters, deprecated API, contract change).
+
+    Parameters
+    ----------
+    patterns : list[str], optional
+        Additional regex patterns appended to the defaults.
+    strict : bool
+        Replace defaults entirely with ``patterns``. Default ``False``.
+
+    Examples
+    --------
+    ::
+
+        oracle = NoSkillVersionMismatch()
+        oracle = NoSkillVersionMismatch(patterns=[r"parameter.*not.*supported"])
+    """
+
+    name = "NoSkillVersionMismatch"
+
+    _DEFAULTS = [
+        r"(?i)unknown (parameter|argument|field|property)",
+        r"(?i)unexpected (keyword|argument|parameter)",
+        r"(?i)deprecated (api|skill|tool|endpoint|version)",
+        r"(?i)(schema|contract) (mismatch|changed|version)",
+        r"(?i)skill.{0,30}(version|schema).{0,30}(changed|mismatch|incompatible)",
+        r"(?i)(api|interface) (changed|updated|incompatible)",
+        r"(?i)invalid (tool|skill) (call|request|schema)",
+    ]
+
+    def __init__(
+        self,
+        patterns: list[str] | None = None,
+        strict: bool = False,
+    ) -> None:
+        base = [] if strict else list(self._DEFAULTS)
+        self._patterns = [re.compile(p) for p in (base + (patterns or []))]
+
+    def check(self, runs: list[dict], phase: str = "both") -> OracleResult:
+        for i, run in enumerate(runs):
+            text = " ".join(
+                str(run.get(k, ""))
+                for k in ("response", "skill_error", "output")
+            )
+            for pat in self._patterns:
+                m = pat.search(text)
+                if m:
+                    return OracleResult(
+                        oracle=self.name,
+                        passed=False,
+                        score=0.0,
+                        phase=phase,
+                        reason=(
+                            f"Skill version-mismatch pattern detected in run #{i + 1}: "
+                            f"'{m.group()[:80]}'"
+                        ),
+                    )
+        return OracleResult(
+            oracle=self.name,
+            passed=True,
+            score=1.0,
+            phase=phase,
+            reason=f"No skill version-mismatch patterns detected across {len(runs)} run(s)",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -631,4 +828,8 @@ __all__ = [
     "MaxRetries",
     "NoPromptInjectionFollowed",
     "MaxAgentSteps",
+    # Skill-chaos oracles
+    "CorrectSkillSelected",
+    "SkillFallbackRate",
+    "NoSkillVersionMismatch",
 ]

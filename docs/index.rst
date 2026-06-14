@@ -73,6 +73,7 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    guides/intercept
    guides/semantic
    guides/state
+   guides/skill
    guides/judge
    guides/ollama
    guides/scenarios

@@ -43,6 +43,18 @@ from chaos_jungle.faults.gpu import (
     GPUMemoryPressure,
     GPUClockLock,
 )
+from chaos_jungle.faults.skill import (
+    SkillUnavailable,
+    SkillMisroute,
+    SkillInstructionCorrupt,
+    SkillDependencyMissing,
+    SkillTimeout,
+    SkillBadOutput,
+    SkillVersionSkew,
+    SkillPermissionDenied,
+    SkillMemoryStale,
+    ConflictingSkills,
+)
 
 __all__ = [
     "Fault",
@@ -84,4 +96,15 @@ __all__ = [
     "GPUThrottle",
     "GPUMemoryPressure",
     "GPUClockLock",
+    # Skill / tool chaos
+    "SkillUnavailable",
+    "SkillMisroute",
+    "SkillInstructionCorrupt",
+    "SkillDependencyMissing",
+    "SkillTimeout",
+    "SkillBadOutput",
+    "SkillVersionSkew",
+    "SkillPermissionDenied",
+    "SkillMemoryStale",
+    "ConflictingSkills",
 ]
