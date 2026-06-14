@@ -55,6 +55,15 @@ from chaos_jungle.faults.skill import (
     SkillMemoryStale,
     ConflictingSkills,
 )
+from chaos_jungle.faults.skill_file import (
+    SkillFileUnavailable,
+    SkillFileInstructionCorrupt,
+    SkillFileVersionSkew,
+    SkillFileBadOutput,
+    SkillFileMemoryStale,
+    SkillFileConflict,
+    SkillFilePermissionDenied,
+)
 
 __all__ = [
     "Fault",
@@ -96,7 +105,7 @@ __all__ = [
     "GPUThrottle",
     "GPUMemoryPressure",
     "GPUClockLock",
-    # Skill / tool chaos
+    # Skill / tool chaos (proxy-based)
     "SkillUnavailable",
     "SkillMisroute",
     "SkillInstructionCorrupt",
@@ -107,4 +116,12 @@ __all__ = [
     "SkillPermissionDenied",
     "SkillMemoryStale",
     "ConflictingSkills",
+    # Skill / tool chaos (local file-based)
+    "SkillFileUnavailable",
+    "SkillFileInstructionCorrupt",
+    "SkillFileVersionSkew",
+    "SkillFileBadOutput",
+    "SkillFileMemoryStale",
+    "SkillFileConflict",
+    "SkillFilePermissionDenied",
 ]

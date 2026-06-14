@@ -105,6 +105,13 @@ from chaos_jungle.faults import (
     SkillPermissionDenied,
     SkillMemoryStale,
     ConflictingSkills,
+    SkillFileUnavailable,
+    SkillFileInstructionCorrupt,
+    SkillFileVersionSkew,
+    SkillFileBadOutput,
+    SkillFileMemoryStale,
+    SkillFileConflict,
+    SkillFilePermissionDenied,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 from chaos_jungle.intercept import (
@@ -209,7 +216,7 @@ __all__ = [
     "CPUStress",
     "MemoryStress",
     "IOStress",
-    # Skill / tool chaos
+    # Skill / tool chaos (proxy-based)
     "SkillUnavailable",
     "SkillMisroute",
     "SkillInstructionCorrupt",
@@ -220,6 +227,14 @@ __all__ = [
     "SkillPermissionDenied",
     "SkillMemoryStale",
     "ConflictingSkills",
+    # Skill / tool chaos (local file-based)
+    "SkillFileUnavailable",
+    "SkillFileInstructionCorrupt",
+    "SkillFileVersionSkew",
+    "SkillFileBadOutput",
+    "SkillFileMemoryStale",
+    "SkillFileConflict",
+    "SkillFilePermissionDenied",
     # Judge evaluator
     "LLMJudge",
     "JudgeScore",
