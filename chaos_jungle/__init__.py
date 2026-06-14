@@ -48,8 +48,20 @@ from chaos_jungle.runner import ChaosRunner, MeasurementResult
 from chaos_jungle.suite import ExperimentSuite
 from chaos_jungle.decorators import chaos, chaos_session, chaos_measure
 from chaos_jungle.metrics import Metric, PingLatency, CommandMetric, FileIntegrity, metric, ScriptMetric
-from chaos_jungle.guardrails import ConflictError, ConflictWarning
+from chaos_jungle.guardrails import ConflictError, ConflictWarning, SafetyPolicy, DangerError
 from chaos_jungle.preflight import detect_pkg_manager, PKG_MAP
+from chaos_jungle.oracles import (
+    Oracle,
+    OracleResult,
+    run_oracles,
+    NoSecretLeakage,
+    NoPIILeakage,
+    ValidJSONSchema,
+    MaxCost,
+    MaxRetries,
+    NoPromptInjectionFollowed,
+    MaxAgentSteps,
+)
 from chaos_jungle.faults import (
     Fault,
     PreflightError,
@@ -143,6 +155,19 @@ __all__ = [
     # Guardrails
     "ConflictError",
     "ConflictWarning",
+    "SafetyPolicy",
+    "DangerError",
+    # Oracles
+    "Oracle",
+    "OracleResult",
+    "run_oracles",
+    "NoSecretLeakage",
+    "NoPIILeakage",
+    "ValidJSONSchema",
+    "MaxCost",
+    "MaxRetries",
+    "NoPromptInjectionFollowed",
+    "MaxAgentSteps",
     # Preflight / auto-install
     "detect_pkg_manager",
     "PKG_MAP",

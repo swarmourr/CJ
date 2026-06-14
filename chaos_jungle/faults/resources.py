@@ -48,6 +48,7 @@ class DiskFull(Fault):
     """
 
     dependencies: list[str] = ["coreutils"]
+    danger_level: int = 2  # destructive — fills disk, requires cleanup
 
     def __init__(self, path: str = "/tmp", size_mb: int = 2048) -> None:
         if not path.startswith("/"):
@@ -100,6 +101,7 @@ class CPUStress(Fault):
     """
 
     dependencies: list[str] = ["stress-ng"]
+    danger_level: int = 1  # moderate — saturates CPU, affects co-located workloads
 
     def __init__(self, cores: int = 1, duration_s: int = 120) -> None:
         if cores < 1:
@@ -145,6 +147,7 @@ class MemoryStress(Fault):
     """
 
     dependencies: list[str] = ["stress-ng"]
+    danger_level: int = 1  # moderate — allocates system RAM, may OOM co-located processes
 
     def __init__(self, mb: int = 512, duration_s: int = 120) -> None:
         if mb < 1:

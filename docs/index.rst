@@ -12,10 +12,10 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
 
    * - **Infrastructure**
      - **LLM / AI**
-     - **Observability**
+     - **Observability & Safety**
    * - Network (tc / BPF)
      - API faults (latency, rate-limit, corrupt)
-     - Session database (SQLite)
+     - Session database + trace events (SQLite)
    * - Storage (bit-flip)
      - Semantic (entity swap, RAG poison)
      - Web dashboard
@@ -25,6 +25,9 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    * - CPU / memory / disk / GPU
      - Quality scoring (LLMJudge)
      - CI/CD quality gates
+   * - Safety policy + danger levels
+     - Oracle assertions (PII, cost, injection)
+     - Trace replay
 
 ----
 
@@ -82,6 +85,14 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    guides/metrics
    guides/dashboard
    guides/data
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Safety & Assertions
+
+   guides/safety
+   guides/oracles
+   guides/traces
 
 .. toctree::
    :maxdepth: 2

@@ -202,11 +202,20 @@ class LLMLatency(_LLMProxyFault):
 
     def __init__(
         self,
-        delay_s: float = 2.0,
+        delay_s: "float | str" = 2.0,
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
     ) -> None:
+        # Accept human-readable strings like "500ms", "1.5s", "2s"
+        if isinstance(delay_s, str):
+            s = delay_s.strip().lower()
+            if s.endswith("ms"):
+                delay_s = float(s[:-2]) / 1000.0
+            elif s.endswith("s"):
+                delay_s = float(s[:-1])
+            else:
+                delay_s = float(s)
         if delay_s < 0:
             raise ValueError(f"LLMLatency 'delay_s' must be >= 0, got {delay_s}.")
         super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)

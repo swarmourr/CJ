@@ -51,6 +51,7 @@ class StorageCorrupt(Fault):
 
     dependencies = ["python3", "e2fsprogs", "inotify-tools", "coreutils"]
     pip_dependencies = ["python-crontab"]
+    danger_level: int = 2  # destructive — corrupts file bytes, requires revert to restore
 
     _INTERVAL_RE = __import__("re").compile(r"^\d+(\.\d+)?(s|m|h)$")
 

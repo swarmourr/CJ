@@ -93,6 +93,15 @@ class JudgeScore:
     reasoning: str = ""
     raw: dict = field(default_factory=dict, repr=False)
 
+    @property
+    def guardrail_score(self) -> float:
+        """Continuous guardrail score — ``0.0`` = violation, ``1.0`` = clean.
+
+        This is the complement of :attr:`guardrail_violation` as a float,
+        making it composable with other 0.0–1.0 quality metrics.
+        """
+        return 0.0 if self.guardrail_violation else 1.0
+
     def passed(self, faithfulness_min: float = 0.7, hallucination_max: float = 0.3) -> bool:
         """Return ``True`` if the response meets the quality thresholds.
 

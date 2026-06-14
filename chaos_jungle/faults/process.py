@@ -47,6 +47,7 @@ class ProcessKill(Fault):
     """
 
     dependencies: list[str] = ["procps"]  # provides pkill / pgrep
+    danger_level: int = 2  # destructive — kills processes irreversibly
 
     def __init__(self, pattern: str, signal: str = "KILL") -> None:
         if not pattern or not pattern.strip():
@@ -102,6 +103,7 @@ class ServiceFault(Fault):
     """
 
     dependencies: list[str] = ["systemd"]
+    danger_level: int = 2  # destructive — stops services, may cause outages
 
     VALID_ACTIONS = ("stop", "restart", "kill", "mask")
 
@@ -162,6 +164,7 @@ class ContainerKill(Fault):
     """
 
     dependencies: list[str] = ["docker"]
+    danger_level: int = 2  # destructive — terminates/removes containers
 
     VALID_ACTIONS = ("kill", "stop", "pause", "rm")
 

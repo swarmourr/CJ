@@ -26,6 +26,22 @@ class Fault(ABC):
     -----
     All fault methods receive a :class:`~chaos_jungle.targets.base.Target`
     instance so they can execute commands on the correct machine.
+
+    Class attributes
+    ----------------
+    danger_level : int
+        Safety classification of this fault type:
+
+        * ``0`` — **safe** — reversible, no persistent side effects
+          (e.g. network delay, LLM latency injection).
+        * ``1`` — **moderate** — resource consumption, may affect other
+          workloads on the same machine (e.g. CPU stress, memory stress).
+        * ``2`` — **destructive** — may cause data loss, service outages,
+          or require manual cleanup (e.g. process kill, disk fill, storage
+          corruption).
+
+        :class:`~chaos_jungle.guardrails.SafetyPolicy` uses this to gate
+        which faults are allowed to run.
     """
 
     #: System packages required on the target machine (canonical names).
@@ -33,6 +49,9 @@ class Fault(ABC):
 
     #: Python (pip) packages required on the target machine.
     pip_dependencies: list[str] = []
+
+    #: Safety classification (0=safe, 1=moderate, 2=destructive).
+    danger_level: int = 0
 
     @abstractmethod
     def start(self, target: "Target") -> None:
@@ -50,6 +69,27 @@ class Fault(ABC):
         For stateful faults (e.g. storage corruption) this restores
         original data.
         """
+
+    def dry_run(self, target: "Target") -> None:
+        """Print what this fault *would* do without actually doing it.
+
+        Called by :class:`~chaos_jungle.runner.ChaosRunner` when
+        ``dry_run=True`` is set on the runner or when a
+        :class:`~chaos_jungle.guardrails.SafetyPolicy` with ``dry_run=True``
+        is enforced.
+
+        The default implementation prints the fault name and parameters.
+        Subclasses may override to produce more detailed output.
+
+        Parameters
+        ----------
+        target :
+            The machine that would be targeted.
+        """
+        print(
+            f"[chaos-jungle] DRY-RUN {self.__class__.__name__}({self._parameters()}) "
+            f"on {target.__class__.__name__} — not executed"
+        )
 
     def preflight(
         self,

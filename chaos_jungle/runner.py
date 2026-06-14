@@ -4,20 +4,19 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, TYPE_CHECKING
 
 from chaos_jungle._duration import parse_duration
 from chaos_jungle.db.session_db import SessionDB
-from chaos_jungle.guardrails import apply_guardrails
+from chaos_jungle.guardrails import apply_guardrails, SafetyPolicy
 from chaos_jungle.scenario import Scenario
 from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
 from chaos_jungle.targets.logging import LoggingTarget
 
-# Lazy import to avoid circular dependency — judge.py imports nothing from runner
-TYPE_CHECKING = False
 if TYPE_CHECKING:
     from chaos_jungle.judge import JudgeScore, LLMJudge
+    from chaos_jungle.oracles import Oracle, OracleResult
 
 
 @dataclass
@@ -63,6 +62,7 @@ class MeasurementResult:
     judge_baseline: "JudgeScore | None" = field(default=None, repr=False)
     judge_fault: "JudgeScore | None" = field(default=None, repr=False)
     judge_delta: dict = field(default_factory=dict)
+    oracle_results: "list[OracleResult]" = field(default_factory=list)
 
     def passed(self, key: str, threshold: float) -> bool:
         """Return True if ``abs(delta[key]) <= threshold``."""
@@ -89,6 +89,44 @@ class MeasurementResult:
                 "No judge scores available — pass evaluator= to ChaosRunner.measure()."
             )
         return self.judge_fault.passed(faithfulness_min, hallucination_max)
+
+    def passed_oracles(self, phase: str | None = None) -> bool:
+        """Return ``True`` if all oracle assertions passed.
+
+        Parameters
+        ----------
+        phase : str, optional
+            Filter to a specific phase — ``"baseline"``, ``"fault"``, or
+            ``"both"``.  When ``None`` (default), all results are checked.
+
+        Returns
+        -------
+        bool
+            ``True`` only if every oracle in ``oracle_results`` passed.
+
+        Raises
+        ------
+        RuntimeError
+            If no oracles were passed to :meth:`ChaosRunner.measure`.
+
+        Examples
+        --------
+        ::
+
+            result = runner.measure(workload, oracles=[NoPIILeakage(), MaxCost(0.05)])
+            if not result.passed_oracles():
+                for r in result.oracle_results:
+                    if not r.passed:
+                        print(f"FAIL {r.oracle}: {r.reason}")
+        """
+        if not self.oracle_results:
+            raise RuntimeError(
+                "No oracle results available — pass oracles= to ChaosRunner.measure()."
+            )
+        subset = self.oracle_results
+        if phase is not None:
+            subset = [r for r in self.oracle_results if r.phase in (phase, "both")]
+        return all(r.passed for r in subset)
 
     def summary(self) -> str:
         """Human-readable table of baseline / fault / delta per metric."""
@@ -124,6 +162,21 @@ class MeasurementResult:
             )
             if jf.reasoning:
                 lines.append(f"\n  Judge note: {jf.reasoning}")
+
+        if self.oracle_results:
+            lines.append("")
+            lines.append("  Oracle assertions:")
+            for r in self.oracle_results:
+                status = "PASS" if r.passed else "FAIL"
+                score_str = f"  score={r.score:.2f}" if not r.passed else ""
+                lines.append(
+                    f"    [{status}] {r.oracle:<30} ({r.phase})  {r.reason}{score_str}"
+                )
+            n_fail = sum(1 for r in self.oracle_results if not r.passed)
+            if n_fail:
+                lines.append(f"  {n_fail} oracle(s) FAILED")
+            else:
+                lines.append(f"  All {len(self.oracle_results)} oracle(s) passed")
 
         return "\n".join(lines)
 
@@ -189,6 +242,7 @@ class ChaosRunner:
         auto_preflight: bool = True,
         auto_install: bool = False,
         conflict: str = "raise",
+        policy: SafetyPolicy | None = None,
     ) -> None:
         if conflict not in ("raise", "warn", "force"):
             raise ValueError(f"conflict must be 'raise', 'warn', or 'force', got {conflict!r}")
@@ -198,6 +252,7 @@ class ChaosRunner:
         self.auto_preflight = auto_preflight
         self.auto_install = auto_install
         self.conflict = conflict
+        self.policy = policy
         self._session_id: int | None = None
         self._fault_ids: list[int] = []
         self._timer: threading.Timer | None = None
@@ -280,6 +335,11 @@ class ChaosRunner:
             runtime=True,
         )
 
+        # safety policy — danger level, path allowlist, target allowlist
+        if self.policy is not None:
+            self.policy.check_scenario(self.scenario)
+            self.policy.check_target(self.target)
+
         self._session_id = self.db.open_session(self.scenario.name)
         self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
 
@@ -304,8 +364,12 @@ class ChaosRunner:
                 f"Starting fault: {fault.__class__.__name__}",
                 fault_id=fid,
             )
-            print(f"[chaos-jungle] Injecting {fault.__class__.__name__}({fault._parameters()})")
-            fault.start(logged)
+            _dry = self.policy is not None and self.policy.dry_run
+            if _dry:
+                fault.dry_run(logged)
+            else:
+                print(f"[chaos-jungle] Injecting {fault.__class__.__name__}({fault._parameters()})")
+                fault.start(logged)
             self.db.add_event(
                 self._session_id,
                 f"Fault started: {fault.__class__.__name__}",
@@ -448,6 +512,7 @@ class ChaosRunner:
         n_baseline: int = 1,
         n_fault: int = 1,
         evaluator: "LLMJudge | None" = None,
+        oracles: "list[Oracle] | None" = None,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -496,12 +561,27 @@ class ChaosRunner:
             and ``"response"`` keys is scored for faithfulness, hallucination,
             and coherence. Scores are averaged and included in
             :class:`MeasurementResult`.
+        oracles : list[Oracle], optional
+            Oracle assertion instances to run against the fault runs. Each
+            oracle inspects the raw fault workload results and returns a
+            pass/fail :class:`~chaos_jungle.oracles.OracleResult`.  Results
+            are stored in :attr:`MeasurementResult.oracle_results` and shown
+            in :meth:`MeasurementResult.summary`::
+
+                from chaos_jungle.oracles import NoPIILeakage, MaxCost
+                result = runner.measure(
+                    workload, n_fault=3,
+                    oracles=[NoPIILeakage(), MaxCost(max_usd=0.05)],
+                )
+                if not result.passed_oracles():
+                    raise AssertionError("Oracle failure")
 
         Returns
         -------
         MeasurementResult
-            Contains averaged baseline/fault metrics, their delta, and
-            optionally LLM quality scores when *evaluator* is provided.
+            Contains averaged baseline/fault metrics, their delta,
+            optionally LLM quality scores when *evaluator* is provided,
+            and oracle assertion results when *oracles* is provided.
         """
         from chaos_jungle.judge import average_scores  # lazy import
 
@@ -572,6 +652,23 @@ class ChaosRunner:
                     "coherence": round(jf.coherence - jb.coherence, 4),
                 }
 
+        # ── 5. Oracle assertions (optional) ───────────────────────
+        oracle_results: list = []
+        if oracles:
+            from chaos_jungle.oracles import run_oracles
+            print(f"[chaos-jungle] Running {len(oracles)} oracle assertion(s) ...")
+            baseline_oracle = run_oracles(oracles, raw_baseline, phase="baseline")
+            fault_oracle    = run_oracles(oracles, raw_fault,    phase="fault")
+            # Interleave: baseline result then fault result for each oracle
+            for b_res, f_res in zip(baseline_oracle, fault_oracle):
+                oracle_results.append(b_res)
+                oracle_results.append(f_res)
+            n_fail = sum(1 for r in oracle_results if not r.passed)
+            if n_fail:
+                print(f"[chaos-jungle] Oracle: {n_fail} assertion(s) FAILED")
+            else:
+                print(f"[chaos-jungle] Oracle: all {len(oracles)} assertion(s) passed")
+
         result = MeasurementResult(
             scenario=self.scenario.name,
             session_id=self._session_id,
@@ -585,15 +682,30 @@ class ChaosRunner:
             judge_baseline=judge_baseline_score,
             judge_fault=judge_fault_score,
             judge_delta=judge_delta,
+            oracle_results=oracle_results,
         )
 
-        # ── 5. Persist to DB ──────────────────────────────────────
+        # ── 6. Persist to DB ──────────────────────────────────────
         db_result: dict = {"baseline": baseline, "fault": fault, "delta": delta}
         if judge_delta:
             db_result["judge_delta"] = judge_delta
             if judge_fault_score:
                 db_result["judge_fault"] = judge_fault_score.to_dict()
         self.record_result(db_result)
+
+        if oracle_results and self._session_id is not None:
+            for r in oracle_results:
+                self.db.add_trace_event(
+                    self._session_id,
+                    "oracle_result",
+                    {
+                        "oracle": r.oracle,
+                        "passed": r.passed,
+                        "score":  r.score,
+                        "reason": r.reason,
+                        "phase":  r.phase,
+                    },
+                )
 
         return result
 

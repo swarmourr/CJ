@@ -8,9 +8,12 @@ Three validators run at different points:
   (existing tc rules, running crontabs) before injecting.
 * :class:`SuiteValidator` — checks an ``ExperimentSuite`` for
   cross-scenario conflicts before any parallel run begins.
+* :class:`SafetyPolicy` — configures what danger levels are permitted,
+  enables dry-run mode, and restricts allowed paths and targets.
 """
 
 from __future__ import annotations
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,6 +33,129 @@ class ConflictError(RuntimeError):
 
 class ConflictWarning(UserWarning):
     """Issued instead of raising when ``conflict="warn"`` is set."""
+
+
+class DangerError(RuntimeError):
+    """Raised when a fault's ``danger_level`` exceeds the policy's ``max_danger``.
+
+    Always raised regardless of the ``conflict`` mode — safety policy
+    violations are never silently ignored.
+    """
+
+
+@dataclass
+class SafetyPolicy:
+    """Define safety constraints enforced before any fault is injected.
+
+    Pass a :class:`SafetyPolicy` instance as the ``policy=`` argument to
+    :class:`~chaos_jungle.runner.ChaosRunner` to control what faults are
+    permitted to run.
+
+    Attributes
+    ----------
+    max_danger : int
+        Maximum ``danger_level`` permitted.  Faults with a higher level raise
+        :exc:`DangerError` before injection.
+
+        * ``0`` — only safe, fully reversible faults (network/LLM latency,
+          loss, etc.)
+        * ``1`` — also allows moderate resource faults (CPU/memory stress)
+        * ``2`` — allows all faults including destructive ones (kill, disk fill,
+          storage corruption)
+
+        Default ``1``.
+    dry_run : bool
+        When ``True``, :meth:`Fault.dry_run` is called instead of
+        :meth:`Fault.start`, so nothing is actually injected.  Useful for
+        validating experiment config before running in production.
+        Default ``False``.
+    allowed_paths : list[str]
+        Allowlist of absolute path prefixes for path-based faults
+        (e.g. :class:`~chaos_jungle.faults.resources.DiskFull`,
+        :class:`~chaos_jungle.faults.storage.StorageCorrupt`).
+        When non-empty, faults targeting paths outside this list are blocked.
+        Default ``[]`` (no restriction).
+    allowed_targets : list[str]
+        Allowlist of target hostnames or IP addresses.  When non-empty, only
+        these targets are permitted.  Uses ``getattr(target, "host", None)``
+        to extract the hostname.  Default ``[]`` (no restriction).
+
+    Examples
+    --------
+    Dry-run everything to validate config before real injection::
+
+        from chaos_jungle.guardrails import SafetyPolicy
+
+        policy = SafetyPolicy(dry_run=True)
+        runner = ChaosRunner(scenario, LocalTarget(), policy=policy)
+        runner.start()   # prints DRY-RUN messages, does nothing
+
+    Allow only safe faults in CI::
+
+        policy = SafetyPolicy(max_danger=0)
+        runner = ChaosRunner(scenario, LocalTarget(), policy=policy)
+
+    Restrict disk faults to /tmp only::
+
+        policy = SafetyPolicy(max_danger=2, allowed_paths=["/tmp", "/var/tmp"])
+        runner = ChaosRunner(scenario, LocalTarget(), policy=policy)
+    """
+
+    max_danger: int = 1
+    dry_run: bool = False
+    allowed_paths: list[str] = field(default_factory=list)
+    allowed_targets: list[str] = field(default_factory=list)
+
+    def check_fault(self, fault, scenario_name: str = "") -> None:
+        """Raise :exc:`DangerError` if *fault* violates this policy.
+
+        Parameters
+        ----------
+        fault :
+            Any :class:`~chaos_jungle.faults.base.Fault` instance.
+        scenario_name : str, optional
+            Included in error messages for context.
+        """
+        level = getattr(fault, "danger_level", 0)
+        if level > self.max_danger:
+            _LEVEL_NAMES = {0: "safe", 1: "moderate", 2: "destructive"}
+            raise DangerError(
+                f"{'Scenario ' + repr(scenario_name) + ': ' if scenario_name else ''}"
+                f"{fault.__class__.__name__} has danger_level={level} "
+                f"({_LEVEL_NAMES.get(level, 'unknown')}) but this policy "
+                f"permits max_danger={self.max_danger} "
+                f"({_LEVEL_NAMES.get(self.max_danger, 'unknown')}).\n"
+                f"  Fix A: Use a less destructive fault.\n"
+                f"  Fix B: Set SafetyPolicy(max_danger={level}) to explicitly allow it.\n"
+                f"  Fix C: Use SafetyPolicy(dry_run=True) to test without injecting."
+            )
+
+        if self.allowed_paths:
+            path = getattr(fault, "path", None) or getattr(fault, "directory", None)
+            if path:
+                if not any(path.startswith(p) for p in self.allowed_paths):
+                    raise DangerError(
+                        f"{fault.__class__.__name__} targets path {path!r} which is "
+                        f"not in the allowed_paths allowlist: {self.allowed_paths}.\n"
+                        f"  Fix: Add {path!r} to SafetyPolicy(allowed_paths=[...])."
+                    )
+
+    def check_scenario(self, scenario: "Scenario") -> None:
+        """Run :meth:`check_fault` on every fault in *scenario*."""
+        for fault in scenario.faults:
+            self.check_fault(fault, scenario_name=scenario.name)
+
+    def check_target(self, target: "Target") -> None:
+        """Raise :exc:`DangerError` if *target* is not in the allowlist."""
+        if not self.allowed_targets:
+            return
+        host = getattr(target, "host", None)
+        if host and host not in self.allowed_targets:
+            raise DangerError(
+                f"Target host {host!r} is not in the allowed_targets allowlist: "
+                f"{self.allowed_targets}.\n"
+                f"  Fix: Add {host!r} to SafetyPolicy(allowed_targets=[...])."
+            )
 
 
 # ── Helpers ───────────────────────────────────────────────────────

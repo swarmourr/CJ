@@ -97,6 +97,18 @@ class SessionDB:
 
             CREATE INDEX IF NOT EXISTS idx_commands_session
                 ON commands(session_id);
+
+            CREATE TABLE IF NOT EXISTS traces (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id  INTEGER NOT NULL REFERENCES sessions(id),
+                seq         INTEGER NOT NULL DEFAULT 0,
+                timestamp   TEXT    NOT NULL,
+                kind        TEXT    NOT NULL,
+                data        TEXT    NOT NULL DEFAULT '{}'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_traces_session
+                ON traces(session_id);
         """)
         self._conn.commit()
 
@@ -403,6 +415,108 @@ class SessionDB:
             params,
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Traces ────────────────────────────────────────────────────
+
+    def add_trace_event(
+        self,
+        session_id: int,
+        kind: str,
+        data: dict,
+    ) -> int:
+        """Append a structured trace event to the session.
+
+        Trace events capture the LLM interaction boundary: prompts sent,
+        responses received, tool calls made, token usage, cost, and retries.
+        They are the foundation for oracle assertions and replay.
+
+        Parameters
+        ----------
+        session_id : int
+        kind : str
+            Event type — one of ``"prompt"``, ``"response"``, ``"tool_call"``,
+            ``"tool_return"``, ``"retry"``, ``"fault_active"``, ``"oracle_result"``.
+        data : dict
+            Arbitrary JSON-serializable payload. Recommended keys by type:
+
+            * ``"prompt"``      — ``question``, ``context``, ``messages``
+            * ``"response"``    — ``response``, ``tokens_used``, ``cost_usd``,
+              ``model``, ``finish_reason``
+            * ``"tool_call"``   — ``tool_name``, ``args``
+            * ``"tool_return"`` — ``tool_name``, ``output``, ``duration_s``
+            * ``"retry"``       — ``attempt``, ``reason``
+            * ``"oracle_result"`` — ``oracle``, ``passed``, ``score``, ``reason``
+
+        Returns
+        -------
+        int
+            Trace event id.
+        """
+        cur = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM traces WHERE session_id = ?",
+            (session_id,),
+        )
+        seq = cur.fetchone()[0]
+        cur = self._conn.execute(
+            "INSERT INTO traces (session_id, seq, timestamp, kind, data) VALUES (?, ?, ?, ?, ?)",
+            (session_id, seq, _now(), kind, json.dumps(data)),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_trace(self, session_id: int) -> list[dict]:
+        """Return all trace events for a session in sequence order.
+
+        Parameters
+        ----------
+        session_id : int
+
+        Returns
+        -------
+        list[dict]
+            Each dict has keys: ``id``, ``session_id``, ``seq``,
+            ``timestamp``, ``kind``, ``data`` (parsed from JSON).
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM traces WHERE session_id = ? ORDER BY seq",
+            (session_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            row = dict(r)
+            try:
+                row["data"] = json.loads(row["data"])
+            except (TypeError, ValueError):
+                pass
+            out.append(row)
+        return out
+
+    def get_trace_events_by_kind(self, session_id: int, kind: str) -> list[dict]:
+        """Return trace events of a specific kind for a session.
+
+        Parameters
+        ----------
+        session_id : int
+        kind : str
+            Event kind to filter by (e.g. ``"response"``, ``"tool_call"``).
+
+        Returns
+        -------
+        list[dict]
+        """
+        rows = self._conn.execute(
+            "SELECT * FROM traces WHERE session_id = ? AND kind = ? ORDER BY seq",
+            (session_id, kind),
+        ).fetchall()
+        out = []
+        for r in rows:
+            row = dict(r)
+            try:
+                row["data"] = json.loads(row["data"])
+            except (TypeError, ValueError):
+                pass
+            out.append(row)
+        return out
 
     def close(self) -> None:
         self._conn.close()
