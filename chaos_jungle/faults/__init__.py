@@ -56,6 +56,7 @@ from chaos_jungle.faults.skill import (
     ConflictingSkills,
 )
 from chaos_jungle.faults.skill_file import (
+    LLMSkillFaultGenerator,
     SkillFileUnavailable,
     SkillFileInstructionCorrupt,
     SkillFileVersionSkew,
@@ -117,6 +118,7 @@ __all__ = [
     "SkillMemoryStale",
     "ConflictingSkills",
     # Skill / tool chaos (local file-based)
+    "LLMSkillFaultGenerator",
     "SkillFileUnavailable",
     "SkillFileInstructionCorrupt",
     "SkillFileVersionSkew",
