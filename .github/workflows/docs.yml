@@ -33,7 +33,8 @@ jobs:
             "sphinx>=9.0,<10" \
             furo \
             sphinx-autodoc-typehints \
-            myst-parser
+            myst-parser \
+            "sphinxcontrib-mermaid>=0.9"
 
       - name: Build HTML docs
         run: |
