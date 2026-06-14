@@ -9,11 +9,11 @@ observe, and evaluate faults across any layer of a modern system.
 .. mermaid::
 
    flowchart TD
-       CP["**CONTROL PLANE**\nScenario ── ChaosRunner ── ExperimentSuite\n@chaos · @chaos_measure · inject() · door()"]
-       TP["**TRANSPORT PLANE**\nHTTP proxy\nhttpx patch\nOS / BPF"]
-       TGP["**TARGET PLANE**\nLocal\nSSH\nHTTP"]
-       EP["**EVALUATION PLANE**\nLLMJudge\nMetrics\nQuality gates"]
-       DP["**DATA PLANE**\nSQLite DB ──► Web Dashboard ──► CSV Export ──► CLI"]
+       CP["CONTROL PLANE\nScenario ── ChaosRunner ── ExperimentSuite\n@chaos · @chaos_measure · inject() · door()"]
+       TP["TRANSPORT PLANE\nHTTP proxy\nhttpx patch\nOS / BPF"]
+       TGP["TARGET PLANE\nLocal\nSSH\nHTTP"]
+       EP["EVALUATION PLANE\nLLMJudge\nMetrics\nQuality gates"]
+       DP["DATA PLANE\nSQLite DB ──► Web Dashboard ──► CSV Export ──► CLI"]
 
        CP --> TP
        CP --> TGP
