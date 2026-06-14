@@ -81,16 +81,19 @@ Where does each piece run?
 
    To run a command on ``worker1`` itself, use ``target.run()``.
 
-.. code-block:: text
+.. mermaid::
 
-   Your machine                        worker1 (SSH)
-   ─────────────────────────────       ────────────────────────────
-   runner.start()  ── SSH cmd ──────►  NetworkLoss injected ✓
-   run_my_pipeline()                   (no involvement)
-     │
-     └─ affected only if it sends
-        traffic to/from worker1
-   runner.stop()   ── SSH cmd ──────►  NetworkLoss removed ✓
+   flowchart LR
+       subgraph LOCAL["Your machine"]
+           RS["runner.start()\nrunner.stop()"]
+           PL["run_my_pipeline()"]
+       end
+       subgraph WORKER["worker1 (SSH)"]
+           NL["NetworkLoss injected ✓\nNetworkLoss removed ✓"]
+       end
+
+       RS -->|"SSH cmd"| NL
+       PL -.->|"affected only if it sends traffic to/from worker1"| WORKER
 
 To run the pipeline **on worker1**:
 

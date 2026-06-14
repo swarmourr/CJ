@@ -13,26 +13,22 @@ All faults use ``stress-ng`` (CPU / memory / I/O) or standard POSIX
 ``coreutils`` (disk) on the target machine.  They run in the background and
 are cleaned up automatically on ``stop()`` / ``revert()``.
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────────────────────────────────────────┐
-   │                      TARGET  MACHINE                            │
-   │                                                                  │
-   │  ┌─────────────────────────┐    ┌───────────────────────────┐   │
-   │  │   YOUR  APPLICATION     │    │   CJ  STRESS  WORKERS     │   │
-   │  │                         │    │                           │   │
-   │  │  inference / embedding  │    │  CPUStress  ── tight loop │   │
-   │  │  agent calls / pipeline │    │  MemStress  ── vm alloc   │   │
-   │  │                         │    │  IOStress   ── hdd write  │   │
-   │  └──────────┬──────────────┘    │  DiskFull   ── dd zeros   │   │
-   │             │  competes for     └───────────────────────────┘   │
-   │             ▼                                                    │
-   │  ╔══════════════════════════════════════════════════════════╗    │
-   │  ║              SHARED  KERNEL  RESOURCES                   ║    │
-   │  ╠══════════════╦═════════════╦══════════════╦═════════════╣    │
-   │  ║   CPU cores  ║    RAM      ║   Disk I/O   ║  Disk space ║    │
-   │  ╚══════════════╩═════════════╩══════════════╩═════════════╝    │
-   └──────────────────────────────────────────────────────────────────┘
+   flowchart TD
+       subgraph TARGET_R["TARGET MACHINE"]
+           APP_R["YOUR APPLICATION\ninference / embedding\nagent calls / pipeline"]
+           STRESS_R["CJ STRESS WORKERS\nCPUStress — tight loop\nMemStress — vm alloc\nIOStress — hdd write\nDiskFull — dd zeros"]
+           subgraph SHARED_R["SHARED KERNEL RESOURCES"]
+               CPU_R["CPU cores"]
+               RAM_R["RAM"]
+               DISKIO_R["Disk I/O"]
+               DISKSP_R["Disk space"]
+           end
+       end
+
+       APP_R -->|"competes for"| SHARED_R
+       STRESS_R -->|"consumes"| SHARED_R
 
 Available faults
 ----------------

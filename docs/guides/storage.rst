@@ -37,33 +37,24 @@ How StorageCorrupt works
 4. At ``stop()`` the crontab is removed.
 5. At ``revert()`` every corrupted byte is restored exactly from the backup.
 
-.. code-block:: text
+.. mermaid::
 
-   runner.start()
-        │
-        ▼
-   ╔══════════════════════════════════════════════════════════════╗
-   ║  crontab  (fires every interval, e.g. 10 min)               ║
-   ║                                                              ║
-   ║  cj_corrupt.py                                               ║
-   ║    ① find files matching glob pattern                        ║
-   ║    ② read original byte  ──► save to ~/.chaos-jungle/cj.db  ║
-   ║    ③ flip bit via dd     ──► overwrite byte in file          ║
-   ╚══════════════════════════════════════════════════════════════╝
-        │  file silently has wrong bytes
-        ▼
-   ┌──────────────────────────────────────────────────────────────┐
-   │  Your pipeline reads the file                                │
-   │                                                              │
-   │  with integrity check     │  without integrity check         │
-   │  ────────────────────     │  ──────────────────────          │
-   │  detects bad checksum     │  processes wrong data silently   │
-   │  logs error, skips file   │  produces incorrect result       │
-   └──────────────────────────────────────────────────────────────┘
-        │
-        ▼
-   runner.stop()    ──► removes crontab  (no new corruptions)
-   runner.revert()  ──► restores every flipped byte from cj.db
+   flowchart TD
+       START_ST["runner.start()"]
+       CRON_ST["crontab\nfires every interval, e.g. 10 min"]
+       CORRUPT_ST["cj_corrupt.py\n① find files matching glob pattern\n② read original byte → save to ~/.chaos-jungle/cj.db\n③ flip bit via dd → overwrite byte in file"]
+       FILE_ST["Your pipeline reads the file\nfile silently has wrong bytes"]
+       WITH_ST["with integrity check\ndetects bad checksum\nlogs error, skips file"]
+       WITHOUT_ST["without integrity check\nprocesses wrong data silently\nproduces incorrect result"]
+       STOP_ST["runner.stop()\nremoves crontab — no new corruptions"]
+       REVERT_ST["runner.revert()\nrestores every flipped byte from cj.db"]
+
+       START_ST --> CRON_ST --> CORRUPT_ST --> FILE_ST
+       FILE_ST --> WITH_ST
+       FILE_ST --> WITHOUT_ST
+       WITH_ST --> STOP_ST
+       WITHOUT_ST --> STOP_ST
+       STOP_ST --> REVERT_ST
 
 
 Basic usage

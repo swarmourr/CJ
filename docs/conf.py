@@ -18,7 +18,11 @@ extensions = [
     "sphinx.ext.intersphinx",       # cross-project links
     "sphinx_autodoc_typehints",     # type hints in docs
     "myst_parser",                  # Markdown support
+    "sphinxcontrib.mermaid",        # Mermaid diagrams
 ]
+
+# ── Mermaid ────────────────────────────────────────────────────────
+mermaid_version = "11"              # CDN version (used for HTML output)
 
 # ── Napoleon (NumPy docstrings) ───────────────────────────────────
 napoleon_numpy_docstring = True

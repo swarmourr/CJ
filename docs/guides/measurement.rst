@@ -13,20 +13,19 @@ output quality with ``LLMJudge``.
 How measure() works
 ---------------------
 
-.. code-block:: text
+.. mermaid::
 
-   runner.measure(workload, n_baseline=5, n_fault=5)
-        │
-        ├─ Phase 1: Baseline (n_baseline trials, no fault active)
-        │     workload() → dict  ×5
-        │
-        ├─ Phase 2: Fault (n_fault trials, fault injected)
-        │     workload() → dict  ×5
-        │
-        ├─ Average each metric across trials
-        ├─ Compute delta = fault_mean - baseline_mean for every numeric key
-        ├─ (optional) Score each response with LLMJudge
-        └─ Persist everything to the session DB → return MeasurementResult
+   flowchart TD
+       MEAS_M["runner.measure(workload, n_baseline=5, n_fault=5)"]
+       B1_M["Phase 1: Baseline\nworkload() × n_baseline\nno fault active"]
+       B2_M["Phase 2: Fault\nworkload() × n_fault\nfault injected"]
+       B3_M["Average each metric across trials"]
+       B4_M["Compute delta =\nfault_mean − baseline_mean"]
+       B5_M["Score responses with LLMJudge\n(optional)"]
+       B6_M["Persist to session DB"]
+       RES_M["MeasurementResult"]
+
+       MEAS_M --> B1_M --> B2_M --> B3_M --> B4_M --> B5_M --> B6_M --> RES_M
 
 Your workload must be a zero-argument callable that returns a ``dict``:
 

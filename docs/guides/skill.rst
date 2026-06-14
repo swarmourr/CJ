@@ -20,19 +20,21 @@ base and share the same HTTP proxy mechanism as :ref:`guide-llm`.  The proxy
 intercepts tool-call traffic at the boundary between your agent and the
 backend, then injects the chosen failure.  Three injection points are used:
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────────────────────────────────────────────┐
-   │  [Agent]                                                             │
-   │    │                                                                 │
-   │    │  1. Request-modifying   ── mutate tool args / instructions      │
-   │    ├──tool_call──▶ [LLM Proxy :18000]                                │
-   │    │                  │                                              │
-   │    │  2. No-forward   ── return error immediately (no upstream call) │
-   │    │                  │                                              │
-   │    │  3. Response-modifying ── corrupt / replace upstream result     │
-   │    ◀──tool_result─────┘                                              │
-   └──────────────────────────────────────────────────────────────────────┘
+   sequenceDiagram
+       participant A as Agent
+       participant P as LLM Proxy :18000
+
+       A->>P: tool_call
+       Note over P: 1. Request-modifying<br/>mutate tool args / instructions
+       alt No-forward fault
+           Note over P: 2. No-forward<br/>return error immediately
+           P-->>A: error response
+       else Forward + response-modify
+           Note over P: 3. Response-modifying<br/>corrupt / replace upstream result
+           P-->>A: tool_result (corrupted)
+       end
 
 All 10 faults
 -------------

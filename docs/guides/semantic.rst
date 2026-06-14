@@ -16,21 +16,20 @@ Before forwarding the request to the LLM, it mutates the ``messages`` array
 in the request body — specifically the content of context or user messages —
 and then lets the LLM generate a response based on the corrupted input.
 
-.. code-block:: text
+.. mermaid::
 
-   [Agent]
-     │
-     ├── POST /v1/chat/completions  (original payload)
-     │         │
-     │         ▼
-     │   [SemanticCorrupt Proxy]
-     │         │  mutates messages[] in-flight
-     │         │
-     │         ▼
-     │   [LLM API / Ollama]  ←─ sees corrupted context
-     │         │
-     │         ▼
-     └── real response (200 OK, valid JSON, wrong answer)
+   sequenceDiagram
+       participant A as Agent
+       participant P as SemanticCorrupt Proxy
+       participant L as LLM API / Ollama
+
+       A->>P: POST /v1/chat/completions (original payload)
+       Note over P: mutates messages[] in-flight
+       P->>L: corrupted context
+       L-->>P: 200 OK — valid JSON
+       P-->>A: real response — wrong answer
+
+       Note over A: all HTTP-level checks pass<br/>only semantic validation catches the failure
 
 The agent receives a valid API response.  All HTTP-level checks pass.  Only
 semantic validation catches the failure.

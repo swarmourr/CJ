@@ -12,22 +12,14 @@ a whole machine.
 All three faults target an ``SSHTarget`` (or a ``LocalTarget`` with
 appropriate permissions).  ``sudo`` is required for ``ServiceFault``.
 
-.. code-block:: text
+.. mermaid::
 
-   ╔══════════════════════════════════════════════════════════════════╗
-   ║                    TARGET  MACHINE  LAYERS                      ║
-   ╠══════════════════════╦═══════════════════╦════════════════════════╣
-   ║   OS  PROCESSES      ║  SYSTEMD  UNITS   ║  DOCKER  CONTAINERS   ║
-   ║                      ║                   ║                        ║
-   ║  ProcessKill         ║  ServiceFault     ║  ContainerKill         ║
-   ║                      ║                   ║                        ║
-   ║  pkill -f <pattern>  ║  systemctl stop   ║  docker kill / stop    ║
-   ║  kill -<signal>      ║  systemctl mask   ║  docker pause          ║
-   ║                      ║  systemctl kill   ║  docker rm -f          ║
-   ║                      ║                   ║                        ║
-   ║  irreversible        ║  auto-restored    ║  auto-restarted        ║
-   ║  (no sudo needed)    ║  (sudo needed)    ║  (docker group needed) ║
-   ╚══════════════════════╩═══════════════════╩════════════════════════╝
+   flowchart TD
+       subgraph TARGET_P["TARGET MACHINE LAYERS"]
+           PK["OS PROCESSES\nProcessKill\npkill -f pattern\nkill -signal\nirreversible — no sudo needed"]
+           SF["SYSTEMD UNITS\nServiceFault\nsystemctl stop / mask / kill\nauto-restored — sudo needed"]
+           CK["DOCKER CONTAINERS\nContainerKill\ndocker kill / stop / pause / rm -f\nauto-restarted — docker group needed"]
+       end
 
 Available faults
 ----------------

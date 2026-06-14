@@ -55,16 +55,20 @@ Where does each piece run?
    Your Python script — including any ``run_my_pipeline()`` call — still runs
    on **your local machine**.
 
-.. code-block:: text
+.. mermaid::
 
-   Your machine                        target:7777
-   ─────────────────────────────       ──────────────────────────────
-   runner.start()  ── POST /start ──►  NetworkDelay injected ✓
-   run_my_pipeline()                   (no involvement)
-     │
-     └─ only affected if it talks
-        to target (HTTP, TCP, etc.)
-   runner.stop()   ── POST /stop  ──►  NetworkDelay removed ✓
+   flowchart LR
+       subgraph LOCAL_H["Your machine"]
+           RH["runner.start()\nrunner.stop()"]
+           PH["run_my_pipeline()"]
+       end
+       subgraph TARGET_H["target:7777"]
+           DH["NetworkDelay injected ✓\nNetworkDelay removed ✓"]
+       end
+
+       RH -->|"POST /start"| DH
+       DH -->|"result"| RH
+       PH -.->|"only affected if it talks to target"| TARGET_H
 
 To run a command **on the target** through the daemon:
 

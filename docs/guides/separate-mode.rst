@@ -192,23 +192,29 @@ Python API
 How it works
 ------------
 
-.. code-block:: text
+.. mermaid::
 
-   runner.start()
-        │
-        ├─ writes session to ~/.chaos-jungle/chaos_jungle.db  (status=running)
-        ├─ injects fault on target (tc rule / proxy process / pkill / dd)
-        └─ returns immediately
+   flowchart TD
+       START_S["runner.start()"]
+       DB_S["writes session to\n~/.chaos-jungle/chaos_jungle.db\nstatus=running"]
+       INJ_S["injects fault on target\ntc rule / proxy process / pkill / dd"]
+       RET_S["returns immediately"]
 
-   ChaosRunner.attach()
-        │
-        └─ reads most recent session with status=running from the DB
-           returns a runner bound to that session
+       ATTACH_S["ChaosRunner.attach()"]
+       READS_S["reads most recent session\nwith status=running from DB\nreturns runner bound to that session"]
 
-   stopper.stop()
-        │
-        ├─ removes fault from target (tc del / kill proxy / systemctl start)
-        └─ marks session as  status=reverted  in DB
+       STOP_S["stopper.stop()"]
+       REM_S["removes fault from target\ntc del / kill proxy / systemctl start"]
+       MARK_S["marks session as\nstatus=reverted in DB"]
+
+       START_S --> DB_S
+       START_S --> INJ_S
+       START_S --> RET_S
+
+       ATTACH_S --> READS_S
+
+       STOP_S --> REM_S
+       STOP_S --> MARK_S
 
 Checking the status
 --------------------

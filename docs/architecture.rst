@@ -6,33 +6,21 @@ Architecture
 chaos-jungle is organised into five planes that work together to inject,
 observe, and evaluate faults across any layer of a modern system.
 
-.. code-block:: text
+.. mermaid::
 
-   ╔══════════════════════════════════════════════════════════════════╗
-   ║                       CONTROL  PLANE                            ║
-   ║                                                                  ║
-   ║   Scenario ──── ChaosRunner ──── ExperimentSuite                ║
-   ║   @chaos · @chaos_measure · inject() · door()                   ║
-   ╚═══════════════════════╤══════════════════════════════════════════╝
-                           │
-           ┌───────────────┼───────────────┐
-           ▼               ▼               ▼
-   ╔═══════════════╗ ╔════════════╗ ╔═══════════════════╗
-   ║  TRANSPORT    ║ ║   TARGET   ║ ║   EVALUATION      ║
-   ║    PLANE      ║ ║   PLANE    ║ ║     PLANE         ║
-   ╠═══════════════╣ ╠════════════╣ ╠═══════════════════╣
-   ║  HTTP proxy   ║ ║  Local     ║ ║  LLMJudge         ║
-   ║  httpx patch  ║ ║  SSH       ║ ║  Metrics          ║
-   ║  OS / BPF     ║ ║  HTTP      ║ ║  Quality gates    ║
-   ╚═══════╤═══════╝ ╚══════╤═════╝ ╚═════════╤═════════╝
-           │                │                 │
-           └────────────────┼─────────────────┘
-                            ▼
-   ╔══════════════════════════════════════════════════════════════════╗
-   ║                        DATA  PLANE                              ║
-   ║                                                                  ║
-   ║   SQLite DB  ──►  Web Dashboard  ──►  CSV Export  ──►  CLI      ║
-   ╚══════════════════════════════════════════════════════════════════╝
+   flowchart TD
+       CP["**CONTROL PLANE**\nScenario ── ChaosRunner ── ExperimentSuite\n@chaos · @chaos_measure · inject() · door()"]
+       TP["**TRANSPORT PLANE**\nHTTP proxy\nhttpx patch\nOS / BPF"]
+       TGP["**TARGET PLANE**\nLocal\nSSH\nHTTP"]
+       EP["**EVALUATION PLANE**\nLLMJudge\nMetrics\nQuality gates"]
+       DP["**DATA PLANE**\nSQLite DB ──► Web Dashboard ──► CSV Export ──► CLI"]
+
+       CP --> TP
+       CP --> TGP
+       CP --> EP
+       TP --> DP
+       TGP --> DP
+       EP --> DP
 
 ----
 
@@ -68,21 +56,17 @@ Key objects:
 
 Lifecycle of a single experiment:
 
-.. code-block:: text
+.. mermaid::
 
-   ╔═══════════╗     ╔═══════════╗     ╔═══════════╗
-   ║ PREFLIGHT ║────►║   START   ║────►║ WORKLOAD  ║
-   ║           ║     ║           ║     ║           ║
-   ║ check     ║     ║ inject    ║     ║ your code ║
-   ║ tools     ║     ║ faults    ║     ║ runs here ║
-   ╚═══════════╝     ╚═══════════╝     ╚═════╤═════╝
-                                             │
-   ╔═══════════╗     ╔═══════════╗     ╔═════▼═════╗
-   ║  RECORD   ║◄────║  REVERT   ║◄────║   STOP    ║
-   ║           ║     ║           ║     ║           ║
-   ║ write to  ║     ║ undo side ║     ║ remove    ║
-   ║ SQLite    ║     ║ effects   ║     ║ faults    ║
-   ╚═══════════╝     ╚═══════════╝     ╚═══════════╝
+   flowchart LR
+       PRE["PREFLIGHT\ncheck tools"]
+       START["START\ninject faults"]
+       WL["WORKLOAD\nyour code runs here"]
+       STOP["STOP\nremove faults"]
+       REV["REVERT\nundo side effects"]
+       REC["RECORD\nwrite to SQLite"]
+
+       PRE --> START --> WL --> STOP --> REV --> REC
 
 ----
 
@@ -97,23 +81,19 @@ to test.
 Directly manipulates the Linux kernel via privileged tools.  Requires a Linux
 target and ``sudo``.
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────────────────────────────┐
-   │                  YOUR  APPLICATION                   │
-   └────────────────────────┬─────────────────────────────┘
-              syscalls / file I/O / network packets
-   ┌────────────────────────▼─────────────────────────────┐
-   │               LINUX  KERNEL  LAYER                   │
-   │                                                      │
-   │  ╔══════════════╗  ╔═══════════╗  ╔═══════════════╗  │
-   │  ║   tc/netem   ║  ║    BPF    ║  ║  stress-ng    ║  │
-   │  ║              ║  ║           ║  ║  systemctl    ║  │
-   │  ║ NetworkDelay ║  ║ SilentNet ║  ║  docker       ║  │
-   │  ║ NetworkLoss  ║  ║ Corrupt   ║  ║  pkill        ║  │
-   │  ╚══════════════╝  ╚═══════════╝  ╚═══════════════╝  │
-   └──────────────────────────────────────────────────────┘
-            Network · Storage · CPU · Memory · Disk
+   flowchart TD
+       APP["YOUR APPLICATION"]
+       KERNEL["LINUX KERNEL LAYER"]
+       TC["tc / netem\nNetworkDelay · NetworkLoss\nNetworkCorrupt · NetworkDuplicate"]
+       BPF["BPF / XDP\nSilentNetworkCorrupt\nsilent bit-flips"]
+       TOOLS["stress-ng · systemctl · docker · pkill\nNetwork · Storage · CPU · Memory · Disk"]
+
+       APP -->|"syscalls / file I/O / network packets"| KERNEL
+       KERNEL --> TC
+       KERNEL --> BPF
+       KERNEL --> TOOLS
 
 ----
 
@@ -123,25 +103,15 @@ A local MITM proxy sits between the LLM SDK and the real API endpoint.  The
 SDK is pointed at ``localhost:<port>`` and the proxy applies faults before
 forwarding.
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────────────────────────────┐
-   │            LLM  SDK  (any provider)                  │
-   └────────────────────────┬─────────────────────────────┘
-              redirected to localhost:<port>
-   ┌────────────────────────▼─────────────────────────────┐
-   │                    CJ  PROXY                         │
-   │                                                      │
-   │  ① match request URL against fault rules             │
-   │  ② apply fault ─► latency · 429 · 503 · corrupt      │
-   │                    hallucinate · truncate · timeout   │
-   │  ③ forward (or short-circuit)                        │
-   └────────────────────────┬─────────────────────────────┘
-                       HTTPS tunnel
-   ┌────────────────────────▼─────────────────────────────┐
-   │              REAL  API  ENDPOINT                     │
-   │   api.openai.com · api.anthropic.com · ollama …      │
-   └──────────────────────────────────────────────────────┘
+   flowchart TD
+       SDK["LLM SDK (any provider)"]
+       PROXY["CJ PROXY\n① match request URL against fault rules\n② apply fault: latency · 429 · 503 · corrupt\n   hallucinate · truncate · timeout\n③ forward or short-circuit"]
+       API["REAL API ENDPOINT\napi.openai.com · api.anthropic.com · ollama …"]
+
+       SDK -->|"redirected to localhost:&lt;port&gt;"| PROXY
+       PROXY -->|"HTTPS tunnel"| API
 
 Faults at this level: ``LLMLatency``, ``LLMRateLimit``, ``LLMTimeout``,
 ``LLMResponseCorrupt``, ``LLMUnavailable``, ``LLMHallucination``,
@@ -162,26 +132,15 @@ Requires telling the SDK to point at the proxy:
 Patches ``httpx`` and ``requests`` **at the class level** so every SDK that
 uses them is affected automatically — no proxy port, no SDK reconfiguration.
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────────────────────────────────────┐
-   │   LLM SDK  (OpenAI · Anthropic · LiteLLM · LangChain …)     │
-   │                  uses httpx or requests internally           │
-   └──────────────────────────┬───────────────────────────────────┘
-                              │  patched at class level
-   ┌──────────────────────────▼───────────────────────────────────┐
-   │               CJ  TRANSPORT  PATCH                           │
-   │                                                              │
-   │  ① Behavior.before(url) ─── latency · jitter · timeout       │
-   │  ② real send()          ─── actual HTTP/HTTPS request        │
-   │  ③ Behavior.after(url)  ─── corrupt · 429 · 503              │
-   │                                                              │
-   │  probability roll ──► each behavior fires independently      │
-   └──────────────────────────┬───────────────────────────────────┘
-                              │  real TCP connection
-   ┌──────────────────────────▼───────────────────────────────────┐
-   │                   API  ENDPOINT                              │
-   └──────────────────────────────────────────────────────────────┘
+   flowchart TD
+       SDK2["LLM SDK — OpenAI · Anthropic · LiteLLM · LangChain\nuses httpx or requests internally"]
+       PATCH["CJ TRANSPORT PATCH\n① Behavior.before(url) — latency · jitter · timeout\n② real send() — actual HTTP/HTTPS request\n③ Behavior.after(url) — corrupt · 429 · 503\nprobability roll: each behavior fires independently"]
+       EP["API ENDPOINT"]
+
+       SDK2 -->|"patched at class level"| PATCH
+       PATCH -->|"real TCP connection"| EP
 
 Faults at this level: ``Latency``, ``Jitter``, ``RateLimit``,
 ``Unavailable``, ``Timeout``, ``CorruptResponse`` (from ``chaos_jungle.intercept``).
@@ -197,37 +156,37 @@ A **Target** is an abstraction over a machine.  The runner and faults call
 ``target.run(cmd)``, ``target.sudo(cmd)``, and ``target.put(file)``; the
 target handles the transport.
 
-.. code-block:: text
+.. mermaid::
 
-   ╔═════════════════════════════════════════════════════════╗
-   ║                     ChaosRunner                         ║
-   ╚══════════════╤═══════════════╤══════════════════╤════════╝
-                  │               │                  │
-        ┌─────────▼──────┐ ┌──────▼───────┐ ┌───────▼──────────┐
-        │  LocalTarget   │ │  SSHTarget   │ │  HTTPTarget      │
-        │                │ │              │ │                  │
-        │ subprocess.run │ │ Paramiko SSH │ │ HTTP POST /exec  │
-        └────────┬───────┘ └──────┬───────┘ └───────┬──────────┘
-                 │                │                 │
-                 ▼                ▼                 ▼
-          same  machine     remote  Linux      cj-daemon :8642
+   flowchart TD
+       RUNNER["ChaosRunner"]
+       LOCAL["LocalTarget\nsubprocess.run"]
+       SSH["SSHTarget\nParamiko SSH"]
+       HTTP["HTTPTarget\nHTTP POST /exec"]
+
+       RUNNER --> LOCAL
+       RUNNER --> SSH
+       RUNNER --> HTTP
+
+       LOCAL --> SAME["same machine"]
+       SSH --> REMOTE["remote Linux"]
+       HTTP --> DAEMON["cj-daemon :8642"]
 
 ``cj-daemon`` is a lightweight REST agent for machines that are behind a
 firewall or inside a CI runner.
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────┐         ┌──────────────────────────────┐
-   │     TEST  RUNNER  HOST       │         │      TARGET  MACHINE         │
-   │                              │         │                              │
-   │  ┌────────────────────────┐  │  HTTP   │  ┌──────────────────────┐   │
-   │  │  ChaosRunner           │  │ ──────► │  │   cj-daemon :8642    │   │
-   │  │  + HTTPTarget          │  │         │  │                      │   │
-   │  └────────────────────────┘  │ ◄────── │  │  POST /exec          │   │
-   │                              │ result  │  │  → tc · stress-ng    │   │
-   └──────────────────────────────┘         │  │  → systemctl · docker│   │
-                                            │  └──────────────────────┘   │
-                                            └──────────────────────────────┘
+   flowchart LR
+       subgraph TEST["TEST RUNNER HOST"]
+           CR["ChaosRunner + HTTPTarget"]
+       end
+       subgraph TARGET["TARGET MACHINE"]
+           DJ["cj-daemon :8642\nPOST /exec\n→ tc · stress-ng\n→ systemctl · docker"]
+       end
+
+       CR -->|"HTTP"| DJ
+       DJ -->|"result"| CR
 
 ----
 
@@ -237,27 +196,18 @@ Evaluation Plane
 chaos-jungle can measure whether faults actually degrade quality, not just
 whether they execute.
 
-.. code-block:: text
+.. mermaid::
 
-   runner.measure(workload, n_baseline=5, n_fault=5, evaluator=judge)
-   │
-   ├─► PHASE 1 ─ BASELINE  ── run workload × n_baseline ──► baseline metrics
-   │
-   ├─► PHASE 2 ─ FAULT ON  ── inject faults
-   │
-   ├─► PHASE 3 ─ FAULT     ── run workload × n_fault    ──► fault metrics
-   │
-   ├─► PHASE 4 ─ FAULT OFF ── stop faults
-   │
-   └─► PHASE 5 ─ EVALUATE  ── compute delta + LLMJudge scores
-                                       │
-                    ╔══════════════════▼═══════════════════════╗
-                    ║          MeasurementResult               ║
-                    ╠══════════════════════════════════════════╣
-                    ║  baseline  │  fault  │  delta            ║
-                    ║  judge scores (faithfulness, coherence)  ║
-                    ║  passed_quality(min_faithfulness=0.7)    ║
-                    ╚══════════════════════════════════════════╝
+   flowchart TD
+       MEAS["runner.measure(workload, n_baseline=5, n_fault=5, evaluator=judge)"]
+       P1["PHASE 1 — BASELINE\nrun workload × n_baseline\n→ baseline metrics"]
+       P2["PHASE 2 — FAULT ON\ninject faults"]
+       P3["PHASE 3 — FAULT\nrun workload × n_fault\n→ fault metrics"]
+       P4["PHASE 4 — FAULT OFF\nstop faults"]
+       P5["PHASE 5 — EVALUATE\ncompute delta + LLMJudge scores"]
+       RES["MeasurementResult\nbaseline | fault | delta\njudge scores (faithfulness, coherence)\npassed_quality(min_faithfulness=0.7)"]
+
+       MEAS --> P1 --> P2 --> P3 --> P4 --> P5 --> RES
 
 ``LLMJudge`` calls a second "judge" model to evaluate responses — it does not
 run inside your application under test.
@@ -269,26 +219,17 @@ Data Plane
 
 Every experiment writes structured data to a local SQLite database.
 
-.. code-block:: text
+.. mermaid::
 
-   ╔══════════════════════════════════════════════════════════╗
-   ║          ~/.chaos-jungle/chaos_jungle.db                ║
-   ╠══════════════════════════════════════════════════════════╣
-   ║  sessions  ── one row per ChaosRunner.start() call      ║
-   ║  faults    ── one row per active fault + parameters      ║
-   ║  events    ── timestamped log (started · stopped · err)  ║
-   ║  results   ── JSON blobs from runner.record_result()     ║
-   ║  commands  ── every shell command on every target        ║
-   ╚══════════════════════════╤═══════════════════════════════╝
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-       ╔═════════════╗  ╔═══════════╗  ╔═══════════╗
-       ║  Dashboard  ║  ║    CSV    ║  ║    CLI    ║
-       ║   :8080     ║  ║  export   ║  ║  summary  ║
-       ╚═════════════╝  ╚═══════════╝  ╚═══════════╝
-       chaos-jungle      export_db      chaos-jungle
-       dashboard         _to_csv()      list
+   flowchart TD
+       DB["~/.chaos-jungle/chaos_jungle.db\nsessions · faults · events · results · commands"]
+       DASH["Dashboard :8080\nchaos-jungle dashboard"]
+       CSV["CSV export\nexport_db_to_csv()"]
+       CLI["CLI summary\nchaos-jungle list"]
+
+       DB --> DASH
+       DB --> CSV
+       DB --> CLI
 
 ----
 

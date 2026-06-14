@@ -17,25 +17,18 @@ appear alongside latency and error counts in the same ``MeasurementResult``.
 How it works
 ------------
 
-.. code-block:: text
+.. mermaid::
 
-   ChaosRunner.measure(workload, evaluator=judge)
-         │
-         ├── n_baseline runs → collect {question, context, response}
-         │         │
-         │         └──▶ LLMJudge.score() ──▶ JudgeScore (baseline quality)
-         │
-         ├── fault.start()
-         │
-         ├── n_fault runs → collect {question, context, response}
-         │         │
-         │         └──▶ LLMJudge.score() ──▶ JudgeScore (fault quality)
-         │
-         └── MeasurementResult
-               ├── judge_baseline   (averaged baseline scores)
-               ├── judge_fault      (averaged fault scores)
-               ├── judge_delta      (fault − baseline)
-               └── passed_quality() (bool: quality within thresholds?)
+   flowchart TD
+       MEAS_J["ChaosRunner.measure(workload, evaluator=judge)"]
+       BL_J["n_baseline runs\ncollect question · context · response"]
+       BS_J["LLMJudge.score()\n→ JudgeScore (baseline quality)"]
+       FI_J["fault.start()"]
+       FL_J["n_fault runs\ncollect question · context · response"]
+       FS_J["LLMJudge.score()\n→ JudgeScore (fault quality)"]
+       RES_J["MeasurementResult\njudge_baseline · judge_fault\njudge_delta · passed_quality()"]
+
+       MEAS_J --> BL_J --> BS_J --> FI_J --> FL_J --> FS_J --> RES_J
 
 The judge calls a separate LLM (e.g. ``gpt-4o-mini``, ``llama3.2``) with a
 structured evaluation prompt and parses four scores from the response.

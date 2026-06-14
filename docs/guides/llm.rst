@@ -18,19 +18,21 @@ How it works
 
 Every LLM/MCP fault shares the same proxy-based mechanism:
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────────────────────────────────────┐
-   │  Your machine                                                │
-   │                                                              │
-   │  [Agent]                                                     │
-   │    │                                                         │
-   │    ├──chat/completions──▶ [LLM Proxy :18000] ──▶ [LLM API]  │
-   │    │                           (fault injected here)        │
-   │    │                                                         │
-   │    └──tools/call──────▶ [MCP Proxy :18100] ──▶ [MCP Server] │
-   │                              (fault injected here)          │
-   └──────────────────────────────────────────────────────────────┘
+   flowchart TD
+       subgraph MACHINE["Your machine"]
+           AGENT["Agent"]
+           PROXY_LLM["LLM Proxy :18000\nfault injected here"]
+           PROXY_MCP["MCP Proxy :18100\nfault injected here"]
+       end
+       LLM_API["LLM API"]
+       MCP_SRV["MCP Server"]
+
+       AGENT -->|"chat/completions"| PROXY_LLM
+       PROXY_LLM --> LLM_API
+       AGENT -->|"tools/call"| PROXY_MCP
+       PROXY_MCP --> MCP_SRV
 
 1. ``fault.start()`` spawns the bundled proxy as a background subprocess.
 2. The proxy listens on ``localhost:<port>`` and forwards every request to

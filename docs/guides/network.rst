@@ -14,28 +14,19 @@ mechanisms are available:
   checksum is recalculated, producing **silent** data corruption.  TCP
   delivers the packet intact but the payload is wrong.
 
-.. code-block:: text
+.. mermaid::
 
-   ┌──────────────────────────────────────────────────────────────────┐
-   │                      YOUR  APPLICATION                          │
-   └───────────────────────────────┬──────────────────────────────────┘
-                                   │ TCP/IP
-   ┌───────────────────────────────▼──────────────────────────────────┐
-   │                   LINUX  KERNEL  NETWORK  STACK                  │
-   │                                                                  │
-   │  ╔══════════════════════════════╗   ╔══════════════════════════╗  │
-   │  ║        tc  netem  qdisc      ║   ║      BPF / XDP  hook     ║  │
-   │  ╠══════════════════════════════╣   ╠══════════════════════════╣  │
-   │  ║  delay   ── add latency      ║   ║  flips bits BEFORE       ║  │
-   │  ║  loss    ── drop packets     ║   ║  checksum recalculation  ║  │
-   │  ║  corrupt ── flip + recheck   ║   ║                          ║  │
-   │  ║  dup     ── clone packets    ║   ║  TCP sees valid packet   ║  │
-   │  ║                              ║   ║  payload is silently bad ║  │
-   │  ║  checksum fixed → visible    ║   ║  checksum ok → invisible ║  │
-   │  ╚══════════════════════════════╝   ╚══════════════════════════╝  │
-   └───────────────────────────────┬──────────────────────────────────┘
-                                   │
-                           Physical / Virtual NIC
+   flowchart TD
+       APP_N["YOUR APPLICATION"]
+       KERNEL_N["LINUX KERNEL NETWORK STACK"]
+       TC_N["tc netem qdisc\ndelay — add latency\nloss — drop packets\ncorrupt — flip + recheck\ndup — clone packets\nchecksum fixed → visible"]
+       BPF_N["BPF / XDP hook\nflips bits BEFORE checksum\nTCP sees valid packet\npayload is silently bad\nchecksum ok → invisible"]
+       NIC_N["Physical / Virtual NIC"]
+
+       APP_N -->|"TCP/IP"| KERNEL_N
+       KERNEL_N --> TC_N
+       KERNEL_N --> BPF_N
+       KERNEL_N --> NIC_N
 
 .. list-table::
    :header-rows: 1
