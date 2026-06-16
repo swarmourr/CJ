@@ -53,6 +53,11 @@ class Fault(ABC):
     #: Safety classification (0=safe, 1=moderate, 2=destructive).
     danger_level: int = 0
 
+    #: Metrics automatically collected for this fault by CollectStrategy.
+    #: Subclasses override to declare fault-specific metrics.
+    #: Universal metrics (duration_s, error_rate, success) are always added.
+    default_metrics: list[str] = []
+
     @abstractmethod
     def start(self, target: "Target") -> None:
         """Inject the fault on the target machine."""

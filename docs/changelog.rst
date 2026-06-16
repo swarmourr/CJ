@@ -1,6 +1,87 @@
 Changelog
 =========
 
+0.9.0 (2026-06-16)
+------------------
+
+**New features**
+
+* **Auto-collected fault metrics** — every fault class now declares
+  ``default_metrics``, a list of the metrics most relevant to its failure mode.
+  ``ChaosRunner.measure()`` accepts two new parameters to enable automatic
+  collection:
+
+  - ``strategy=CollectStrategy.SNAPSHOT`` — collect at three fixed points:
+    baseline (before fault), fault (while active), and recovery (immediately
+    after stop).
+  - ``strategy=CollectStrategy.RECOVERY(recovery_window_s=60)`` — same as
+    SNAPSHOT plus a configurable post-fault time-series window sampled every
+    10 s.
+  - ``metric_set=MetricSet.DEFAULT`` — use all metrics declared in
+    ``fault.default_metrics``; customise with ``.exclude()``, ``.add()``, or
+    ``MetricSet.only()``.
+
+* **``MetricSet``** (``chaos_jungle.metrics.MetricSet``) — immutable, fluent
+  API for controlling which fault metrics are active:
+
+  .. code-block:: python
+
+     MetricSet.DEFAULT                              # all fault defaults
+     MetricSet.DEFAULT.exclude("swap_used_mb")     # drop specific metrics
+     MetricSet.DEFAULT.add("inode_used")            # add extras
+     MetricSet.only("error_rate", "duration_s")    # ignore defaults entirely
+
+* **``CollectStrategy``** (``chaos_jungle.metrics.CollectStrategy``) — controls
+  collection *frequency*:
+
+  .. code-block:: python
+
+     CollectStrategy.SNAPSHOT                         # 3-point, instant
+     CollectStrategy.RECOVERY(recovery_window_s=120)  # + post-fault window
+
+* **``CollectedMetrics``** (``chaos_jungle.metrics.CollectedMetrics``) — new
+  result dataclass stored in ``MeasurementResult.collected_metrics``:
+
+  - ``.baseline``, ``.fault``, ``.recovery`` — ``dict[str, MetricSummary]``
+    with ``.avg``, ``.min``, ``.max``, ``.p50``, ``.p99``, ``.series``
+  - ``.delta`` — ``fault.avg - baseline.avg`` per metric
+  - ``.active_metrics`` — the resolved list of metric names collected
+
+* **System metric auto-collectors** (``metrics/strategy.py``) — shell commands
+  mapped to metric names for transparent collection on any target:
+  ``cpu_percent``, ``memory_mb``, ``swap_used_mb``, ``rtt_ms``,
+  ``disk_used_bytes``, ``inode_used``, ``iops``,
+  ``gpu_util_percent``, ``gpu_memory_mb``, ``gpu_clock_mhz``.
+
+* **``LLMBudgetExceeded``** fault — tracks per-request cost in USD via
+  the LLM proxy.  Rejects with HTTP 402 once ``max_cost_usd`` is reached.
+  Supports per-model pricing via ``MODEL_PRICING`` table (OpenAI, Anthropic,
+  Google, Ollama) or explicit ``input_price_per_1k`` / ``output_price_per_1k``
+  overrides.
+
+* **``default_metrics`` on all faults** — 30 fault classes across all
+  categories (network, resources, process, storage, state, GPU, LLM, MCP,
+  skill-file) now declare fault-specific ``default_metrics``.
+
+* **``preflight.py`` extended** — ``PKG_MAP`` and ``PKG_TO_BIN`` updated with
+  entries for metric collection tools:
+  ``sysstat`` (iostat), ``iputils`` (ping), ``procps`` (pgrep),
+  ``nvidia-utils`` (nvidia-smi), ``docker-cli``, ``redis-tools``,
+  ``postgresql-client``, ``stress-ng``.
+
+**Documentation**
+
+* :ref:`guide-metrics` updated — new *Auto-collected fault metrics* section
+  covering ``MetricSet``, ``CollectStrategy``, ``CollectedMetrics``, system vs.
+  workload metrics, and per-fault-category default metric tables.
+* :ref:`guide-measurement` updated — new *Auto-collected fault metrics* section
+  under ``measure()``; ``MeasurementResult`` API extended with
+  ``collected_metrics``; summary table updated.
+* API reference (``docs/api/metrics.rst``) extended with ``automodule`` entries
+  for ``metric_set``, ``strategy``, and ``schema``.
+
+----
+
 0.8.0 (2026-06-05)
 ------------------
 

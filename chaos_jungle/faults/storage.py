@@ -16,7 +16,7 @@ _BUNDLED = "__bundled__"
 
 
 class StorageCorrupt(Fault):
-    """Corrupt files at block-device level using dd and cj_storage.
+    """Corrupt files at block-device level using dd and cj_storage.  # noqa
 
     Schedules periodic bit-flip corruption via crontab. The original
     byte values are recorded in ``~/.chaos-jungle/cj.db`` on the target
@@ -49,9 +49,11 @@ class StorageCorrupt(Fault):
     >>> fault = StorageCorrupt("*.pdb", "/data/input", interval="10m")
     """
 
-    dependencies = ["python3", "e2fsprogs", "inotify-tools", "coreutils"]
+    dependencies     = ["python3", "e2fsprogs", "inotify-tools", "coreutils"]
     pip_dependencies = ["python-crontab"]
-    danger_level: int = 2  # destructive — corrupts file bytes, requires revert to restore
+    danger_level: int          = 2
+    default_metrics: list[str] = ["read_errors", "parse_errors", "write_errors",
+                                   "checksum_errors", "corrupted_files"]
 
     _INTERVAL_RE = __import__("re").compile(r"^\d+(\.\d+)?(s|m|h)$")
 

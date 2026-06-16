@@ -56,17 +56,80 @@ PKG_MAP: dict[str, dict[str, str]] = {
         "dnf":  "python3-bcc",
         "yum":  "python3-bcc",
     },
+    # ── metric collection tools ───────────────────────────────────────────────
+    "sysstat": {              # iostat, mpstat
+        "apt":  "sysstat",
+        "dnf":  "sysstat",
+        "yum":  "sysstat",
+        "apk":  "sysstat",
+        "brew": "sysstat",
+    },
+    "iputils": {              # ping
+        "apt":  "iputils-ping",
+        "dnf":  "iputils",
+        "yum":  "iputils",
+        "apk":  "iputils",
+        "brew": "inetutils",
+    },
+    "procps": {               # ps, pgrep, /proc tools
+        "apt":  "procps",
+        "dnf":  "procps-ng",
+        "yum":  "procps-ng",
+        "apk":  "procps",
+        "brew": "procps",
+    },
+    "nvidia-utils": {         # nvidia-smi
+        "apt":  "nvidia-utils-535",
+        "dnf":  "nvidia-utils",
+        "yum":  "nvidia-utils",
+        "apk":  "nvidia-utils",
+    },
+    "docker-cli": {           # docker inspect
+        "apt":  "docker.io",
+        "dnf":  "docker-ce-cli",
+        "yum":  "docker-ce-cli",
+        "apk":  "docker-cli",
+    },
+    "redis-tools": {          # redis-cli
+        "apt":  "redis-tools",
+        "dnf":  "redis",
+        "yum":  "redis",
+        "apk":  "redis",
+        "brew": "redis",
+    },
+    "postgresql-client": {    # psql
+        "apt":  "postgresql-client",
+        "dnf":  "postgresql",
+        "yum":  "postgresql",
+        "apk":  "postgresql-client",
+        "brew": "postgresql",
+    },
+    "stress-ng": {            # already used by resource faults
+        "apt":  "stress-ng",
+        "dnf":  "stress-ng",
+        "yum":  "stress-ng",
+        "apk":  "stress-ng",
+        "brew": "stress-ng",
+    },
 }
 
 # canonical_name -> binary to probe with `which`
 # None means no binary: fall back to package-manager query
 PKG_TO_BIN: dict[str, str | None] = {
-    "iproute2":      "tc",
-    "e2fsprogs":     "filefrag",
-    "inotify-tools": "inotifywait",
-    "coreutils":     "dd",
-    "python3":       "python3",
-    "python3-bpfcc": None,
+    "iproute2":           "tc",
+    "e2fsprogs":          "filefrag",
+    "inotify-tools":      "inotifywait",
+    "coreutils":          "dd",
+    "python3":            "python3",
+    "python3-bpfcc":      None,
+    "sysstat":            "iostat",
+    "iputils":            "ping",
+    "procps":             "pgrep",
+    "nvidia-utils":       "nvidia-smi",
+    "docker-cli":         "docker",
+    "redis-tools":        "redis-cli",
+    "postgresql-client":  "psql",
+    "stress-ng":          "stress-ng",
 }
 
 # Install command templates per manager

@@ -46,8 +46,9 @@ class ProcessKill(Fault):
     >>> fault = ProcessKill("my_worker.py", signal="TERM")
     """
 
-    dependencies: list[str] = ["procps"]  # provides pkill / pgrep
-    danger_level: int = 2  # destructive — kills processes irreversibly
+    dependencies: list[str]    = ["procps"]
+    danger_level: int          = 2
+    default_metrics: list[str] = ["downtime_s", "recovery_time_s", "error_rate", "restart_count"]
 
     def __init__(self, pattern: str, signal: str = "KILL") -> None:
         if not pattern or not pattern.strip():
@@ -102,8 +103,9 @@ class ServiceFault(Fault):
     >>> fault = ServiceFault("postgresql", action="mask")
     """
 
-    dependencies: list[str] = ["systemd"]
-    danger_level: int = 2  # destructive — stops services, may cause outages
+    dependencies: list[str]    = ["systemd"]
+    danger_level: int          = 2
+    default_metrics: list[str] = ["downtime_s", "error_rate", "restart_count", "duration_s"]
 
     VALID_ACTIONS = ("stop", "restart", "kill", "mask")
 
@@ -163,8 +165,9 @@ class ContainerKill(Fault):
     >>> fault = ContainerKill("old-worker", action="rm")
     """
 
-    dependencies: list[str] = ["docker"]
-    danger_level: int = 2  # destructive — terminates/removes containers
+    dependencies: list[str]    = ["docker-cli"]
+    danger_level: int          = 2
+    default_metrics: list[str] = ["downtime_s", "recovery_time_s", "error_rate", "exit_code", "restart_count"]
 
     VALID_ACTIONS = ("kill", "stop", "pause", "rm")
 

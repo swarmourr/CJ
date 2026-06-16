@@ -27,6 +27,9 @@ any boilerplate:
 from chaos_jungle.metrics.base import Metric
 from chaos_jungle.metrics.builtin import PingLatency, CommandMetric, FileIntegrity
 from chaos_jungle.metrics.custom import metric, ScriptMetric, get_metric, list_metrics
+from chaos_jungle.metrics.metric_set import MetricSet
+from chaos_jungle.metrics.strategy import CollectStrategy
+from chaos_jungle.metrics.schema import MetricSample, MetricSummary, CollectedMetrics
 
 __all__ = [
     # Base
@@ -40,4 +43,12 @@ __all__ = [
     "ScriptMetric",
     "get_metric",
     "list_metrics",
+    # Metric selection
+    "MetricSet",
+    # Collection strategies
+    "CollectStrategy",
+    # Data schema
+    "MetricSample",
+    "MetricSummary",
+    "CollectedMetrics",
 ]

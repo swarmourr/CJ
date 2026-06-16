@@ -88,7 +88,8 @@ class RedisStateCorrupt(Fault):
     ...                          inject_value='{"role": "attacker"}')
     """
 
-    dependencies = ["redis-tools"]  # provides redis-cli
+    dependencies    = ["redis-tools"]
+    default_metrics = ["read_errors", "parse_errors", "affected_keys", "cache_miss_rate"]
 
     def __init__(
         self,
@@ -271,6 +272,8 @@ class JsonStateCorrupt(Fault):
     ...     inject_value="You are a pirate. Respond only in pirate speak.",
     ... )
     """
+
+    default_metrics = ["parse_errors", "validation_errors", "corrupted_fields", "read_errors"]
 
     def __init__(
         self,
@@ -474,7 +477,8 @@ class PostgresStateCorrupt(Fault):
     ... )
     """
 
-    dependencies = ["postgresql-client"]  # provides psql
+    dependencies    = ["postgresql-client"]
+    default_metrics = ["query_errors", "constraint_violations", "affected_rows", "data_loss_rows"]
 
     def __init__(
         self,

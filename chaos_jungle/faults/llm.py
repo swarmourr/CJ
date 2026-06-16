@@ -198,7 +198,8 @@ class LLMLatency(_LLMProxyFault):
     >>> runner.stop()
     """
 
-    _fault_name = "latency"
+    _fault_name     = "latency"
+    default_metrics = ["duration_s", "p50_latency_ms", "p99_latency_ms"]
 
     def __init__(
         self,
@@ -252,7 +253,8 @@ class LLMRateLimit(_LLMProxyFault):
     >>> fault = LLMRateLimit(n=3)
     """
 
-    _fault_name = "rate_limit"
+    _fault_name     = "rate_limit"
+    default_metrics = ["error_rate", "http_429_count", "duration_s"]
 
     def __init__(
         self,
@@ -269,6 +271,141 @@ class LLMRateLimit(_LLMProxyFault):
 
     def _parameters(self) -> dict:
         return {**super()._parameters(), "n": self.n}
+
+
+# ---------------------------------------------------------------------------
+# Token pricing table  (input_per_1k_usd, output_per_1k_usd)
+# ---------------------------------------------------------------------------
+
+MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # OpenAI
+    "gpt-4o":                     (0.005,    0.015),
+    "gpt-4o-mini":                (0.00015,  0.0006),
+    "gpt-4-turbo":                (0.01,     0.03),
+    "gpt-4":                      (0.03,     0.06),
+    "gpt-3.5-turbo":              (0.0005,   0.0015),
+    "o1":                         (0.015,    0.06),
+    "o1-mini":                    (0.003,    0.012),
+    # Anthropic
+    "claude-opus-4-5":            (0.015,    0.075),
+    "claude-sonnet-4-5":          (0.003,    0.015),
+    "claude-haiku-4-5":           (0.001,    0.005),
+    "claude-3-5-sonnet-20241022": (0.003,    0.015),
+    "claude-3-5-haiku-20241022":  (0.001,    0.005),
+    "claude-3-opus-20240229":     (0.015,    0.075),
+    # Google
+    "gemini-1.5-pro":             (0.00125,  0.005),
+    "gemini-1.5-flash":           (0.000075, 0.0003),
+    # Ollama / local (free)
+    "llama3.2":                   (0.0,      0.0),
+    "qwen2.5":                    (0.0,      0.0),
+    "mistral":                    (0.0,      0.0),
+    "phi3":                       (0.0,      0.0),
+}
+
+
+class LLMBudgetExceeded(_LLMProxyFault):
+    """Simulate a hard spending cap — return HTTP 402 once the cost limit is reached.
+
+    The proxy forwards requests normally and accumulates cost in USD from
+    each response's ``usage.prompt_tokens`` and ``usage.completion_tokens``
+    fields using the per-token price of the specified model.  Once the
+    running cost reaches ``max_cost_usd``, every subsequent request is
+    rejected with HTTP 402 without being forwarded.
+
+    Use this to test how your agent handles budget exhaustion: graceful
+    degradation, fallback to a cheaper model, or a user-facing error.
+
+    Parameters
+    ----------
+    max_cost_usd : float
+        Spending cap in US dollars. Default ``0.10`` ($0.10).
+    model : str, optional
+        Model name used to look up per-token pricing from ``MODEL_PRICING``.
+        If not provided, ``input_price_per_1k`` and ``output_price_per_1k``
+        must be set explicitly.
+    input_price_per_1k : float, optional
+        Price per 1 000 input tokens in USD. Overrides the model table.
+    output_price_per_1k : float, optional
+        Price per 1 000 output tokens in USD. Overrides the model table.
+    port : int, optional
+        Local proxy port. Default ``18000``.
+    upstream : str, optional
+        Real LLM API base URL. Default ``"https://api.openai.com"``.
+    base_url_env : str, optional
+        Environment variable that your LLM client reads for the base URL.
+        Default ``"OPENAI_BASE_URL"``.
+
+    Examples
+    --------
+    >>> # Cap at $0.05 using GPT-4o-mini pricing
+    >>> fault = LLMBudgetExceeded(max_cost_usd=0.05, model="gpt-4o-mini")
+
+    >>> # Cap at $0.10 using explicit prices (any provider)
+    >>> fault = LLMBudgetExceeded(
+    ...     max_cost_usd=0.10,
+    ...     input_price_per_1k=0.003,
+    ...     output_price_per_1k=0.015,
+    ... )
+
+    >>> # Local Ollama model — budget never triggered (prices are 0)
+    >>> fault = LLMBudgetExceeded(max_cost_usd=0.01, model="qwen2.5")
+    """
+
+    _fault_name     = "budget_exceeded"
+    default_metrics = ["http_402_count", "tokens_used", "cost_usd", "error_rate", "completion_rate"]
+
+    def __init__(
+        self,
+        max_cost_usd: float = 0.10,
+        model: str = "",
+        input_price_per_1k: float | None = None,
+        output_price_per_1k: float | None = None,
+        port: int = _DEFAULT_PORT,
+        upstream: str = _DEFAULT_UPSTREAM,
+        base_url_env: str = _DEFAULT_ENV,
+    ) -> None:
+        if max_cost_usd <= 0:
+            raise ValueError(
+                f"LLMBudgetExceeded 'max_cost_usd' must be > 0, got {max_cost_usd}."
+            )
+
+        # Resolve pricing
+        if input_price_per_1k is not None and output_price_per_1k is not None:
+            in_p, out_p = input_price_per_1k, output_price_per_1k
+        elif model:
+            if model not in MODEL_PRICING:
+                raise ValueError(
+                    f"LLMBudgetExceeded: unknown model {model!r}. "
+                    f"Known models: {sorted(MODEL_PRICING)}. "
+                    "Use input_price_per_1k / output_price_per_1k to set prices manually."
+                )
+            in_p, out_p = MODEL_PRICING[model]
+        else:
+            raise ValueError(
+                "LLMBudgetExceeded requires either 'model' or both "
+                "'input_price_per_1k' and 'output_price_per_1k'."
+            )
+
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        self.max_cost_usd = max_cost_usd
+        self.model = model
+        self.input_price_per_1k = in_p
+        self.output_price_per_1k = out_p
+        self._extra_args = [
+            "--budget-max-cost-usd",   str(max_cost_usd),
+            "--budget-input-price",    str(in_p),
+            "--budget-output-price",   str(out_p),
+        ]
+
+    def _parameters(self) -> dict:
+        return {
+            **super()._parameters(),
+            "max_cost_usd":       self.max_cost_usd,
+            "model":              self.model or "(custom)",
+            "input_price_per_1k": self.input_price_per_1k,
+            "output_price_per_1k": self.output_price_per_1k,
+        }
 
 
 class LLMTimeout(_LLMProxyFault):
@@ -297,7 +434,8 @@ class LLMTimeout(_LLMProxyFault):
     >>> fault = LLMTimeout(timeout_s=10.0)
     """
 
-    _fault_name = "timeout"
+    _fault_name     = "timeout"
+    default_metrics = ["timeout_rate", "duration_s", "error_rate"]
 
     def __init__(
         self,
@@ -352,7 +490,8 @@ class LLMResponseCorrupt(_LLMProxyFault):
     >>> fault = LLMResponseCorrupt(mode="invalid_json")
     """
 
-    _fault_name = "corrupt"
+    _fault_name     = "corrupt"
+    default_metrics = ["parse_errors", "response_length", "error_rate"]
 
     def __init__(
         self,
@@ -395,7 +534,8 @@ class LLMUnavailable(_LLMProxyFault):
     >>> fault = LLMUnavailable()
     """
 
-    _fault_name = "unavailable"
+    _fault_name     = "unavailable"
+    default_metrics = ["error_rate", "http_503_count", "downtime_s", "completion_rate"]
 
     def __init__(
         self,
@@ -443,7 +583,8 @@ class ToolFault(_LLMProxyFault):
     >>> fault = ToolFault(tool_name="search")
     """
 
-    _fault_name = "tool_fault"
+    _fault_name     = "tool_fault"
+    default_metrics = ["error_rate", "duration_s", "http_status"]
 
     def __init__(
         self,
@@ -500,7 +641,8 @@ class LLMHallucination(_LLMProxyFault):
     ... )
     """
 
-    _fault_name = "hallucinate"
+    _fault_name     = "hallucinate"
+    default_metrics = ["response_length", "error_rate"]
 
     def __init__(
         self,
@@ -567,7 +709,8 @@ class LLMStreamInterrupt(_LLMProxyFault):
     >>> fault = LLMStreamInterrupt(interrupt_after=2)
     """
 
-    _fault_name = "stream_interrupt"
+    _fault_name     = "stream_interrupt"
+    default_metrics = ["response_length", "error_rate", "duration_s"]
 
     def __init__(
         self,
@@ -615,7 +758,8 @@ class LLMTokenStarvation(_LLMProxyFault):
     >>> fault = LLMTokenStarvation(max_tokens=10)
     """
 
-    _fault_name = "token_starve"
+    _fault_name     = "token_starve"
+    default_metrics = ["tokens_used", "truncation_rate", "response_length", "completion_rate"]
 
     def __init__(
         self,
@@ -688,6 +832,8 @@ class MCPFault(_LLMProxyFault):
     Also intercepts MCP-over-SSE (server-sent events) and MCP-over-HTTP
     streams used by modern MCP clients.
     """
+
+    default_metrics = ["error_rate", "downtime_s", "duration_s", "http_status"]
 
     def __init__(
         self,
@@ -791,7 +937,8 @@ class SemanticCorrupt(_LLMProxyFault):
     >>> fault = SemanticCorrupt(mode="entity_swap", base_url_env="ANTHROPIC_BASE_URL")
     """
 
-    _fault_name = "semantic_corrupt"
+    _fault_name     = "semantic_corrupt"
+    default_metrics = ["response_length", "error_rate"]
 
     def __init__(
         self,

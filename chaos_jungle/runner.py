@@ -17,6 +17,9 @@ from chaos_jungle.targets.logging import LoggingTarget
 if TYPE_CHECKING:
     from chaos_jungle.judge import JudgeScore, LLMJudge
     from chaos_jungle.oracles import Oracle, OracleResult
+    from chaos_jungle.metrics.strategy import CollectStrategy
+    from chaos_jungle.metrics.metric_set import MetricSet
+    from chaos_jungle.metrics.schema import CollectedMetrics
 
 
 @dataclass
@@ -63,6 +66,7 @@ class MeasurementResult:
     judge_fault: "JudgeScore | None" = field(default=None, repr=False)
     judge_delta: dict = field(default_factory=dict)
     oracle_results: "list[OracleResult]" = field(default_factory=list)
+    collected_metrics: "CollectedMetrics | None" = field(default=None, repr=False)
 
     def passed(self, key: str, threshold: float) -> bool:
         """Return True if ``abs(delta[key]) <= threshold``."""
@@ -163,6 +167,21 @@ class MeasurementResult:
             if jf.reasoning:
                 lines.append(f"\n  Judge note: {jf.reasoning}")
 
+        if self.collected_metrics is not None:
+            cm = self.collected_metrics
+            lines.append("")
+            lines.append(f"  Auto-collected metrics ({cm.strategy}):")
+            for name in cm.active_metrics:
+                b = cm.baseline.get(name)
+                f = cm.fault.get(name)
+                d = cm.delta.get(name)
+                b_str = f"{b.avg:.4g}" if b else "—"
+                f_str = f"{f.avg:.4g}" if f else "—"
+                d_str = f"  Δ {d:+.4g}" if d is not None else ""
+                lines.append(f"  {name:<30} baseline={b_str}  fault={f_str}{d_str}")
+            if cm.recovery:
+                lines.append(f"  Recovery samples: {sum(len(v.series) for v in cm.recovery.values())}")
+
         if self.oracle_results:
             lines.append("")
             lines.append("  Oracle assertions:")
@@ -189,6 +208,16 @@ def _avg_metrics(runs: list[dict]) -> dict:
     for k in runs[0]:
         vals = [r[k] for r in runs if isinstance(r.get(k), (int, float))]
         result[k] = round(sum(vals) / len(vals), 6) if vals else runs[0].get(k)
+    return result
+
+
+def _extract_workload_metrics(runs: list[dict], names: list[str]) -> dict[str, float]:
+    """Extract and average named metrics from a list of workload() return dicts."""
+    result: dict[str, float] = {}
+    for name in names:
+        vals = [r[name] for r in runs if isinstance(r.get(name), (int, float))]
+        if vals:
+            result[name] = round(sum(vals) / len(vals), 6)
     return result
 
 
@@ -513,6 +542,8 @@ class ChaosRunner:
         n_fault: int = 1,
         evaluator: "LLMJudge | None" = None,
         oracles: "list[Oracle] | None" = None,
+        strategy: "CollectStrategy | None" = None,
+        metric_set: "MetricSet | None" = None,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -576,14 +607,44 @@ class ChaosRunner:
                 if not result.passed_oracles():
                     raise AssertionError("Oracle failure")
 
+        strategy : CollectStrategy, optional
+            Controls *when* metrics are sampled. Use
+            :attr:`~chaos_jungle.metrics.CollectStrategy.SNAPSHOT` (3 fixed
+            points: before / during / after fault) or
+            :attr:`~chaos_jungle.metrics.CollectStrategy.RECOVERY` (same +
+            a post-fault time-series window). When ``None`` (default), no
+            automatic metric collection is performed.
+        metric_set : MetricSet, optional
+            Controls *which* of the fault's ``default_metrics`` are collected.
+            Defaults to :attr:`~chaos_jungle.metrics.MetricSet.DEFAULT` (all
+            fault defaults) when *strategy* is given. Ignored when *strategy*
+            is ``None``.
+
         Returns
         -------
         MeasurementResult
             Contains averaged baseline/fault metrics, their delta,
             optionally LLM quality scores when *evaluator* is provided,
-            and oracle assertion results when *oracles* is provided.
+            oracle assertion results when *oracles* is provided, and
+            auto-collected metrics in ``result.collected_metrics`` when
+            *strategy* is given.
         """
         from chaos_jungle.judge import average_scores  # lazy import
+
+        # ── Resolve active metrics (if strategy provided) ──────────
+        _active: list[str] = []
+        _active_system: list[str] = []
+        _active_workload: list[str] = []
+        if strategy is not None:
+            from chaos_jungle.metrics.metric_set import MetricSet as _MS
+            from chaos_jungle.metrics.strategy import _SYSTEM_CMDS
+            _ms = metric_set if metric_set is not None else _MS.DEFAULT
+            _all_defaults = [
+                m for fault in self.scenario.faults for m in fault.default_metrics
+            ]
+            _active = _ms.resolve(_all_defaults)
+            _active_system   = [m for m in _active if m in _SYSTEM_CMDS]
+            _active_workload = [m for m in _active if m not in _SYSTEM_CMDS]
 
         # ── 1. Baseline runs (no fault) ───────────────────────────
         print(f"[chaos-jungle] Measuring baseline ({n_baseline} trial(s)) ...")
@@ -592,17 +653,84 @@ class ChaosRunner:
             raw_baseline.append(workload())
         baseline = _avg_metrics(raw_baseline)
 
+        # Baseline metric snapshot
+        _b_sample = None
+        if strategy is not None:
+            from chaos_jungle.metrics.strategy import collect_system_snapshot
+            from chaos_jungle.metrics.schema import MetricSample as _MS2
+            _b_sys = collect_system_snapshot(self.target, _active_system)
+            _b_wl  = _extract_workload_metrics(raw_baseline, _active_workload)
+            _b_sample = _MS2(
+                timestamp_s=time.time(),
+                phase="baseline",
+                trial=0,
+                values={**_b_sys, **_b_wl},
+            )
+
         # ── 2. Fault runs ─────────────────────────────────────────
         print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
         self.start()
         raw_fault: list[dict] = []
+        _f_sample = None
         try:
             for _ in range(n_fault):
                 raw_fault.append(workload())
+
+            # Fault snapshot (while fault still active)
+            if strategy is not None:
+                from chaos_jungle.metrics.strategy import collect_system_snapshot
+                from chaos_jungle.metrics.schema import MetricSample as _MS2
+                _f_sys = collect_system_snapshot(self.target, _active_system)
+                _f_wl  = _extract_workload_metrics(raw_fault, _active_workload)
+                _f_sample = _MS2(
+                    timestamp_s=time.time(),
+                    phase="fault",
+                    trial=0,
+                    values={**_f_sys, **_f_wl},
+                )
         finally:
             self.stop()
 
         fault = _avg_metrics(raw_fault)
+
+        # ── 2b. Post-stop metric collection ───────────────────────
+        _r_sample = None
+        _recovery_samples: list = []
+        if strategy is not None:
+            from chaos_jungle.metrics.strategy import (
+                collect_system_snapshot,
+                collect_recovery_samples,
+            )
+            from chaos_jungle.metrics.schema import MetricSample as _MS2
+            # LocalTarget.connect() is a no-op; SSH targets reconnect cleanly
+            try:
+                self.target.connect()
+                _r_sys = collect_system_snapshot(self.target, _active_system)
+                if _r_sys:
+                    _r_sample = _MS2(
+                        timestamp_s=time.time(),
+                        phase="recovery",
+                        trial=0,
+                        values=_r_sys,
+                    )
+                if strategy.mode == "recovery" and _active_system:
+                    print(
+                        f"[chaos-jungle] Collecting recovery metrics "
+                        f"({strategy.recovery_window_s:.0f}s window) ..."
+                    )
+                    _recovery_samples = collect_recovery_samples(
+                        self.target,
+                        _active_system,
+                        window_s=strategy.recovery_window_s,
+                        interval_s=strategy.recovery_interval_s,
+                    )
+            except Exception:
+                pass
+            finally:
+                try:
+                    self.target.disconnect()
+                except Exception:
+                    pass
 
         # ── 3. Delta ──────────────────────────────────────────────
         delta = {
@@ -669,6 +797,25 @@ class ChaosRunner:
             else:
                 print(f"[chaos-jungle] Oracle: all {len(oracles)} assertion(s) passed")
 
+        # ── 5b. Build CollectedMetrics (if strategy was used) ─────
+        collected_metrics = None
+        if strategy is not None and _active:
+            from chaos_jungle.metrics.schema import CollectedMetrics as _CM
+            _b_samples = [_b_sample] if _b_sample else []
+            _f_samples = [_f_sample] if _f_sample else []
+            # SNAPSHOT recovery = single snapshot; RECOVERY = full window
+            if strategy.mode == "recovery":
+                _rec_samples = _recovery_samples
+            else:
+                _rec_samples = [_r_sample] if _r_sample else []
+            collected_metrics = _CM.build(
+                strategy=strategy.mode,
+                active_metrics=_active,
+                baseline_samples=_b_samples,
+                fault_samples=_f_samples,
+                recovery_samples=_rec_samples,
+            )
+
         result = MeasurementResult(
             scenario=self.scenario.name,
             session_id=self._session_id,
@@ -683,6 +830,7 @@ class ChaosRunner:
             judge_fault=judge_fault_score,
             judge_delta=judge_delta,
             oracle_results=oracle_results,
+            collected_metrics=collected_metrics,
         )
 
         # ── 6. Persist to DB ──────────────────────────────────────

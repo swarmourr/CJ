@@ -47,8 +47,9 @@ class DiskFull(Fault):
     >>> fault = DiskFull("/var/lib/data", size_mb=10000)
     """
 
-    dependencies: list[str] = ["coreutils"]
-    danger_level: int = 2  # destructive — fills disk, requires cleanup
+    dependencies: list[str]    = ["coreutils"]
+    danger_level: int          = 2
+    default_metrics: list[str] = ["disk_used_bytes", "write_errors", "read_errors", "inode_used", "duration_s"]
 
     def __init__(self, path: str = "/tmp", size_mb: int = 2048) -> None:
         if not path.startswith("/"):
@@ -100,8 +101,9 @@ class CPUStress(Fault):
     >>> fault = CPUStress(cores=2, duration_s=300)
     """
 
-    dependencies: list[str] = ["stress-ng"]
-    danger_level: int = 1  # moderate — saturates CPU, affects co-located workloads
+    dependencies: list[str]    = ["stress-ng"]
+    danger_level: int          = 1
+    default_metrics: list[str] = ["cpu_percent", "context_switches", "duration_s", "process_wait_ms"]
 
     def __init__(self, cores: int = 1, duration_s: int = 120) -> None:
         if cores < 1:
@@ -146,8 +148,9 @@ class MemoryStress(Fault):
     >>> fault = MemoryStress(mb=4096)
     """
 
-    dependencies: list[str] = ["stress-ng"]
-    danger_level: int = 1  # moderate — allocates system RAM, may OOM co-located processes
+    dependencies: list[str]    = ["stress-ng"]
+    danger_level: int          = 1
+    default_metrics: list[str] = ["memory_mb", "swap_used_mb", "cpu_percent", "duration_s", "oom_events"]
 
     def __init__(self, mb: int = 512, duration_s: int = 120) -> None:
         if mb < 1:
@@ -195,7 +198,8 @@ class IOStress(Fault):
     >>> fault = IOStress(workers=2, path="/var/lib/data")
     """
 
-    dependencies: list[str] = ["stress-ng"]
+    dependencies: list[str]    = ["stress-ng"]
+    default_metrics: list[str] = ["iops", "io_wait_ms", "read_latency_ms", "write_latency_ms", "duration_s"]
 
     def __init__(
         self,

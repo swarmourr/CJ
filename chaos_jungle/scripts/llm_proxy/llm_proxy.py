@@ -88,6 +88,8 @@ FAULT: str = ""
 FAULT_ARGS: dict = {}
 _request_count: int = 0
 _count_lock: Lock = Lock()
+_cost_usd: float = 0.0
+_cost_lock: Lock = Lock()
 
 _CT_JSON = "application/json"
 
@@ -107,6 +109,10 @@ _STATIC = {
     "rate_limit": (
         429,
         b'{"error":{"message":"Rate limit exceeded (chaos-jungle)","type":"chaos_rate_limit","code":"rate_limit_exceeded"}}',
+    ),
+    "budget_exceeded": (
+        402,
+        b'{"error":{"message":"Token budget exceeded (chaos-jungle)","type":"chaos_budget_exceeded","code":"budget_exceeded"}}',
     ),
     "timeout": (
         504,
@@ -690,6 +696,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self._reply(*_STATIC["rate_limit"])
                 return
 
+        if fault == "budget_exceeded":
+            with _cost_lock:
+                current_cost = _cost_usd
+            if current_cost >= FAULT_ARGS.get("budget_max_cost_usd", 0.10):
+                self._reply(*_STATIC["budget_exceeded"])
+                return
+
         if fault in ("timeout", "mcp_timeout"):
             time.sleep(FAULT_ARGS.get("timeout_s", 30.0))
             self._reply(*_STATIC[fault])
@@ -827,6 +840,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if fault == "skill_conflict":
             resp_body = _inject_skill_conflict(resp_body, FAULT_ARGS.get("conflict_text", ""))
 
+        if fault == "budget_exceeded":
+            global _cost_usd
+            try:
+                data = json.loads(resp_body)
+                usage = data.get("usage", {})
+                in_tokens  = usage.get("prompt_tokens", 0)
+                out_tokens = usage.get("completion_tokens", 0)
+                in_price   = FAULT_ARGS.get("budget_input_price", 0.0)
+                out_price  = FAULT_ARGS.get("budget_output_price", 0.0)
+                cost = (in_tokens * in_price + out_tokens * out_price) / 1000.0
+                with _cost_lock:
+                    _cost_usd += cost
+            except Exception:
+                pass
+
         self._reply(status, resp_body, resp_ct)
 
     def _reply(self, status: int, body: bytes,
@@ -844,7 +872,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
 
 _ALL_FAULTS = [
-    "latency", "rate_limit", "timeout", "corrupt", "unavailable",
+    "latency", "rate_limit", "budget_exceeded", "timeout", "corrupt", "unavailable",
     "tool_fault", "hallucinate", "stream_interrupt", "token_starve",
     "mcp_tool_error", "mcp_unavailable", "mcp_timeout",
     "semantic_corrupt",
@@ -887,6 +915,12 @@ def main() -> None:
                    help="Number of SSE data events before stream is cut")
     p.add_argument("--token-starve-max", type=int, default=5,
                    help="max_tokens value injected by token_starve")
+    p.add_argument("--budget-max-cost-usd", type=float, default=0.10,
+                   help="Spending cap in USD; requests are rejected with 402 once exceeded")
+    p.add_argument("--budget-input-price", type=float, default=0.0,
+                   help="Price per 1 000 input tokens in USD (from model pricing table)")
+    p.add_argument("--budget-output-price", type=float, default=0.0,
+                   help="Price per 1 000 output tokens in USD (from model pricing table)")
     p.add_argument("--semantic-mode", default="entity_swap",
                    choices=["entity_swap", "context_truncate", "inject_distractor", "rag_poison"],
                    help="Semantic mutation mode for semantic_corrupt fault")
@@ -931,6 +965,9 @@ def main() -> None:
         "generator_model":       args.hallucination_model,
         "interrupt_after":       args.stream_interrupt_after,
         "max_tokens":            args.token_starve_max,
+        "budget_max_cost_usd":   args.budget_max_cost_usd,
+        "budget_input_price":    args.budget_input_price,
+        "budget_output_price":   args.budget_output_price,
         "semantic_mode":         args.semantic_mode,
         "distractor":            args.semantic_distractor,
         "rag_poison":            args.semantic_rag_poison,

@@ -138,7 +138,8 @@ class GPUThrottle(Fault):
     >>> fault = GPUThrottle(power_pct=60, gpu_id=1)
     """
 
-    dependencies: list[str] = []   # checked dynamically per vendor
+    dependencies: list[str]    = []   # checked dynamically per vendor
+    default_metrics: list[str] = ["gpu_util_percent", "gpu_clock_mhz", "inference_latency_ms", "duration_s"]
 
     def __init__(self, power_pct: float = 50.0, gpu_id: int = 0) -> None:
         if not (1.0 <= power_pct <= 100.0):
@@ -273,7 +274,8 @@ class GPUMemoryPressure(Fault):
     >>> fault = GPUMemoryPressure(memory_pct=50, gpu_id=1)
     """
 
-    dependencies: list[str] = []
+    dependencies: list[str]    = []
+    default_metrics: list[str] = ["gpu_memory_mb", "oom_events", "inference_latency_ms", "duration_s"]
 
     def __init__(self, memory_pct: float = 80.0, gpu_id: int = 0) -> None:
         if not (1.0 <= memory_pct <= 99.0):
@@ -381,7 +383,8 @@ class GPUClockLock(Fault):
     >>> fault = GPUClockLock(freq_mhz=500, gpu_id=1)
     """
 
-    dependencies: list[str] = []
+    dependencies: list[str]    = []
+    default_metrics: list[str] = ["gpu_clock_mhz", "inference_latency_ms", "throughput_inferences_per_s", "duration_s"]
 
     def __init__(self, freq_mhz: int | None = None, gpu_id: int = 0) -> None:
         if freq_mhz is not None and freq_mhz < 1:

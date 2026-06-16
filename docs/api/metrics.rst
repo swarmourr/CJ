@@ -12,3 +12,12 @@ Metrics
 
 .. automodule:: chaos_jungle.metrics.custom
    :members:
+
+.. automodule:: chaos_jungle.metrics.metric_set
+   :members:
+
+.. automodule:: chaos_jungle.metrics.strategy
+   :members:
+
+.. automodule:: chaos_jungle.metrics.schema
+   :members:

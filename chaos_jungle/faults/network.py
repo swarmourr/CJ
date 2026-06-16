@@ -73,7 +73,9 @@ class NetworkDelay(Fault):
     >>> runner.start()
     """
 
-    dependencies = ["iproute2"]
+    dependencies    = ["iproute2"]
+    default_metrics = ["duration_s", "error_rate", "timeout_rate",
+                       "rtt_ms", "p50_latency_ms", "p99_latency_ms"]
 
     def __init__(self, delay: str, jitter: str = "", iface: str = "") -> None:
         _require_time(delay, "delay")
@@ -120,7 +122,8 @@ class NetworkLoss(Fault):
     >>> fault = NetworkLoss("5%")
     """
 
-    dependencies = ["iproute2"]
+    dependencies    = ["iproute2"]
+    default_metrics = ["duration_s", "error_rate", "packet_loss_rate", "retransmissions"]
 
     def __init__(self, rate: str, iface: str = "") -> None:
         _require_rate(rate, "rate")
@@ -163,7 +166,8 @@ class NetworkCorrupt(Fault):
     >>> fault = NetworkCorrupt("1%")
     """
 
-    dependencies = ["iproute2"]
+    dependencies    = ["iproute2"]
+    default_metrics = ["duration_s", "error_rate", "parse_errors", "checksum_errors"]
 
     def __init__(self, rate: str, iface: str = "") -> None:
         _require_rate(rate, "rate")
@@ -206,7 +210,8 @@ class NetworkDuplicate(Fault):
     >>> fault = NetworkDuplicate("0.5%")
     """
 
-    dependencies = ["iproute2"]
+    dependencies    = ["iproute2"]
+    default_metrics = ["duration_s", "error_rate", "throughput_bps", "bandwidth_wasted_bytes"]
 
     def __init__(self, rate: str, iface: str = "") -> None:
         _require_rate(rate, "rate")

@@ -177,6 +177,60 @@ Quality gate::
 
 ----
 
+Auto-collected fault metrics
+------------------------------
+
+Pass ``strategy=`` to ``measure()`` to let chaos-jungle automatically collect
+the fault's ``default_metrics`` at up to three points (baseline, fault,
+post-fault).  No changes to your workload callable are needed for system
+metrics; workload metrics are extracted from what your function already returns.
+
+.. code-block:: python
+
+   from chaos_jungle.metrics import MetricSet, CollectStrategy
+
+   result = runner.measure(
+       workload,
+       n_baseline=3,
+       n_fault=3,
+       strategy=CollectStrategy.SNAPSHOT,               # 3-point snapshot
+       metric_set=MetricSet.DEFAULT.exclude("swap_used_mb"),
+   )
+
+   cm = result.collected_metrics
+   print(cm.delta)          # {"rtt_ms": +198.4, "cpu_percent": +2.1, ...}
+   print(cm.fault["rtt_ms"].p99)   # 99th-percentile during fault phase
+
+Two built-in strategies:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Strategy
+     - Behaviour
+   * - ``CollectStrategy.SNAPSHOT``
+     - One sample at each of three points: baseline → fault → post-stop.
+       Fast, zero extra overhead.
+   * - ``CollectStrategy.RECOVERY``
+     - Same as SNAPSHOT plus a post-fault time-series window (default 60 s,
+       sampled every 10 s).  Shows how quickly the system recovers.
+
+.. code-block:: python
+
+   # Watch recovery for 2 minutes, sample every 10 s
+   result = runner.measure(
+       workload,
+       strategy=CollectStrategy.RECOVERY(recovery_window_s=120),
+   )
+   for sample in result.collected_metrics.recovery["cpu_percent"].series:
+       print(sample.timestamp_s, sample.values["cpu_percent"])
+
+See :ref:`guide-metrics` for the full ``MetricSet`` / ``CollectStrategy`` API
+and the per-fault default metric tables.
+
+----
+
 MeasurementResult — full API
 ------------------------------
 
@@ -189,6 +243,12 @@ MeasurementResult — full API
    result.raw_fault           # list of per-trial dicts (unaveraged)
    result.session_id          # DB session id — link to dashboard / export
 
+   # Auto-collected metrics (populated when strategy= is passed)
+   result.collected_metrics          # CollectedMetrics | None
+   result.collected_metrics.delta    # {"rtt_ms": +198.4, ...}
+   result.collected_metrics.fault["cpu_percent"].avg   # mean CPU during fault
+   result.collected_metrics.recovery                   # post-fault time-series
+
    # Convenience accessors
    result.baseline_mean("duration_s")   # 0.012
    result.fault_mean("duration_s")      # 3.214
@@ -200,7 +260,7 @@ MeasurementResult — full API
        max_hallucination=0.30,
    )
 
-   result.summary()   # formatted text table (print-ready)
+   result.summary()   # formatted text table — includes collected_metrics section
 
 ----
 
@@ -364,10 +424,22 @@ Summary table
    * - DB persistence
      - ``result.session_id``
      - Dashboard, ``chaos-jungle export``
+   * - Auto-collected metrics
+     - ``runner.measure(..., strategy=CollectStrategy.SNAPSHOT)``
+     - System + workload metrics at baseline / fault / post-fault
+   * - Metric selection
+     - ``metric_set=MetricSet.DEFAULT.exclude("swap_used_mb")``
+     - Filter which of the fault's ``default_metrics`` to collect
+   * - Recovery window
+     - ``strategy=CollectStrategy.RECOVERY(recovery_window_s=120)``
+     - Time-series of system metrics after fault is reverted
+   * - Collected metrics result
+     - ``result.collected_metrics``
+     - ``CollectedMetrics`` with ``.baseline``, ``.fault``, ``.recovery``, ``.delta``
 
 See also
 ---------
 
 * :ref:`guide-judge` — LLMJudge evaluator API
-* :ref:`guide-metrics` — built-in and custom Metric classes
+* :ref:`guide-metrics` — MetricSet, CollectStrategy, built-in and custom Metric classes
 * :ref:`guide-llm` — LLM API fault parameters
