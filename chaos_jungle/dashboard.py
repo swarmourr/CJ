@@ -216,6 +216,10 @@ nav{display:flex;height:100%;gap:1px}
 .tool-path{color:var(--text3);font-size:10px;font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tool-pkg{background:var(--card);border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:10px;color:var(--text2);flex-shrink:0}
 
+/* Small action button */
+.btn-sm{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--blue);font-size:11px;font-weight:500;padding:3px 9px;cursor:pointer;font-family:'Inter',sans-serif;transition:all .12s;white-space:nowrap}
+.btn-sm:hover{background:var(--blue-bg);border-color:var(--blue)}
+
 /* Log viewer */
 .log-pre{font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.8;padding:12px 14px;max-height:420px;overflow-y:auto;background:var(--surface);white-space:pre-wrap;word-break:break-all}
 
@@ -302,6 +306,7 @@ nav{display:flex;height:100%;gap:1px}
   <nav>
     <button class="nav-btn active" onclick="switchTab('overview',this)">Overview</button>
     <button class="nav-btn" onclick="switchTab('experiments',this)">Experiments</button>
+    <button class="nav-btn" onclick="switchTab('runs',this)">Runs</button>
     <button class="nav-btn" onclick="switchTab('llm',this)">LLM Calls</button>
     <button class="nav-btn" onclick="switchTab('monitoring',this)">Monitoring</button>
     <button class="nav-btn" onclick="switchTab('tools',this)">System</button>
@@ -341,18 +346,42 @@ nav{display:flex;height:100%;gap:1px}
   </div>
 </div>
 
-<!-- ═══ EXPERIMENTS ═══ -->
+<!-- ═══ EXPERIMENTS (grouped) ═══ -->
 <div class="tab-panel" id="tab-experiments">
   <div class="panel">
     <div class="filter-bar">
-      <input type="search" id="exp-search" placeholder="Filter by name, fault, status…" oninput="filterExperiments()"/>
-      <select id="exp-status" onchange="filterExperiments()">
+      <input type="search" id="expg-search" placeholder="Filter experiments…" oninput="filterExperimentsGrouped()"/>
+    </div>
+    <table class="tbl">
+      <thead><tr>
+        <th>Experiment</th>
+        <th style="width:60px;text-align:center">Runs</th>
+        <th style="width:90px;text-align:center">Pass rate</th>
+        <th style="width:90px;text-align:right">Avg duration</th>
+        <th>Fault types</th>
+        <th style="width:140px">Last run</th>
+        <th style="width:80px"></th>
+      </tr></thead>
+      <tbody id="expg-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══ RUNS ═══ -->
+<div class="tab-panel" id="tab-runs">
+  <div class="panel">
+    <div class="filter-bar">
+      <input type="search" id="exp-search" placeholder="Filter by name, fault, target…" oninput="filterRuns()"/>
+      <select id="exp-experiment" onchange="filterRuns()">
+        <option value="">All experiments</option>
+      </select>
+      <select id="exp-status" onchange="filterRuns()">
         <option value="">All statuses</option>
         <option value="running">Running</option>
         <option value="reverted">Reverted</option>
         <option value="failed">Failed</option>
       </select>
-      <select id="exp-category" onchange="filterExperiments()">
+      <select id="exp-category" onchange="filterRuns()">
         <option value="">All fault types</option>
         <option value="network">Network</option>
         <option value="resource">Resource</option>
@@ -368,9 +397,10 @@ nav{display:flex;height:100%;gap:1px}
     <table class="tbl">
       <thead><tr>
         <th style="width:48px">ID</th>
-        <th>Scenario</th>
+        <th>Run / Scenario</th>
         <th>Status</th>
         <th>Faults</th>
+        <th>Target</th>
         <th>Started</th>
         <th style="width:80px">Duration</th>
       </tr></thead>
@@ -563,7 +593,9 @@ async function load(){
     renderKPI(sessions, llmCalls);
     renderOverviewCharts(sessions);
     renderOverviewTable(sessions);
-    renderExperimentsTable(sessions);
+    renderExperimentsGrouped(sessions);
+    renderRunsTable(sessions);
+    populateRunsFilters(sessions);
     renderTools(tools);
     renderLLMSummary(llmCalls);
     renderLLMTable(llmCalls);
@@ -782,11 +814,18 @@ function sessionRow(s){
   const dur    = s.duration_s!=null ? s.duration_s+'s' : (s.status==='running'?'⏱ live':'—');
   const started= (s.started_at||'').replace('T',' ').slice(0,19)||'—';
   const faults = (s.faults||[]).map(chipFor).join('')||'<span class="muted small">—</span>';
+  const ttype  = s.target_type||'';
+  const taddr  = s.target_addr||'';
+  const targetCell = ttype
+    ? `<span style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--text2)">${esc(ttype)}</span>
+       <span style="font-size:10px;color:var(--text3);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px" title="${esc(taddr)}">${esc(taddr)}</span>`
+    : '<span class="muted small">local</span>';
   return `<tr class="row" onclick="openSession(${s.id})">
     <td class="mono small muted">#${s.id}</td>
-    <td style="font-weight:600">${esc(s.name)}${targetBadge(s)}</td>
+    <td style="font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</td>
     <td><span class="badge ${s.status}">${s.status}</span></td>
     <td>${faults}</td>
+    <td style="max-width:180px">${targetCell}</td>
     <td class="small muted mono">${started}</td>
     <td class="small mono">${dur}</td>
   </tr>`;
@@ -796,29 +835,135 @@ function renderOverviewTable(sessions){
   const recent=sessions.slice(0,8);
   document.getElementById('overview-count').textContent=sessions.length+' total';
   document.getElementById('overview-sessions').innerHTML = recent.length
-    ? `<thead><tr><th style="width:48px">ID</th><th>Scenario</th><th>Status</th><th>Faults</th><th>Started</th><th>Duration</th></tr></thead><tbody>${recent.map(sessionRow).join('')}</tbody>`
+    ? `<thead><tr><th style="width:48px">ID</th><th>Scenario</th><th>Status</th><th>Faults</th><th>Started</th><th>Duration</th></tr></thead><tbody>${recent.map(overviewRow).join('')}</tbody>`
     : `<tbody><tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🌿</div><div class="empty-msg">No experiments yet.</div></div></td></tr></tbody>`;
 }
 
-function renderExperimentsTable(sessions){
-  document.getElementById('exp-body').innerHTML = sessions.length
-    ? sessions.map(sessionRow).join('')
-    : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🌿</div><div class="empty-msg">No experiments yet.</div></div></td></tr>`;
+function overviewRow(s){
+  const dur    = s.duration_s!=null ? s.duration_s+'s' : (s.status==='running'?'⏱ live':'—');
+  const started= (s.started_at||'').replace('T',' ').slice(0,19)||'—';
+  const faults = (s.faults||[]).map(chipFor).join('')||'<span class="muted small">—</span>';
+  return `<tr class="row" onclick="openSession(${s.id})">
+    <td class="mono small muted">#${s.id}</td>
+    <td style="font-weight:600">${esc(s.name)}</td>
+    <td><span class="badge ${s.status}">${s.status}</span></td>
+    <td>${faults}</td>
+    <td class="small muted mono">${started}</td>
+    <td class="small mono">${dur}</td>
+  </tr>`;
 }
 
-function filterExperiments(){
-  const q  =document.getElementById('exp-search').value.toLowerCase();
-  const st =document.getElementById('exp-status').value;
-  const cat=document.getElementById('exp-category').value;
+// ─── Experiments (grouped by scenario name) ─────────────────
+function renderExperimentsGrouped(sessions){
+  const groups={};
+  sessions.forEach(s=>{
+    if(!groups[s.name]) groups[s.name]={runs:[],name:s.name};
+    groups[s.name].runs.push(s);
+  });
+  const rows=Object.values(groups).sort((a,b)=>{
+    const la=(a.runs[0]?.started_at||'');
+    const lb=(b.runs[0]?.started_at||'');
+    return lb.localeCompare(la);
+  });
+  document.getElementById('expg-body').innerHTML = rows.length
+    ? rows.map(expGroupRow).join('')
+    : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🌿</div><div class="empty-msg">No experiments yet.</div></div></td></tr>`;
+}
+
+function expGroupRow(g){
+  const runs  =g.runs;
+  const n     =runs.length;
+  const passed=runs.filter(s=>s.status==='reverted').length;
+  const failed=runs.filter(s=>s.status==='failed').length;
+  const running=runs.filter(s=>s.status==='running').length;
+  const passRate=n>0?Math.round(passed/n*100):0;
+  const durs  =runs.filter(s=>s.duration_s!=null).map(s=>s.duration_s);
+  const avgDur=durs.length?(durs.reduce((a,v)=>a+v,0)/durs.length).toFixed(1)+'s':'—';
+  // Collect unique fault chips
+  const seen=new Set();
+  const chips=[];
+  runs.forEach(s=>(s.faults||[]).forEach(f=>{
+    const key=f.category+'|'+f.kind;
+    if(!seen.has(key)){ seen.add(key); chips.push(chipFor(f)); }
+  }));
+  const last=(runs[0]?.started_at||'').replace('T',' ').slice(0,16)||'—';
+  const passColor=passRate===100?'var(--green)':passRate===0&&n>0?'var(--red)':'var(--yellow)';
+  const statusIcons=`<span style="color:var(--green);font-size:11px">${passed}✓</span>`+
+    (failed?` <span style="color:var(--red);font-size:11px">${failed}✕</span>`:'')+
+    (running?` <span style="color:var(--cyan);font-size:11px">${running}↻</span>`:'');
+  return `<tr class="row" onclick="drillExperiment(${JSON.stringify(esc(g.name))})">
+    <td style="font-weight:600;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(g.name)}">${esc(g.name)}</td>
+    <td style="text-align:center;font-weight:600;font-family:'JetBrains Mono',monospace">${n}</td>
+    <td style="text-align:center">
+      <span style="font-weight:700;color:${passColor};font-family:'JetBrains Mono',monospace">${passRate}%</span>
+      <div style="font-size:9px;color:var(--text3);margin-top:2px">${statusIcons}</div>
+    </td>
+    <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px">${avgDur}</td>
+    <td style="max-width:200px;overflow:hidden">${chips.slice(0,5).join(' ')}${chips.length>5?`<span class="muted small"> +${chips.length-5}</span>`:''}</td>
+    <td class="small muted mono">${last}</td>
+    <td><button class="btn-sm" onclick="event.stopPropagation();drillExperiment(${JSON.stringify(esc(g.name))})">Runs →</button></td>
+  </tr>`;
+}
+
+function filterExperimentsGrouped(){
+  const q=document.getElementById('expg-search').value.toLowerCase();
+  const groups={};
+  _sessions.forEach(s=>{
+    if(!q||s.name.toLowerCase().includes(q)){
+      if(!groups[s.name]) groups[s.name]={runs:[],name:s.name};
+      groups[s.name].runs.push(s);
+    }
+  });
+  const rows=Object.values(groups).sort((a,b)=>(b.runs[0]?.started_at||'').localeCompare(a.runs[0]?.started_at||''));
+  document.getElementById('expg-body').innerHTML = rows.length
+    ? rows.map(expGroupRow).join('')
+    : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-msg">No experiments match.</div></div></td></tr>`;
+}
+
+function drillExperiment(name){
+  // Switch to Runs tab, pre-filter by this experiment
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-runs').classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(b=>{ if(b.textContent==='Runs') b.classList.add('active'); });
+  const sel=document.getElementById('exp-experiment');
+  // find the matching option or add it
+  let found=false;
+  for(const opt of sel.options){ if(opt.value===name){sel.value=name;found=true;break;} }
+  if(!found){ const o=document.createElement('option');o.value=name;o.textContent=name;sel.appendChild(o);sel.value=name; }
+  filterRuns();
+}
+
+// ─── Runs table ──────────────────────────────────────────────
+function populateRunsFilters(sessions){
+  const expSel=document.getElementById('exp-experiment');
+  const names=[...new Set(sessions.map(s=>s.name))].sort();
+  // keep first option, add the rest
+  while(expSel.options.length>1) expSel.remove(1);
+  names.forEach(n=>{ const o=document.createElement('option');o.value=n;o.textContent=n;expSel.appendChild(o); });
+}
+
+function renderRunsTable(sessions){
+  document.getElementById('exp-body').innerHTML = sessions.length
+    ? sessions.map(sessionRow).join('')
+    : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🌿</div><div class="empty-msg">No runs yet.</div></div></td></tr>`;
+}
+
+function filterRuns(){
+  const q   =document.getElementById('exp-search').value.toLowerCase();
+  const exp =document.getElementById('exp-experiment').value;
+  const st  =document.getElementById('exp-status').value;
+  const cat =document.getElementById('exp-category').value;
   const filtered=_sessions.filter(s=>{
-    const matchQ  =!q||s.name.toLowerCase().includes(q)||(s.faults||[]).some(f=>f.kind.toLowerCase().includes(q))||String(s.id).includes(q);
+    const matchQ  =!q||s.name.toLowerCase().includes(q)||(s.faults||[]).some(f=>f.kind.toLowerCase().includes(q))||String(s.id).includes(q)||(s.target_addr||'').toLowerCase().includes(q);
+    const matchExp=!exp||s.name===exp;
     const matchSt =!st||s.status===st;
     const matchCat=!cat||(s.faults||[]).some(f=>(f.category||'other')===cat);
-    return matchQ&&matchSt&&matchCat;
+    return matchQ&&matchExp&&matchSt&&matchCat;
   });
   document.getElementById('exp-body').innerHTML = filtered.length
     ? filtered.map(sessionRow).join('')
-    : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-msg">No experiments match your filter.</div></div></td></tr>`;
+    : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-msg">No runs match.</div></div></td></tr>`;
 }
 
 // ─── LLM Calls tab ──────────────────────────────────────────
