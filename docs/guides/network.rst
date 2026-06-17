@@ -114,6 +114,8 @@ Parameters:
 * Does the application's timeout fire within the expected window?
 * Under jitter, does the retry budget handle variable RTT?
 
+**Default metrics:** ``duration_s``, ``error_rate``, ``timeout_rate``, ``rtt_ms``, ``p50_latency_ms``, ``p99_latency_ms``
+
 
 NetworkLoss
 -----------
@@ -141,6 +143,8 @@ but at the cost of latency.  High loss rates (≥ 30 %) cause TCP to stall.
 * At 30 %: ``success`` may drop; does the circuit-breaker open?
 * At 90 %: application should fall back or return a meaningful error
 
+**Default metrics:** ``duration_s``, ``error_rate``, ``packet_loss_rate``, ``retransmissions``
+
 
 NetworkCorrupt
 --------------
@@ -162,6 +166,8 @@ silent data acceptance.
 * ``success`` should stay 1 if retry logic is in place
 * At high rates (10 %+): retransmission overhead causes latency spike
 
+**Default metrics:** ``duration_s``, ``error_rate``, ``parse_errors``, ``checksum_errors``
+
 
 NetworkDuplicate
 ----------------
@@ -180,6 +186,8 @@ processes the same request or response twice, the result must be unchanged.
 * ``duplicate_count`` on the receiving side
 * Do duplicate write operations cause data inconsistency?
 * Does the application detect and deduplicate responses?
+
+**Default metrics:** ``duration_s``, ``error_rate``, ``throughput_bps``, ``bandwidth_wasted_bytes``
 
 
 SilentNetworkCorrupt

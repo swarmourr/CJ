@@ -128,6 +128,8 @@ What to observe
 * **Recovery speed** — how long does it take to detect, re-fetch, and
   re-process the corrupted file?
 
+**Default metrics:** ``read_errors``, ``parse_errors``, ``write_errors``, ``checksum_errors``, ``corrupted_files``
+
 Measuring with checksums
 -------------------------
 

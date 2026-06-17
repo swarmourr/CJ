@@ -89,6 +89,8 @@ Creates a large zero-filled file at ``path`` using ``dd``.  ``stop()`` /
 * Does it fall back to a temporary directory or an alternative storage path?
 * Does it recover automatically once space is freed, or does it require a restart?
 
+**Default metrics:** ``disk_used_bytes``, ``write_errors``, ``read_errors``, ``inode_used``, ``duration_s``
+
 .. warning::
 
    Set ``size_mb`` conservatively — leave at least 1–2 GiB free for the OS
@@ -123,6 +125,8 @@ CPU workers.
   CPU contention?
 * Does the application's timeout fire before the CPU is freed?
 * Does a multi-tenant system correctly throttle other users' requests?
+
+**Default metrics:** ``cpu_percent``, ``context_switches``, ``duration_s``, ``process_wait_ms``
 
 Combining with measurement::
 
@@ -165,6 +169,8 @@ pages, causing memory-mapped files and caches to miss.
 * Does the application's OOM-kill trigger if ``mb`` exceeds available RAM?
 * Does the application recover when memory pressure subsides?
 
+**Default metrics:** ``memory_mb``, ``swap_used_mb``, ``cpu_percent``, ``duration_s``, ``oom_events``
+
 .. tip::
 
    Set ``mb`` to approximately 70–80 % of total RAM to create realistic
@@ -199,6 +205,8 @@ latency for all other I/O on the same disk.
 * Do write operations to the same disk timeout or fail?
 * Does a read-heavy workload (model loading, log parsing) slow down
   proportionally?
+
+**Default metrics:** ``iops``, ``io_wait_ms``, ``read_latency_ms``, ``write_latency_ms``, ``duration_s``
 
 
 Combined degraded-node scenario

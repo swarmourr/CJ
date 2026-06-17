@@ -93,6 +93,8 @@ client is required on the controller.
 * ``inject`` — privilege escalation via corrupt config; does the agent
   validate its own role?
 
+**Default metrics:** ``read_errors``, ``parse_errors``, ``affected_keys``, ``cache_miss_rate``
+
 JsonStateCorrupt
 ----------------
 
@@ -132,6 +134,8 @@ Mutates a specific field in a JSON file using dot-path notation
 * ``inject`` on ``system_prompt`` — does the agent validate the system prompt
   it loads from disk, or does it blindly follow injected instructions?
 
+**Default metrics:** ``parse_errors``, ``validation_errors``, ``corrupted_fields``, ``read_errors``
+
 PostgresStateCorrupt
 --------------------
 
@@ -169,6 +173,8 @@ Requires ``psql`` to be installed on the target and a valid DSN.
        column="confidence_score",
        mutation="negate",
    )
+
+**Default metrics:** ``query_errors``, ``constraint_violations``, ``affected_rows``, ``data_loss_rows``
 
 Multi-agent scenario
 --------------------

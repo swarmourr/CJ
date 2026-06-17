@@ -79,6 +79,8 @@ Other signals::
 * How long does recovery take?
 * Are in-flight requests handled gracefully (drain vs. crash)?
 
+**Default metrics:** ``downtime_s``, ``recovery_time_s``, ``error_rate``, ``restart_count``
+
 sudo requirement
 ^^^^^^^^^^^^^^^^
 
@@ -150,6 +152,8 @@ is restored to its original state.
 * Does it reconnect automatically once the service is back?
 * Does masking (preventing restart) trigger a circuit-breaker or fallback?
 
+**Default metrics:** ``downtime_s``, ``error_rate``, ``restart_count``, ``duration_s``
+
 sudo requirement
 ^^^^^^^^^^^^^^^^
 
@@ -206,6 +210,8 @@ container is started again (except for ``rm``).
 * ``kill`` — does Kubernetes / Docker Compose restart the container?
 * ``pause`` — does the application timeout on the blocked Redis call, or hang?
 * ``stop`` — graceful shutdown: are in-flight requests drained?
+
+**Default metrics:** ``downtime_s``, ``recovery_time_s``, ``error_rate``, ``exit_code``, ``restart_count``
 
 No sudo requirement
 ^^^^^^^^^^^^^^^^^^^

@@ -91,6 +91,8 @@ Adds artificial delay before forwarding every API call.
 
 **Tests:** timeout budgets, retry compounding, user-visible progress.
 
+**Default metrics:** ``duration_s``, ``p50_latency_ms``, ``p99_latency_ms``
+
 LLMRateLimit
 ~~~~~~~~~~~~
 
@@ -103,6 +105,35 @@ Allows the first *n* requests through, then returns HTTP 429.
    fault = LLMRateLimit(n=5)
 
 **Tests:** back-off logic, ``Retry-After`` handling, request queuing.
+
+**Default metrics:** ``error_rate``, ``http_429_count``, ``duration_s``
+
+LLMBudgetExceeded
+~~~~~~~~~~~~~~~~~
+
+Tracks per-request cost in USD via the LLM proxy.  Once the cumulative cost
+reaches ``max_cost_usd``, every subsequent request is rejected with HTTP 402
+Payment Required.  Per-model pricing is configured via the built-in
+``MODEL_PRICING`` table (OpenAI, Anthropic, Google, Ollama) or overridden
+with explicit ``input_price_per_1k`` / ``output_price_per_1k`` parameters.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMBudgetExceeded
+
+   fault = LLMBudgetExceeded(max_cost_usd=0.10)
+
+   # Explicit pricing override (useful for custom / private models)
+   fault = LLMBudgetExceeded(
+       max_cost_usd=0.05,
+       input_price_per_1k=0.002,
+       output_price_per_1k=0.006,
+   )
+
+**Tests:** cost-cap enforcement, graceful degradation when budget is exhausted,
+whether the application surfaces a meaningful error to the user.
+
+**Default metrics:** ``http_402_count``, ``tokens_used``, ``cost_usd``, ``error_rate``, ``completion_rate``
 
 LLMTimeout
 ~~~~~~~~~~
@@ -117,6 +148,8 @@ No request is forwarded.
    fault = LLMTimeout(timeout_s=10.0)
 
 **Tests:** client-side timeouts, task cancellation, process blocking.
+
+**Default metrics:** ``timeout_rate``, ``duration_s``, ``error_rate``
 
 LLMResponseCorrupt
 ~~~~~~~~~~~~~~~~~~
@@ -133,6 +166,8 @@ Forwards the real API call but mangles the response.
 
 **Tests:** ``JSONDecodeError`` handling, downstream data propagation.
 
+**Default metrics:** ``parse_errors``, ``response_length``, ``error_rate``
+
 LLMUnavailable
 ~~~~~~~~~~~~~~
 
@@ -145,6 +180,8 @@ Always returns HTTP 503.
    fault = LLMUnavailable()
 
 **Tests:** fallback models, fail-fast behaviour, user error messages.
+
+**Default metrics:** ``error_rate``, ``http_503_count``, ``downtime_s``, ``completion_rate``
 
 Tool call faults
 ----------------
@@ -169,6 +206,8 @@ API error instead of forwarding it.
 **Tests:** tool-failure recovery, error propagation through agent loops,
 whether the agent retries, aborts, or continues with a bad state.
 
+**Default metrics:** ``error_rate``, ``duration_s``, ``http_status``
+
 LLMHallucination
 ~~~~~~~~~~~~~~~~
 
@@ -184,6 +223,8 @@ with injected wrong text before returning it to the agent.
 
 **Tests:** downstream validation, fact-checking layers, whether wrong
 model output propagates silently through the agent pipeline.
+
+**Default metrics:** ``response_length``, ``error_rate``
 
 LLMStreamInterrupt
 ~~~~~~~~~~~~~~~~~~
@@ -201,6 +242,8 @@ pipes SSE events back and then abruptly closes the connection after
 **Tests:** partial-response handling, streaming error recovery,
 incomplete tool-call detection when the model is cut off mid-generation.
 
+**Default metrics:** ``response_length``, ``error_rate``, ``duration_s``
+
 LLMTokenStarvation
 ~~~~~~~~~~~~~~~~~~
 
@@ -216,6 +259,8 @@ forwarding.  The model returns a real but truncated response with
 
 **Tests:** truncated answer handling, context-window pressure simulation,
 agents that loop when a response is incomplete.
+
+**Default metrics:** ``tokens_used``, ``truncation_rate``, ``response_length``, ``completion_rate``
 
 MCP faults
 ----------
@@ -251,6 +296,8 @@ your agent reads for the MCP server URL:
 
 **Tests:** tool execution failures inside agent loops, JSON-RPC error
 handling, graceful degradation when a tool server goes down.
+
+**Default metrics:** ``error_rate``, ``downtime_s``, ``duration_s``, ``http_status``
 
 Intercepting MCP between agents
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -350,6 +397,9 @@ Fault reference
    * - ``LLMRateLimit``
      - Throttled API (429)
      - Back-off, request queuing
+   * - ``LLMBudgetExceeded``
+     - Budget cap hit (402)
+     - Cost-cap enforcement, graceful degradation
    * - ``LLMTimeout``
      - Hanging connection
      - Task cancellation, hang detection
@@ -397,6 +447,10 @@ looks like.
      - HTTP 429 after the first *n* requests
      - Count of blocked calls, index of first failure
      - Calls ``[0..n-1]`` succeed; ``[n..]`` return 429
+   * - ``LLMBudgetExceeded``
+     - HTTP 402 once cumulative cost ≥ ``max_cost_usd``
+     - Cost accumulated, HTTP 402 count, tokens consumed
+     - Requests after budget hit return 402; prior calls succeed
    * - ``LLMTimeout``
      - Connection held for *T* s then HTTP 504
      - ``elapsed_s``, error type received by agent

@@ -395,6 +395,30 @@ Fault reference
    * - :class:`~chaos_jungle.faults.skill_file.SkillFilePermissionDenied`
      - Sets file permissions to 000 — agent cannot read it (danger_level=2)
 
+Default metrics per fault
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Fault
+     - Default metrics
+   * - ``SkillFileUnavailable``
+     - ``read_errors``, ``response_empty``, ``error_rate``, ``file_size_bytes``
+   * - ``SkillFileInstructionCorrupt``
+     - ``parse_errors``, ``error_rate``, ``response_length``, ``completion_rate``
+   * - ``SkillFileVersionSkew``
+     - ``parse_errors``, ``error_rate``, ``validation_errors``, ``completion_rate``
+   * - ``SkillFileBadOutput``
+     - ``parse_errors``, ``error_rate``, ``response_length``, ``completion_rate``
+   * - ``SkillFileMemoryStale``
+     - ``parse_errors``, ``error_rate``, ``response_length``, ``completion_rate``
+   * - ``SkillFileConflict``
+     - ``parse_errors``, ``error_rate``, ``response_length``, ``completion_rate``
+   * - ``SkillFilePermissionDenied``
+     - ``read_errors``, ``error_rate``, ``file_size_bytes``, ``completion_rate``
+
 Quick examples
 ~~~~~~~~~~~~~~
 

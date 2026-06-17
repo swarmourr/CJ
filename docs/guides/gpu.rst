@@ -108,6 +108,8 @@ Backend details:
      - Write ``<MHz>`` to ``gt0/rps_max_freq_mhz``
      - Restore original MHz value
 
+**Default metrics:** ``gpu_util_percent``, ``gpu_clock_mhz``, ``inference_latency_ms``, ``duration_s``
+
 ----
 
 GPUMemoryPressure — VRAM pressure / OOM injection
@@ -166,6 +168,8 @@ Backend details:
      - Background ``cj_gpu_memory_amd.py`` via ``libamdhip64.so`` (``hipMalloc``)
      - ``SIGTERM`` to background process
 
+**Default metrics:** ``gpu_memory_mb``, ``oom_events``, ``inference_latency_ms``, ``duration_s``
+
 ----
 
 GPUClockLock — sustained clock degradation
@@ -217,6 +221,8 @@ Backend details:
    * - Intel
      - Set ``rps_max_freq_mhz`` = ``rps_min_freq_mhz`` = ``<freq>``
      - Restore original ``rps_max`` / ``rps_min`` values
+
+**Default metrics:** ``gpu_clock_mhz``, ``inference_latency_ms``, ``throughput_inferences_per_s``, ``duration_s``
 
 ----
 

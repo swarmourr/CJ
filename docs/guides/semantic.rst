@@ -154,6 +154,8 @@ Expected results
      - Answer grounded in context
      - Answer contains poisoned fact
 
+**Default metrics:** ``response_length``, ``error_rate``
+
 Parameters
 ----------
 
