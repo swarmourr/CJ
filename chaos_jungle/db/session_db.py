@@ -56,7 +56,9 @@ class SessionDB:
                 name        TEXT    NOT NULL,
                 started_at  TEXT    NOT NULL,
                 stopped_at  TEXT,
-                status      TEXT    NOT NULL DEFAULT 'running'
+                status      TEXT    NOT NULL DEFAULT 'running',
+                target_type TEXT    NOT NULL DEFAULT '',
+                target_addr TEXT    NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS faults (
@@ -174,17 +176,37 @@ class SessionDB:
                 self._conn.execute(f"ALTER TABLE llm_calls ADD COLUMN {col} {defn}")
             except Exception:
                 pass  # column already exists
+
+        _session_cols = [
+            ("target_type", "TEXT NOT NULL DEFAULT ''"),
+            ("target_addr", "TEXT NOT NULL DEFAULT ''"),
+        ]
+        for col, defn in _session_cols:
+            try:
+                self._conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
+            except Exception:
+                pass
         self._conn.commit()
 
     # ── Sessions ──────────────────────────────────────────────────
 
-    def open_session(self, name: str) -> int:
+    def open_session(
+        self,
+        name: str,
+        target_type: str = "",
+        target_addr: str = "",
+    ) -> int:
         """Create a new session and return its id.
 
         Parameters
         ----------
         name : str
             Human-readable scenario name.
+        target_type : str, optional
+            Target kind: ``"local"``, ``"http"``, or ``"ssh"``.
+        target_addr : str, optional
+            Address of the target, e.g. ``"http://localhost:7781"`` or
+            ``"user@host"``.
 
         Returns
         -------
@@ -192,8 +214,9 @@ class SessionDB:
             Session id.
         """
         cur = self._conn.execute(
-            "INSERT INTO sessions (name, started_at, status) VALUES (?, ?, 'running')",
-            (name, _now()),
+            "INSERT INTO sessions (name, started_at, status, target_type, target_addr)"
+            " VALUES (?, ?, 'running', ?, ?)",
+            (name, _now(), target_type, target_addr),
         )
         self._conn.commit()
         return cur.lastrowid

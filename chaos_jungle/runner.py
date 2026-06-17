@@ -271,6 +271,23 @@ def _extract_workload_metrics(runs: list[dict], names: list[str]) -> dict[str, f
     return result
 
 
+def _target_info(target) -> tuple[str, str]:
+    """Return (target_type, target_addr) for a target object."""
+    cls = type(target).__name__
+    if cls == "HTTPTarget":
+        return "http", getattr(target, "url", "")
+    if cls == "SSHTarget":
+        user = getattr(target, "user", "") or ""
+        host = getattr(target, "host", "") or ""
+        return "ssh", f"{user}@{host}" if user else host
+    # LocalTarget or anything else
+    import socket
+    try:
+        return "local", socket.gethostname()
+    except Exception:
+        return "local", "localhost"
+
+
 class ChaosRunner:
     """Orchestrate the start/stop/revert lifecycle of a chaos scenario.
 
@@ -419,7 +436,10 @@ class ChaosRunner:
             self.policy.check_scenario(self.scenario)
             self.policy.check_target(self.target)
 
-        self._session_id = self.db.open_session(self.scenario.name)
+        _ttype, _taddr = _target_info(self.target)
+        self._session_id = self.db.open_session(
+            self.scenario.name, target_type=_ttype, target_addr=_taddr
+        )
         self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
 
         # wrap target so every command is logged to the session DB

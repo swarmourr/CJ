@@ -1,6 +1,74 @@
 Changelog
 =========
 
+1.2.0 (2026-06-16)
+------------------
+
+**New features**
+
+* **LangSmith-style dashboard** — ``chaos_jungle.dashboard`` rebuilt with a
+  full six-tab UI covering every fault type (network, resource, process,
+  storage, state, LLM/MCP, skill, semantic, GPU) and LLM call tracing:
+
+  - **Overview** — KPI row for fault injection + LLM telemetry when data
+    present; fault-type distribution bar chart; session status donut; recent
+    experiments table.
+  - **Experiments** — filterable table with per-fault category badges
+    (color-coded by fault kind) and status chips.
+  - **LLM Calls** — 9-metric summary bar; 12-column table with expandable rows
+    showing full prompt/response text inline (LangSmith-style), metadata grid,
+    blocked/modified badges.
+  - **Monitoring** — fault timeline bar, category donut; LLM section with
+    latency per call, token usage stacked bar, cumulative cost line, call
+    outcome donut (all Chart.js 4).
+  - **System** — 15 tool checks (stress-ng, redis-cli, psql, docker,
+    nvidia-smi, iostat, ping, etc.).
+  - **Session drawer** — new *LLM Calls* sub-tab per session with 6-metric
+    summary and inline prompt/response.
+
+* **New API endpoints** (``/api/llm_calls``, ``/api/session/{id}/llm_calls``,
+  ``/api/monitoring``) and ``"category"`` field on every fault in
+  ``/api/sessions`` and ``/api/session/{id}``.
+
+* **``controller.py`` preflight fix** — ``_add_revert`` bridge now absorbs
+  ``auto_install`` kwarg passed by ``ChaosRunner``, preventing ``TypeError``
+  on preflight.
+
+----
+
+1.1.0 (2026-06-16)
+------------------
+
+**New features**
+
+* **Full LLM call telemetry** — the ``llm_calls`` table expanded to 32
+  columns.  New fields captured per call:
+
+  - ``fault_name``, ``was_blocked``, ``was_modified`` — injection context
+  - ``total_tokens``, ``tokens_per_second`` — throughput
+  - ``ttft_s`` — time-to-first-token for streaming calls
+  - ``request_size_bytes``, ``response_size_bytes``, ``response_length_chars``
+  - ``message_count``, ``tool_count``, ``response_tool_calls`` — request shape
+  - ``is_streaming``, ``temperature``, ``max_tokens_requested``
+  - ``system_fingerprint``, ``rate_limit_remaining_requests``,
+    ``rate_limit_remaining_tokens``
+
+* **Auto-cost for all faults** — ``_MODEL_PRICING`` table in the proxy
+  (OpenAI, Anthropic, Google, Ollama models) auto-computes ``cost_usd`` for
+  every forwarded call, not just ``LLMBudgetExceeded`` experiments.
+
+* **Blocked call recording** — all 11 early-return paths in the proxy (
+  unavailable, rate-limit, budget-exceeded, timeout, tool-fault, skill-*)
+  now call ``_record_llm_call()`` with ``was_blocked=1``.
+
+* **Streaming TTFT** — ``_stream_interrupt()`` captures time-to-first-token
+  on the first SSE ``data:`` event and stores it as ``ttft_s``.
+
+* The proxy accepts ``--db-path``, ``--session-id``, ``--phase`` flags;
+  ``_LLMProxyFault.start()`` passes them automatically.
+
+----
+
 1.0.0 (2026-06-16)
 ------------------
 
