@@ -659,8 +659,9 @@ function renderExps() {
     const rc    = pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'fail';
     const act   = _expSel === name;
     const open  = _expOpen.has(name);
-    html += `<div class="tree-exp${act?' active':''}" onclick="selectExp(${JSON.stringify(name)})">
-      <span class="tree-toggle${open?' open':''}" onclick="event.stopPropagation();toggleExp(${JSON.stringify(name)})">&#9654;</span>
+    const ns    = name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    html += `<div class="tree-exp${act?' active':''}" onclick="selectExp('${ns}')">
+      <span class="tree-toggle${open?' open':''}" onclick="event.stopPropagation();toggleExp('${ns}')">&#9654;</span>
       <span class="tree-exp-name" title="${name}">${name}</span>
       <span class="tree-exp-meta">
         <span class="tree-exp-count">${total}</span>
