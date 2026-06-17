@@ -114,16 +114,24 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .lp-list{flex:1;overflow-y:auto;padding:4px 0}
 .lp-list::-webkit-scrollbar{width:3px}
 .lp-list::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-.exp-item{padding:7px 12px;cursor:pointer;border-left:2px solid transparent;transition:background .1s}
-.exp-item:hover{background:rgba(255,255,255,.03)}
-.exp-item.active{background:var(--accent-dim);border-left-color:var(--accent)}
-.exp-name{font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
-.exp-meta{display:flex;align-items:center;gap:5px}
-.exp-count{font-size:11px;color:var(--text3)}
-.exp-rate{font-size:11px;font-weight:600;margin-left:2px}
-.exp-rate.ok{color:var(--green)} .exp-rate.warn{color:var(--yellow)} .exp-rate.fail{color:var(--red)}
-.exp-dots{display:flex;gap:3px;margin-left:auto}
-.exp-dot{width:6px;height:6px;border-radius:50%}
+/* tree nodes */
+.tree-exp{padding:6px 10px 6px 8px;cursor:pointer;border-left:2px solid transparent;transition:background .1s;display:flex;align-items:center;gap:5px}
+.tree-exp:hover{background:rgba(255,255,255,.03)}
+.tree-exp.active{background:var(--accent-dim);border-left-color:var(--accent)}
+.tree-toggle{font-size:9px;color:var(--text3);width:12px;flex-shrink:0;transition:transform .15s;user-select:none;text-align:center}
+.tree-toggle.open{transform:rotate(90deg)}
+.tree-exp-name{font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.tree-exp-meta{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.tree-exp-count{font-size:10px;color:var(--text3)}
+.tree-exp-rate{font-size:10px;font-weight:600}
+.tree-exp-rate.ok{color:var(--green)} .tree-exp-rate.warn{color:var(--yellow)} .tree-exp-rate.fail{color:var(--red)}
+/* tree run leaves */
+.tree-run{padding:4px 8px 4px 26px;cursor:pointer;display:flex;align-items:center;gap:5px;border-left:2px solid transparent;transition:background .1s}
+.tree-run:hover{background:rgba(255,255,255,.03)}
+.tree-run.selected{background:var(--accent-dim);border-left-color:var(--accent)}
+.tree-run-id{font-size:10px;color:var(--text3);font-family:var(--mono);flex-shrink:0}
+.tree-run-name{font-size:11px;color:var(--text2);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree-run-dur{font-size:10px;color:var(--text3);flex-shrink:0;margin-left:auto}
 
 /* ── main ── */
 .main{display:flex;flex-direction:column;overflow:hidden;background:var(--bg);min-width:0}
@@ -492,6 +500,7 @@ td.mono{font-family:var(--mono);font-size:11px}
 let _runs   = [];
 let _exps   = {};
 let _expSel = null;
+let _expOpen = new Set();
 let _selId  = null;
 let _ovSort = {col:'id', asc:false};
 let _dpTab  = 'run';
@@ -637,9 +646,10 @@ function renderExps() {
   const el = document.getElementById('exp-list');
   const q  = (document.getElementById('exp-search')?.value||'').toLowerCase();
   const allAct = !_expSel;
-  let html = `<div class="exp-item${allAct?' active':''}" onclick="selectExp(null)">
-    <div class="exp-name">All runs</div>
-    <div class="exp-meta"><span class="exp-count">${_runs.length} total</span></div>
+  let html = `<div class="tree-exp${allAct?' active':''}" onclick="selectExp(null)">
+    <span class="tree-toggle"></span>
+    <span class="tree-exp-name">All runs</span>
+    <span class="tree-exp-meta"><span class="tree-exp-count">${_runs.length}</span></span>
   </div>`;
   for (const [name, g] of Object.entries(_exps)) {
     if (q && !name.toLowerCase().includes(q)) continue;
@@ -648,28 +658,39 @@ function renderExps() {
     const pct   = total ? Math.round(100*pass/total) : 0;
     const rc    = pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'fail';
     const act   = _expSel === name;
-    let dots = '';
-    for (const cat of g.cats) {
-      const c = (CATS[cat]||{color:'#64748b'}).color;
-      dots += `<span class="exp-dot" style="background:${c}" title="${cat}"></span>`;
-    }
-    html += `<div class="exp-item${act?' active':''}" onclick="selectExp(${JSON.stringify(name)})">
-      <div class="exp-name">${name}</div>
-      <div class="exp-meta">
-        <span class="exp-count">${total} run${total!==1?'s':''}</span>
-        <span class="exp-rate ${rc}">${pct}%</span>
-        <div class="exp-dots">${dots}</div>
-      </div>
+    const open  = _expOpen.has(name);
+    html += `<div class="tree-exp${act?' active':''}" onclick="selectExp(${JSON.stringify(name)})">
+      <span class="tree-toggle${open?' open':''}" onclick="event.stopPropagation();toggleExp(${JSON.stringify(name)})">&#9654;</span>
+      <span class="tree-exp-name" title="${name}">${name}</span>
+      <span class="tree-exp-meta">
+        <span class="tree-exp-count">${total}</span>
+        <span class="tree-exp-rate ${rc}">${pct}%</span>
+      </span>
     </div>`;
+    if (open) {
+      const sorted = [...g.runs].sort((a,b) => (b.started_at||'').localeCompare(a.started_at||''));
+      for (const r of sorted) {
+        const sel = _selId===r.id ? ' selected' : '';
+        html += `<div class="tree-run${sel}" onclick="openDetail(${r.id})">
+          <span class="tree-run-id">#${r.id}</span>
+          <span class="tree-run-name">${sdot(r.status)}${fmtDate(r.started_at).slice(11)||'—'}</span>
+          <span class="tree-run-dur">${fmtDur(r.duration_s)}</span>
+        </div>`;
+      }
+    }
   }
   el.innerHTML = html;
+}
+function toggleExp(name) {
+  if (_expOpen.has(name)) _expOpen.delete(name);
+  else _expOpen.add(name);
+  renderExps();
 }
 function filterExps() { renderExps(); }
 function selectExp(name) {
   _expSel = name;
   renderExps();
   filterOv();
-  // Re-filter whichever cat view is active
   for (const cat of Object.keys(CATS)) {
     if (document.getElementById('view-'+cat)?.classList.contains('active')) filterCat(cat);
   }
@@ -843,6 +864,7 @@ async function loadLogContent(name, btn) {
 // ── Detail panel ───────────────────────────────────────────────────────────
 async function openDetail(id) {
   _selId = id;
+  renderExps();  // update tree leaf selection
   filterOv();
   // Re-filter active cat view
   for (const cat of Object.keys(CATS)) {
@@ -876,6 +898,7 @@ async function openDetail(id) {
 function closeDetail() {
   _selId = null;
   document.getElementById('app').classList.remove('dp-open');
+  renderExps();
   filterOv();
   for (const cat of Object.keys(CATS)) {
     if (document.getElementById('view-'+cat)?.classList.contains('active')) filterCat(cat);
