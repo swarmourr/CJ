@@ -109,6 +109,26 @@ class SessionDB:
 
             CREATE INDEX IF NOT EXISTS idx_traces_session
                 ON traces(session_id);
+
+            CREATE TABLE IF NOT EXISTS llm_calls (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id        INTEGER NOT NULL REFERENCES sessions(id),
+                phase             TEXT    NOT NULL DEFAULT 'fault',
+                call_index        INTEGER NOT NULL DEFAULT 0,
+                timestamp         TEXT    NOT NULL,
+                model             TEXT    NOT NULL DEFAULT '',
+                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd          REAL    NOT NULL DEFAULT 0.0,
+                finish_reason     TEXT    NOT NULL DEFAULT '',
+                prompt_text       TEXT    NOT NULL DEFAULT '',
+                response_text     TEXT    NOT NULL DEFAULT '',
+                latency_s         REAL    NOT NULL DEFAULT 0.0,
+                http_status       INTEGER NOT NULL DEFAULT 200
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_llm_calls_session
+                ON llm_calls(session_id);
         """)
         self._conn.commit()
 
@@ -267,6 +287,7 @@ class SessionDB:
             "faults": fault_list,
             "events": [dict(e) for e in events],
             "commands": self.get_commands(session_id),
+            "llm_calls": self.get_llm_calls(session_id),
         }
 
     # ── Results ───────────────────────────────────────────────────
@@ -517,6 +538,82 @@ class SessionDB:
                 pass
             out.append(row)
         return out
+
+    # ── LLM Calls ─────────────────────────────────────────────────
+
+    def record_llm_call(
+        self,
+        session_id: int,
+        phase: str,
+        call_index: int,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost_usd: float,
+        finish_reason: str,
+        prompt_text: str,
+        response_text: str,
+        latency_s: float,
+        http_status: int = 200,
+    ) -> int:
+        """Store a single LLM API call captured by the proxy.
+
+        Called by the LLM proxy subprocess after each forwarded request.
+
+        Returns
+        -------
+        int
+            LLM call record id.
+        """
+        cur = self._conn.execute(
+            "INSERT INTO llm_calls "
+            "(session_id, phase, call_index, timestamp, model, "
+            " prompt_tokens, completion_tokens, cost_usd, finish_reason, "
+            " prompt_text, response_text, latency_s, http_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id, phase, call_index, _now(), model,
+                prompt_tokens, completion_tokens, cost_usd, finish_reason,
+                prompt_text, response_text, latency_s, http_status,
+            ),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_llm_calls(
+        self,
+        session_id: int,
+        phase: str | None = None,
+    ) -> list[dict]:
+        """Return LLM call records for a session.
+
+        Parameters
+        ----------
+        session_id : int
+        phase : str, optional
+            Filter to a specific phase (``"fault"``, ``"baseline"``).
+            Returns all phases if ``None``.
+
+        Returns
+        -------
+        list[dict]
+            Each dict has keys: ``id``, ``session_id``, ``phase``,
+            ``call_index``, ``timestamp``, ``model``, ``prompt_tokens``,
+            ``completion_tokens``, ``cost_usd``, ``finish_reason``,
+            ``prompt_text``, ``response_text``, ``latency_s``,
+            ``http_status``.
+        """
+        if phase is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM llm_calls WHERE session_id = ? AND phase = ? ORDER BY call_index",
+                (session_id, phase),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM llm_calls WHERE session_id = ? ORDER BY call_index",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._conn.close()

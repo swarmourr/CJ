@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -90,6 +91,13 @@ _request_count: int = 0
 _count_lock: Lock = Lock()
 _cost_usd: float = 0.0
 _cost_lock: Lock = Lock()
+
+# LLM call capture — set by main() when --db-path / --session-id are given
+_DB_PATH: str = ""
+_SESSION_ID: int = 0
+_PHASE: str = "fault"
+_call_index: int = 0
+_call_index_lock: Lock = Lock()
 
 _CT_JSON = "application/json"
 
@@ -616,6 +624,48 @@ def _build_fwd_headers(src_headers, body: bytes) -> dict:
     return hdrs
 
 
+def _record_llm_call(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_usd: float,
+    finish_reason: str,
+    prompt_text: str,
+    response_text: str,
+    latency_s: float,
+    http_status: int,
+) -> None:
+    """Write one LLM call row to the chaos-jungle session DB (best-effort)."""
+    global _call_index
+    if not _DB_PATH or not _SESSION_ID:
+        return
+    try:
+        with _call_index_lock:
+            idx = _call_index
+            _call_index += 1
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(_DB_PATH, timeout=5)
+        conn.execute(
+            "INSERT INTO llm_calls "
+            "(session_id, phase, call_index, timestamp, model, "
+            " prompt_tokens, completion_tokens, cost_usd, finish_reason, "
+            " prompt_text, response_text, latency_s, http_status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _SESSION_ID, _PHASE, idx, ts, model,
+                prompt_tokens, completion_tokens, cost_usd, finish_reason,
+                prompt_text[:4000],   # cap stored text to 4 KB
+                response_text[:4000],
+                latency_s, http_status,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass  # never crash the proxy for a DB write failure
+
+
 # ---------------------------------------------------------------------------
 # SSE streaming helper
 # ---------------------------------------------------------------------------
@@ -805,7 +855,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # ------------------------------------------------------------------
 
         fwd_hdrs = _build_fwd_headers(self.headers, raw_body)
+        _t0 = time.time()
         status, resp_body, resp_ct = _forward(self.command, upstream_url, fwd_hdrs, raw_body)
+        _latency_s = round(time.time() - _t0, 4)
 
         # ------------------------------------------------------------------
         # Faults that modify the RESPONSE before returning
@@ -855,6 +907,67 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+        # ------------------------------------------------------------------
+        # Capture LLM call to session DB (best-effort)
+        # ------------------------------------------------------------------
+        if _DB_PATH and _SESSION_ID:
+            try:
+                _model = ""
+                _prompt_tokens = 0
+                _completion_tokens = 0
+                _finish_reason = ""
+                _call_cost = 0.0
+                _prompt_text = ""
+                _response_text = ""
+
+                # Extract model + last user message from request
+                if req_body:
+                    _model = req_body.get("model", "")
+                    msgs = req_body.get("messages", [])
+                    for m in reversed(msgs):
+                        if m.get("role") == "user":
+                            c = m.get("content", "")
+                            _prompt_text = c if isinstance(c, str) else json.dumps(c)
+                            break
+
+                # Extract usage / finish_reason / response text from response
+                try:
+                    resp_data = json.loads(resp_body)
+                    usage = resp_data.get("usage", {})
+                    _prompt_tokens     = usage.get("prompt_tokens", 0)
+                    _completion_tokens = usage.get("completion_tokens", 0)
+                    # OpenAI / OpenAI-compat
+                    choices = resp_data.get("choices", [])
+                    if choices:
+                        _finish_reason = choices[0].get("finish_reason", "")
+                        msg = choices[0].get("message", {})
+                        _response_text = msg.get("content", "") or ""
+                    # Ollama native
+                    elif "message" in resp_data:
+                        _finish_reason = "stop" if resp_data.get("done") else ""
+                        _response_text = resp_data["message"].get("content", "") or ""
+                    # Budget cost from accumulated tracker
+                    if fault == "budget_exceeded":
+                        in_price  = FAULT_ARGS.get("budget_input_price", 0.0)
+                        out_price = FAULT_ARGS.get("budget_output_price", 0.0)
+                        _call_cost = (_prompt_tokens * in_price + _completion_tokens * out_price) / 1000.0
+                except Exception:
+                    pass
+
+                _record_llm_call(
+                    model=_model,
+                    prompt_tokens=_prompt_tokens,
+                    completion_tokens=_completion_tokens,
+                    cost_usd=_call_cost,
+                    finish_reason=_finish_reason,
+                    prompt_text=_prompt_text,
+                    response_text=_response_text,
+                    latency_s=_latency_s,
+                    http_status=status,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
         self._reply(status, resp_body, resp_ct)
 
     def _reply(self, status: int, body: bytes,
@@ -885,7 +998,7 @@ _ALL_FAULTS = [
 
 
 def main() -> None:
-    global FAULT, FAULT_ARGS
+    global FAULT, FAULT_ARGS, _DB_PATH, _SESSION_ID, _PHASE
 
     p = argparse.ArgumentParser(
         description="Chaos Jungle LLM/MCP proxy",
@@ -894,6 +1007,10 @@ def main() -> None:
     p.add_argument("--port", type=int, default=18000)
     p.add_argument("--upstream", default="https://api.openai.com")
     p.add_argument("--fault", required=True, choices=_ALL_FAULTS)
+    # LLM call capture
+    p.add_argument("--db-path", default="", help="Path to chaos-jungle SQLite DB for LLM call capture")
+    p.add_argument("--session-id", type=int, default=0, help="Session ID for LLM call capture")
+    p.add_argument("--phase", default="fault", help="Phase label for captured LLM calls")
 
     # Fault-specific args
     p.add_argument("--latency-s", type=float, default=2.0)
@@ -953,6 +1070,9 @@ def main() -> None:
     args = p.parse_args()
 
     FAULT = args.fault
+    _DB_PATH = args.db_path
+    _SESSION_ID = args.session_id
+    _PHASE = args.phase
     FAULT_ARGS = {
         "upstream":              args.upstream,
         "delay_s":               args.latency_s,

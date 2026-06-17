@@ -67,6 +67,7 @@ class MeasurementResult:
     judge_delta: dict = field(default_factory=dict)
     oracle_results: "list[OracleResult]" = field(default_factory=list)
     collected_metrics: "CollectedMetrics | None" = field(default=None, repr=False)
+    llm_calls: list = field(default_factory=list, repr=False)
 
     def passed(self, key: str, threshold: float) -> bool:
         """Return True if ``abs(delta[key]) <= threshold``."""
@@ -196,6 +197,31 @@ class MeasurementResult:
                 lines.append(f"  {n_fail} oracle(s) FAILED")
             else:
                 lines.append(f"  All {len(self.oracle_results)} oracle(s) passed")
+
+        if self.llm_calls:
+            lines.append("")
+            lines.append(f"  LLM calls captured (n={len(self.llm_calls)}):")
+            lines.append(
+                f"  {'#':<4} {'model':<20} {'in':>6} {'out':>6} {'cost':>9} "
+                f"{'latency':>8}  finish"
+            )
+            lines.append("  " + "-" * 68)
+            for c in self.llm_calls:
+                lines.append(
+                    f"  {c['call_index']:<4} {c['model']:<20} "
+                    f"{c['prompt_tokens']:>6} {c['completion_tokens']:>6} "
+                    f"${c['cost_usd']:>8.6f} {c['latency_s']:>7.2f}s  "
+                    f"{c['finish_reason'] or str(c['http_status'])}"
+                )
+            total_in  = sum(c["prompt_tokens"] for c in self.llm_calls)
+            total_out = sum(c["completion_tokens"] for c in self.llm_calls)
+            total_cost = sum(c["cost_usd"] for c in self.llm_calls)
+            avg_lat   = sum(c["latency_s"] for c in self.llm_calls) / len(self.llm_calls)
+            lines.append("  " + "-" * 68)
+            lines.append(
+                f"  {'Total':<25} {total_in:>6} {total_out:>6} "
+                f"${total_cost:>8.6f} avg {avg_lat:.2f}s"
+            )
 
         return "\n".join(lines)
 
@@ -816,6 +842,14 @@ class ChaosRunner:
                 recovery_samples=_rec_samples,
             )
 
+        # ── 5c. Fetch captured LLM calls from DB ──────────────────
+        _llm_calls: list = []
+        if self._session_id is not None:
+            try:
+                _llm_calls = self.db.get_llm_calls(self._session_id)
+            except Exception:
+                pass
+
         result = MeasurementResult(
             scenario=self.scenario.name,
             session_id=self._session_id,
@@ -831,6 +865,7 @@ class ChaosRunner:
             judge_delta=judge_delta,
             oracle_results=oracle_results,
             collected_metrics=collected_metrics,
+            llm_calls=_llm_calls,
         )
 
         # ── 6. Persist to DB ──────────────────────────────────────

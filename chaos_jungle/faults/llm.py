@@ -105,7 +105,7 @@ class _LLMProxyFault(Fault):
     # Fault lifecycle
     # ------------------------------------------------------------------
 
-    def start(self, target: "Target") -> None:  # noqa: ARG002  (target unused for local proxy)
+    def start(self, target: "Target") -> None:
         script = _proxy_script_path()
         cmd = [
             sys.executable,
@@ -114,6 +114,13 @@ class _LLMProxyFault(Fault):
             "--upstream", self.upstream,
             "--fault", self._fault_name,
         ] + self._extra_args
+
+        # Pass session context to proxy for LLM call capture (best-effort)
+        _session_id = getattr(target, "_session_id", None)
+        _db = getattr(target, "_db", None)
+        _db_path = getattr(_db, "path", None)
+        if _session_id is not None and _db_path:
+            cmd += ["--db-path", _db_path, "--session-id", str(_session_id), "--phase", "fault"]
 
         self._proc = subprocess.Popen(
             cmd,

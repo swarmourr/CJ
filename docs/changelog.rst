@@ -1,6 +1,32 @@
 Changelog
 =========
 
+1.0.0 (2026-06-16)
+------------------
+
+**New features**
+
+* **Native LLM call capture** — the LLM proxy now records every forwarded
+  API call directly into the session database with zero extra dependencies
+  and no agent-code changes:
+
+  - New ``llm_calls`` table in ``SessionDB`` stores per-call:
+    ``model``, ``prompt_tokens``, ``completion_tokens``, ``cost_usd``,
+    ``finish_reason``, ``prompt_text``, ``response_text``, ``latency_s``,
+    ``http_status``.
+  - ``SessionDB.record_llm_call()`` / ``SessionDB.get_llm_calls()`` — new
+    public methods; ``export_session()`` includes the ``llm_calls`` list.
+  - ``MeasurementResult.llm_calls`` — ``list[dict]`` of all captured calls
+    for a ``measure()`` run; empty when no LLM proxy is active.
+  - ``MeasurementResult.summary()`` extended with an **LLM calls** table
+    showing per-call token counts, cost, latency, and finish reason plus
+    aggregate totals.
+  - The proxy accepts three new CLI flags: ``--db-path``, ``--session-id``,
+    ``--phase``; ``_LLMProxyFault.start()`` passes these automatically when
+    a ``LoggingTarget`` (from ``ChaosRunner``) is present.
+
+----
+
 0.9.0 (2026-06-16)
 ------------------
 
