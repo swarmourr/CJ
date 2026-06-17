@@ -99,6 +99,36 @@ _PHASE: str = "fault"
 _call_index: int = 0
 _call_index_lock: Lock = Lock()
 
+# ---------------------------------------------------------------------------
+# Pricing table — (input_per_1k_usd, output_per_1k_usd)
+# ---------------------------------------------------------------------------
+
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "gpt-4o":                        (0.005,    0.015),
+    "gpt-4o-mini":                   (0.00015,  0.0006),
+    "gpt-4-turbo":                   (0.010,    0.030),
+    "gpt-4":                         (0.030,    0.060),
+    "gpt-3.5-turbo":                 (0.0005,   0.0015),
+    "claude-opus-4-6":               (0.015,    0.075),
+    "claude-sonnet-4-6":             (0.003,    0.015),
+    "claude-haiku-4-5-20251001":     (0.00025,  0.00125),
+    "claude-3-5-sonnet-20241022":    (0.003,    0.015),
+    "claude-3-5-haiku-20241022":     (0.001,    0.005),
+    "claude-3-opus-20240229":        (0.015,    0.075),
+    "gemini-1.5-pro":                (0.00125,  0.005),
+    "gemini-1.5-flash":              (0.000075, 0.0003),
+    "gemini-2.0-flash":              (0.0001,   0.0004),
+    "gemini-2.5-pro":                (0.00125,  0.010),
+    "gemini-2.5-flash":              (0.00015,  0.0006),
+}
+
+# Faults that tamper with request or response content
+_MODIFYING_FAULTS: frozenset[str] = frozenset({
+    "hallucinate", "semantic_corrupt", "token_starve", "corrupt",
+    "skill_bad_output", "skill_version_skew", "skill_memory_stale",
+    "skill_instruction_corrupt", "skill_misroute", "skill_conflict",
+})
+
 _CT_JSON = "application/json"
 
 # ---------------------------------------------------------------------------
@@ -591,8 +621,8 @@ def _inject_skill_conflict(resp_body: bytes, conflict_text: str = "") -> bytes:
     return resp_body
 
 
-def _forward(method: str, upstream_url: str, headers: dict, body: bytes) -> tuple[int, bytes, str]:
-    """Forward a request to upstream. Returns (status, body, content_type)."""
+def _forward(method: str, upstream_url: str, headers: dict, body: bytes) -> tuple[int, bytes, str, object]:
+    """Forward a request to upstream. Returns (status, body, content_type, resp_headers)."""
     req = urllib.request.Request(
         upstream_url,
         data=body or None,
@@ -601,12 +631,12 @@ def _forward(method: str, upstream_url: str, headers: dict, body: bytes) -> tupl
     )
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
-            return resp.status, resp.read(), resp.headers.get("Content-Type", _CT_JSON)
+            return resp.status, resp.read(), resp.headers.get("Content-Type", _CT_JSON), resp.headers
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read() or b"{}", _CT_JSON
+        return exc.code, exc.read() or b"{}", _CT_JSON, exc.headers or {}
     except Exception as exc:  # noqa: BLE001
         err = json.dumps({"error": {"message": str(exc), "type": "chaos_proxy_error"}}).encode()
-        return 502, err, _CT_JSON
+        return 502, err, _CT_JSON, {}
 
 
 def _build_upstream_url(path: str) -> str:
@@ -624,6 +654,92 @@ def _build_fwd_headers(src_headers, body: bytes) -> dict:
     return hdrs
 
 
+def _lookup_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """Return USD cost from the pricing table; 0.0 if model not found."""
+    pricing = _MODEL_PRICING.get(model)
+    if pricing is None:
+        for key, val in _MODEL_PRICING.items():
+            if key in model:
+                pricing = val
+                break
+    if pricing is None:
+        return 0.0
+    in_p, out_p = pricing
+    return round((prompt_tokens * in_p + completion_tokens * out_p) / 1000.0, 8)
+
+
+def _extract_req_fields(req_body: dict | None, raw_body: bytes) -> dict:
+    """Extract all capturable fields from a request body."""
+    if not req_body:
+        return {
+            "model": "", "prompt_text": "", "message_count": 0,
+            "tool_count": 0, "is_streaming": 0, "temperature": None,
+            "max_tokens_requested": None, "request_size_bytes": len(raw_body),
+        }
+    messages = req_body.get("messages", [])
+    prompt_text = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            c = m.get("content", "")
+            prompt_text = c if isinstance(c, str) else json.dumps(c)
+            break
+    return {
+        "model":                req_body.get("model", ""),
+        "prompt_text":          prompt_text,
+        "message_count":        len(messages),
+        "tool_count":           len(req_body.get("tools", [])),
+        "is_streaming":         1 if req_body.get("stream") else 0,
+        "temperature":          req_body.get("temperature"),
+        "max_tokens_requested": req_body.get("max_tokens"),
+        "request_size_bytes":   len(raw_body),
+    }
+
+
+def _extract_resp_fields(resp_body: bytes, resp_headers=None) -> dict:
+    """Extract all capturable fields from a response body and headers."""
+    result: dict = {
+        "prompt_tokens": 0, "completion_tokens": 0,
+        "finish_reason": "", "response_text": "",
+        "response_tool_calls": 0, "system_fingerprint": "",
+        "response_size_bytes": len(resp_body),
+        "response_length_chars": 0,
+        "rate_limit_remaining_requests": None,
+        "rate_limit_remaining_tokens": None,
+    }
+    try:
+        data = json.loads(resp_body)
+        usage = data.get("usage", {})
+        result["prompt_tokens"]     = usage.get("prompt_tokens", 0)
+        result["completion_tokens"] = usage.get("completion_tokens", 0)
+        result["system_fingerprint"] = data.get("system_fingerprint", "") or ""
+        choices = data.get("choices", [])
+        if choices:
+            result["finish_reason"] = choices[0].get("finish_reason", "") or ""
+            msg = choices[0].get("message", {})
+            content = msg.get("content", "") or ""
+            result["response_text"]         = content
+            result["response_length_chars"] = len(content)
+            result["response_tool_calls"]   = len(msg.get("tool_calls") or [])
+        elif "message" in data:   # Ollama native
+            content = data["message"].get("content", "") or ""
+            result["response_text"]         = content
+            result["response_length_chars"] = len(content)
+            result["finish_reason"]         = "stop" if data.get("done") else ""
+    except Exception:
+        pass
+    if resp_headers is not None:
+        try:
+            rlr = resp_headers.get("x-ratelimit-remaining-requests")
+            rlt = resp_headers.get("x-ratelimit-remaining-tokens")
+            if rlr:
+                result["rate_limit_remaining_requests"] = int(rlr)
+            if rlt:
+                result["rate_limit_remaining_tokens"] = int(rlt)
+        except Exception:
+            pass
+    return result
+
+
 def _record_llm_call(
     model: str,
     prompt_tokens: int,
@@ -634,6 +750,24 @@ def _record_llm_call(
     response_text: str,
     latency_s: float,
     http_status: int,
+    fault_name: str = "",
+    was_blocked: int = 0,
+    was_modified: int = 0,
+    total_tokens: int = 0,
+    tokens_per_second: float = 0.0,
+    request_size_bytes: int = 0,
+    response_size_bytes: int = 0,
+    message_count: int = 0,
+    tool_count: int = 0,
+    response_tool_calls: int = 0,
+    is_streaming: int = 0,
+    temperature=None,
+    max_tokens_requested=None,
+    response_length_chars: int = 0,
+    ttft_s=None,
+    system_fingerprint: str = "",
+    rate_limit_remaining_requests=None,
+    rate_limit_remaining_tokens=None,
 ) -> None:
     """Write one LLM call row to the chaos-jungle session DB (best-effort)."""
     global _call_index
@@ -647,17 +781,29 @@ def _record_llm_call(
         ts = datetime.now(timezone.utc).isoformat()
         conn = sqlite3.connect(_DB_PATH, timeout=5)
         conn.execute(
-            "INSERT INTO llm_calls "
-            "(session_id, phase, call_index, timestamp, model, "
-            " prompt_tokens, completion_tokens, cost_usd, finish_reason, "
-            " prompt_text, response_text, latency_s, http_status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO llm_calls ("
+            "  session_id, phase, call_index, timestamp, model,"
+            "  prompt_tokens, completion_tokens, cost_usd, finish_reason,"
+            "  prompt_text, response_text, latency_s, http_status,"
+            "  fault_name, was_blocked, was_modified, total_tokens, tokens_per_second,"
+            "  request_size_bytes, response_size_bytes, message_count, tool_count,"
+            "  response_tool_calls, is_streaming, temperature, max_tokens_requested,"
+            "  response_length_chars, ttft_s, system_fingerprint,"
+            "  rate_limit_remaining_requests, rate_limit_remaining_tokens"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 _SESSION_ID, _PHASE, idx, ts, model,
                 prompt_tokens, completion_tokens, cost_usd, finish_reason,
-                prompt_text[:4000],   # cap stored text to 4 KB
-                response_text[:4000],
+                prompt_text[:4000], response_text[:4000],
                 latency_s, http_status,
+                fault_name, was_blocked, was_modified,
+                total_tokens, tokens_per_second,
+                request_size_bytes, response_size_bytes,
+                message_count, tool_count,
+                response_tool_calls, is_streaming,
+                temperature, max_tokens_requested,
+                response_length_chars, ttft_s, system_fingerprint,
+                rate_limit_remaining_requests, rate_limit_remaining_tokens,
             ),
         )
         conn.commit()
@@ -672,11 +818,23 @@ def _record_llm_call(
 
 def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
                       headers: dict, body: bytes, interrupt_after: int) -> None:
-    """Forward a streaming SSE response but close after interrupt_after data events."""
+    """Forward a streaming SSE response but close after interrupt_after data events.
+
+    Also captures TTFT (time to first token) and records the call to the session DB.
+    """
+    _t_start = time.time()
+    ttft_s: float | None = None
+    data_event_count = 0
+    response_chunks: list[str] = []
+    req_body = _parse_body(body)
+    _req = _extract_req_fields(req_body, body)
+
     req = urllib.request.Request(upstream_url, data=body or None,
                                  headers=headers, method="POST")
+    _final_status = 200
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
+            _final_status = resp.status
             handler.send_response(resp.status)
             for k, v in resp.headers.items():
                 if k.lower() in ("content-type", "cache-control", "x-accel-buffering"):
@@ -684,18 +842,58 @@ def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
             handler.send_header("Transfer-Encoding", "chunked")
             handler.end_headers()
 
-            data_event_count = 0
             for raw_line in resp:
                 if data_event_count >= interrupt_after:
-                    # Abrupt stop — do not send [DONE]
                     break
                 handler.wfile.write(raw_line)
                 handler.wfile.flush()
                 line = raw_line.strip()
                 if line.startswith(b"data:") and line != b"data: [DONE]":
+                    if ttft_s is None:
+                        ttft_s = round(time.time() - _t_start, 4)
                     data_event_count += 1
+                    # Accumulate response text from SSE chunks
+                    try:
+                        chunk = json.loads(line[5:].strip())
+                        delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                        response_chunks.append(delta.get("content", "") or "")
+                    except Exception:
+                        pass
     except Exception:  # noqa: BLE001
         pass  # connection was already partially written — nothing to do
+
+    _latency_s = round(time.time() - _t_start, 4)
+    _response_text = "".join(response_chunks)
+    # tokens_per_second: use chunk count as proxy (actual tokens unavailable from SSE)
+    _tps = round(data_event_count / _latency_s, 2) if _latency_s > 0 and data_event_count > 0 else 0.0
+
+    _record_llm_call(
+        model=_req["model"],
+        prompt_tokens=0,            # SSE doesn't stream usage without special options
+        completion_tokens=data_event_count,  # approximate: one chunk ≈ one token group
+        cost_usd=0.0,
+        finish_reason="stream_interrupt",
+        prompt_text=_req["prompt_text"],
+        response_text=_response_text,
+        latency_s=_latency_s,
+        http_status=_final_status,
+        fault_name=FAULT,
+        was_blocked=0,
+        was_modified=0,
+        total_tokens=data_event_count,
+        tokens_per_second=_tps,
+        request_size_bytes=_req["request_size_bytes"],
+        response_size_bytes=len(_response_text.encode()),
+        message_count=_req["message_count"],
+        tool_count=_req["tool_count"],
+        response_tool_calls=0,
+        is_streaming=1,
+        temperature=_req["temperature"],
+        max_tokens_requested=_req["max_tokens_requested"],
+        response_length_chars=len(_response_text),
+        ttft_s=ttft_s,
+        system_fingerprint="",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +913,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         global _request_count
+        _t_start = time.time()
 
         with _count_lock:
             _request_count += 1
@@ -729,21 +928,48 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         upstream_url = _build_upstream_url(self.path)
 
+        # Pre-extract request fields once (used for both blocked and forwarded paths)
+        _req = _extract_req_fields(req_body, raw_body)
+
+        # ------------------------------------------------------------------
+        # Helper — record a blocked call (no upstream contact)
+        # ------------------------------------------------------------------
+
+        def _blocked(status: int) -> None:
+            if not _DB_PATH or not _SESSION_ID:
+                return
+            _record_llm_call(
+                model=_req["model"], prompt_tokens=0, completion_tokens=0,
+                cost_usd=0.0, finish_reason="", prompt_text=_req["prompt_text"],
+                response_text="", latency_s=round(time.time() - _t_start, 4),
+                http_status=status, fault_name=fault, was_blocked=1, was_modified=0,
+                total_tokens=0, tokens_per_second=0.0,
+                request_size_bytes=_req["request_size_bytes"], response_size_bytes=0,
+                message_count=_req["message_count"], tool_count=_req["tool_count"],
+                response_tool_calls=0, is_streaming=_req["is_streaming"],
+                temperature=_req["temperature"],
+                max_tokens_requested=_req["max_tokens_requested"],
+                response_length_chars=0, ttft_s=None, system_fingerprint="",
+            )
+
         # ------------------------------------------------------------------
         # Faults that never forward
         # ------------------------------------------------------------------
 
         if fault == "unavailable":
             self._reply(*_STATIC["unavailable"])
+            _blocked(503)
             return
 
         if fault == "mcp_unavailable":
             self._reply(*_STATIC["mcp_unavailable"])
+            _blocked(503)
             return
 
         if fault == "rate_limit":
             if count > FAULT_ARGS.get("n", 5):
                 self._reply(*_STATIC["rate_limit"])
+                _blocked(429)
                 return
 
         if fault == "budget_exceeded":
@@ -751,11 +977,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 current_cost = _cost_usd
             if current_cost >= FAULT_ARGS.get("budget_max_cost_usd", 0.10):
                 self._reply(*_STATIC["budget_exceeded"])
+                _blocked(402)
                 return
 
         if fault in ("timeout", "mcp_timeout"):
             time.sleep(FAULT_ARGS.get("timeout_s", 30.0))
             self._reply(*_STATIC[fault])
+            _blocked(504)
             return
 
         # ------------------------------------------------------------------
@@ -771,6 +999,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 if m.get("role") == "tool"
             ):
                 self._reply(400, _tool_error_response(req_body))
+                _blocked(400)
                 return
 
         # ------------------------------------------------------------------
@@ -780,22 +1009,26 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if fault == "skill_unavailable" and _is_tool_request(req_body):
             if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
                 self._reply(*_STATIC["skill_unavailable"])
+                _blocked(400)
                 return
 
         if fault == "skill_permission_denied" and _is_tool_request(req_body):
             if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
                 self._reply(*_STATIC["skill_permission_denied"])
+                _blocked(403)
                 return
 
         if fault == "skill_dependency_missing" and _is_tool_request(req_body):
             if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
                 self._reply(*_STATIC["skill_dependency_missing"])
+                _blocked(400)
                 return
 
         if fault == "skill_timeout" and _is_tool_request(req_body):
             if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
                 time.sleep(FAULT_ARGS.get("skill_timeout_s", 30.0))
                 self._reply(*_STATIC["skill_timeout"])
+                _blocked(504)
                 return
 
         # ------------------------------------------------------------------
@@ -821,6 +1054,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         if fault == "mcp_tool_error" and _is_mcp_request(req_body):
             self._reply(200, _mcp_tool_error_response(req_body))
+            _blocked(200)
             return
 
         if fault == "token_starve" and req_body is not None:
@@ -855,9 +1089,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # ------------------------------------------------------------------
 
         fwd_hdrs = _build_fwd_headers(self.headers, raw_body)
-        _t0 = time.time()
-        status, resp_body, resp_ct = _forward(self.command, upstream_url, fwd_hdrs, raw_body)
-        _latency_s = round(time.time() - _t0, 4)
+        status, resp_body, resp_ct, resp_hdrs = _forward(self.command, upstream_url, fwd_hdrs, raw_body)
+        _latency_s = round(time.time() - _t_start, 4)
 
         # ------------------------------------------------------------------
         # Faults that modify the RESPONSE before returning
@@ -908,62 +1141,50 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 pass
 
         # ------------------------------------------------------------------
-        # Capture LLM call to session DB (best-effort)
+        # Capture LLM call to session DB (best-effort, forwarded path)
         # ------------------------------------------------------------------
         if _DB_PATH and _SESSION_ID:
             try:
-                _model = ""
-                _prompt_tokens = 0
-                _completion_tokens = 0
-                _finish_reason = ""
-                _call_cost = 0.0
-                _prompt_text = ""
-                _response_text = ""
-
-                # Extract model + last user message from request
-                if req_body:
-                    _model = req_body.get("model", "")
-                    msgs = req_body.get("messages", [])
-                    for m in reversed(msgs):
-                        if m.get("role") == "user":
-                            c = m.get("content", "")
-                            _prompt_text = c if isinstance(c, str) else json.dumps(c)
-                            break
-
-                # Extract usage / finish_reason / response text from response
-                try:
-                    resp_data = json.loads(resp_body)
-                    usage = resp_data.get("usage", {})
-                    _prompt_tokens     = usage.get("prompt_tokens", 0)
-                    _completion_tokens = usage.get("completion_tokens", 0)
-                    # OpenAI / OpenAI-compat
-                    choices = resp_data.get("choices", [])
-                    if choices:
-                        _finish_reason = choices[0].get("finish_reason", "")
-                        msg = choices[0].get("message", {})
-                        _response_text = msg.get("content", "") or ""
-                    # Ollama native
-                    elif "message" in resp_data:
-                        _finish_reason = "stop" if resp_data.get("done") else ""
-                        _response_text = resp_data["message"].get("content", "") or ""
-                    # Budget cost from accumulated tracker
-                    if fault == "budget_exceeded":
-                        in_price  = FAULT_ARGS.get("budget_input_price", 0.0)
-                        out_price = FAULT_ARGS.get("budget_output_price", 0.0)
-                        _call_cost = (_prompt_tokens * in_price + _completion_tokens * out_price) / 1000.0
-                except Exception:
-                    pass
-
+                _resp = _extract_resp_fields(resp_body, resp_hdrs)
+                _pt   = _resp["prompt_tokens"]
+                _ct   = _resp["completion_tokens"]
+                _tot  = _pt + _ct
+                # Cost: use explicit budget pricing if set, otherwise auto-lookup
+                _in_p  = FAULT_ARGS.get("budget_input_price", 0.0)
+                _out_p = FAULT_ARGS.get("budget_output_price", 0.0)
+                if _in_p or _out_p:
+                    _call_cost = (_pt * _in_p + _ct * _out_p) / 1000.0
+                else:
+                    _call_cost = _lookup_cost(_req["model"], _pt, _ct)
+                _tps = round(_ct / _latency_s, 2) if _latency_s > 0 and _ct > 0 else 0.0
                 _record_llm_call(
-                    model=_model,
-                    prompt_tokens=_prompt_tokens,
-                    completion_tokens=_completion_tokens,
+                    model=_req["model"],
+                    prompt_tokens=_pt,
+                    completion_tokens=_ct,
                     cost_usd=_call_cost,
-                    finish_reason=_finish_reason,
-                    prompt_text=_prompt_text,
-                    response_text=_response_text,
+                    finish_reason=_resp["finish_reason"],
+                    prompt_text=_req["prompt_text"],
+                    response_text=_resp["response_text"],
                     latency_s=_latency_s,
                     http_status=status,
+                    fault_name=fault,
+                    was_blocked=0,
+                    was_modified=1 if fault in _MODIFYING_FAULTS else 0,
+                    total_tokens=_tot,
+                    tokens_per_second=_tps,
+                    request_size_bytes=_req["request_size_bytes"],
+                    response_size_bytes=_resp["response_size_bytes"],
+                    message_count=_req["message_count"],
+                    tool_count=_req["tool_count"],
+                    response_tool_calls=_resp["response_tool_calls"],
+                    is_streaming=_req["is_streaming"],
+                    temperature=_req["temperature"],
+                    max_tokens_requested=_req["max_tokens_requested"],
+                    response_length_chars=_resp["response_length_chars"],
+                    ttft_s=None,   # non-streaming path; TTFT captured in _stream_interrupt
+                    system_fingerprint=_resp["system_fingerprint"],
+                    rate_limit_remaining_requests=_resp["rate_limit_remaining_requests"],
+                    rate_limit_remaining_tokens=_resp["rate_limit_remaining_tokens"],
                 )
             except Exception:  # noqa: BLE001
                 pass

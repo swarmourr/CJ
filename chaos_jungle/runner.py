@@ -200,27 +200,51 @@ class MeasurementResult:
 
         if self.llm_calls:
             lines.append("")
-            lines.append(f"  LLM calls captured (n={len(self.llm_calls)}):")
+            n = len(self.llm_calls)
+            blocked  = sum(1 for c in self.llm_calls if c.get("was_blocked"))
+            modified = sum(1 for c in self.llm_calls if c.get("was_modified"))
             lines.append(
-                f"  {'#':<4} {'model':<20} {'in':>6} {'out':>6} {'cost':>9} "
-                f"{'latency':>8}  finish"
+                f"  LLM calls captured (n={n}"
+                + (f"  blocked={blocked}" if blocked else "")
+                + (f"  modified={modified}" if modified else "")
+                + "):"
             )
-            lines.append("  " + "-" * 68)
-            for c in self.llm_calls:
-                lines.append(
-                    f"  {c['call_index']:<4} {c['model']:<20} "
-                    f"{c['prompt_tokens']:>6} {c['completion_tokens']:>6} "
-                    f"${c['cost_usd']:>8.6f} {c['latency_s']:>7.2f}s  "
-                    f"{c['finish_reason'] or str(c['http_status'])}"
-                )
-            total_in  = sum(c["prompt_tokens"] for c in self.llm_calls)
-            total_out = sum(c["completion_tokens"] for c in self.llm_calls)
-            total_cost = sum(c["cost_usd"] for c in self.llm_calls)
-            avg_lat   = sum(c["latency_s"] for c in self.llm_calls) / len(self.llm_calls)
-            lines.append("  " + "-" * 68)
             lines.append(
-                f"  {'Total':<25} {total_in:>6} {total_out:>6} "
-                f"${total_cost:>8.6f} avg {avg_lat:.2f}s"
+                f"  {'#':<4} {'model':<20} {'in':>6} {'out':>6} {'tok/s':>6} "
+                f"{'cost':>10} {'lat':>7}  {'ttft':>6}  status/finish"
+            )
+            lines.append("  " + "-" * 84)
+            for c in self.llm_calls:
+                tps  = f"{c.get('tokens_per_second', 0):.1f}" if c.get("tokens_per_second") else "—"
+                ttft = f"{c['ttft_s']:.3f}s" if c.get("ttft_s") is not None else "—"
+                tag  = c.get("finish_reason") or f"HTTP {c['http_status']}"
+                if c.get("was_blocked"):
+                    tag = f"[blocked] {tag}"
+                elif c.get("was_modified"):
+                    tag = f"[modified] {tag}"
+                lines.append(
+                    f"  {c['call_index']:<4} {c.get('model',''):<20} "
+                    f"{c['prompt_tokens']:>6} {c['completion_tokens']:>6} "
+                    f"{tps:>6} ${c['cost_usd']:>9.6f} {c['latency_s']:>6.2f}s  "
+                    f"{ttft:>6}  {tag}"
+                )
+            total_in   = sum(c["prompt_tokens"] for c in self.llm_calls)
+            total_out  = sum(c["completion_tokens"] for c in self.llm_calls)
+            total_cost = sum(c["cost_usd"] for c in self.llm_calls)
+            lats       = [c["latency_s"] for c in self.llm_calls]
+            avg_lat    = sum(lats) / n
+            sorted_lats = sorted(lats)
+            p50 = sorted_lats[int(n * 0.50)]
+            p99 = sorted_lats[min(int(n * 0.99), n - 1)]
+            ttfts = [c["ttft_s"] for c in self.llm_calls if c.get("ttft_s") is not None]
+            lines.append("  " + "-" * 84)
+            lines.append(
+                f"  {'Total / avg':<25} {total_in:>6} {total_out:>6}        "
+                f"${total_cost:>9.6f} {avg_lat:>6.2f}s"
+            )
+            lines.append(
+                f"  Latency  p50={p50:.2f}s  p99={p99:.2f}s"
+                + (f"  TTFT avg={sum(ttfts)/len(ttfts):.3f}s" if ttfts else "")
             )
 
         return "\n".join(lines)

@@ -111,25 +111,69 @@ class SessionDB:
                 ON traces(session_id);
 
             CREATE TABLE IF NOT EXISTS llm_calls (
-                id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id        INTEGER NOT NULL REFERENCES sessions(id),
-                phase             TEXT    NOT NULL DEFAULT 'fault',
-                call_index        INTEGER NOT NULL DEFAULT 0,
-                timestamp         TEXT    NOT NULL,
-                model             TEXT    NOT NULL DEFAULT '',
-                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-                completion_tokens INTEGER NOT NULL DEFAULT 0,
-                cost_usd          REAL    NOT NULL DEFAULT 0.0,
-                finish_reason     TEXT    NOT NULL DEFAULT '',
-                prompt_text       TEXT    NOT NULL DEFAULT '',
-                response_text     TEXT    NOT NULL DEFAULT '',
-                latency_s         REAL    NOT NULL DEFAULT 0.0,
-                http_status       INTEGER NOT NULL DEFAULT 200
+                id                             INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id                     INTEGER NOT NULL REFERENCES sessions(id),
+                phase                          TEXT    NOT NULL DEFAULT 'fault',
+                call_index                     INTEGER NOT NULL DEFAULT 0,
+                timestamp                      TEXT    NOT NULL,
+                model                          TEXT    NOT NULL DEFAULT '',
+                prompt_tokens                  INTEGER NOT NULL DEFAULT 0,
+                completion_tokens              INTEGER NOT NULL DEFAULT 0,
+                cost_usd                       REAL    NOT NULL DEFAULT 0.0,
+                finish_reason                  TEXT    NOT NULL DEFAULT '',
+                prompt_text                    TEXT    NOT NULL DEFAULT '',
+                response_text                  TEXT    NOT NULL DEFAULT '',
+                latency_s                      REAL    NOT NULL DEFAULT 0.0,
+                http_status                    INTEGER NOT NULL DEFAULT 200,
+                fault_name                     TEXT    NOT NULL DEFAULT '',
+                was_blocked                    INTEGER NOT NULL DEFAULT 0,
+                was_modified                   INTEGER NOT NULL DEFAULT 0,
+                total_tokens                   INTEGER NOT NULL DEFAULT 0,
+                tokens_per_second              REAL    NOT NULL DEFAULT 0.0,
+                request_size_bytes             INTEGER NOT NULL DEFAULT 0,
+                response_size_bytes            INTEGER NOT NULL DEFAULT 0,
+                message_count                  INTEGER NOT NULL DEFAULT 0,
+                tool_count                     INTEGER NOT NULL DEFAULT 0,
+                response_tool_calls            INTEGER NOT NULL DEFAULT 0,
+                is_streaming                   INTEGER NOT NULL DEFAULT 0,
+                temperature                    REAL,
+                max_tokens_requested           INTEGER,
+                response_length_chars          INTEGER NOT NULL DEFAULT 0,
+                ttft_s                         REAL,
+                system_fingerprint             TEXT    NOT NULL DEFAULT '',
+                rate_limit_remaining_requests  INTEGER,
+                rate_limit_remaining_tokens    INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_llm_calls_session
                 ON llm_calls(session_id);
         """)
+        # Migrate existing llm_calls tables that are missing the new columns
+        _new_cols = [
+            ("fault_name",                    "TEXT NOT NULL DEFAULT ''"),
+            ("was_blocked",                   "INTEGER NOT NULL DEFAULT 0"),
+            ("was_modified",                  "INTEGER NOT NULL DEFAULT 0"),
+            ("total_tokens",                  "INTEGER NOT NULL DEFAULT 0"),
+            ("tokens_per_second",             "REAL NOT NULL DEFAULT 0.0"),
+            ("request_size_bytes",            "INTEGER NOT NULL DEFAULT 0"),
+            ("response_size_bytes",           "INTEGER NOT NULL DEFAULT 0"),
+            ("message_count",                 "INTEGER NOT NULL DEFAULT 0"),
+            ("tool_count",                    "INTEGER NOT NULL DEFAULT 0"),
+            ("response_tool_calls",           "INTEGER NOT NULL DEFAULT 0"),
+            ("is_streaming",                  "INTEGER NOT NULL DEFAULT 0"),
+            ("temperature",                   "REAL"),
+            ("max_tokens_requested",          "INTEGER"),
+            ("response_length_chars",         "INTEGER NOT NULL DEFAULT 0"),
+            ("ttft_s",                        "REAL"),
+            ("system_fingerprint",            "TEXT NOT NULL DEFAULT ''"),
+            ("rate_limit_remaining_requests", "INTEGER"),
+            ("rate_limit_remaining_tokens",   "INTEGER"),
+        ]
+        for col, defn in _new_cols:
+            try:
+                self._conn.execute(f"ALTER TABLE llm_calls ADD COLUMN {col} {defn}")
+            except Exception:
+                pass  # column already exists
         self._conn.commit()
 
     # ── Sessions ──────────────────────────────────────────────────
@@ -555,26 +599,49 @@ class SessionDB:
         response_text: str,
         latency_s: float,
         http_status: int = 200,
+        fault_name: str = "",
+        was_blocked: bool = False,
+        was_modified: bool = False,
+        total_tokens: int = 0,
+        tokens_per_second: float = 0.0,
+        request_size_bytes: int = 0,
+        response_size_bytes: int = 0,
+        message_count: int = 0,
+        tool_count: int = 0,
+        response_tool_calls: int = 0,
+        is_streaming: bool = False,
+        temperature: float | None = None,
+        max_tokens_requested: int | None = None,
+        response_length_chars: int = 0,
+        ttft_s: float | None = None,
+        system_fingerprint: str = "",
+        rate_limit_remaining_requests: int | None = None,
+        rate_limit_remaining_tokens: int | None = None,
     ) -> int:
-        """Store a single LLM API call captured by the proxy.
-
-        Called by the LLM proxy subprocess after each forwarded request.
-
-        Returns
-        -------
-        int
-            LLM call record id.
-        """
+        """Store a single LLM API call captured by the proxy."""
         cur = self._conn.execute(
-            "INSERT INTO llm_calls "
-            "(session_id, phase, call_index, timestamp, model, "
-            " prompt_tokens, completion_tokens, cost_usd, finish_reason, "
-            " prompt_text, response_text, latency_s, http_status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO llm_calls ("
+            "  session_id, phase, call_index, timestamp, model,"
+            "  prompt_tokens, completion_tokens, cost_usd, finish_reason,"
+            "  prompt_text, response_text, latency_s, http_status,"
+            "  fault_name, was_blocked, was_modified, total_tokens, tokens_per_second,"
+            "  request_size_bytes, response_size_bytes, message_count, tool_count,"
+            "  response_tool_calls, is_streaming, temperature, max_tokens_requested,"
+            "  response_length_chars, ttft_s, system_fingerprint,"
+            "  rate_limit_remaining_requests, rate_limit_remaining_tokens"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 session_id, phase, call_index, _now(), model,
                 prompt_tokens, completion_tokens, cost_usd, finish_reason,
                 prompt_text, response_text, latency_s, http_status,
+                fault_name, 1 if was_blocked else 0, 1 if was_modified else 0,
+                total_tokens, tokens_per_second,
+                request_size_bytes, response_size_bytes,
+                message_count, tool_count,
+                response_tool_calls, 1 if is_streaming else 0,
+                temperature, max_tokens_requested,
+                response_length_chars, ttft_s, system_fingerprint,
+                rate_limit_remaining_requests, rate_limit_remaining_tokens,
             ),
         )
         self._conn.commit()
