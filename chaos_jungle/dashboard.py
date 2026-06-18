@@ -576,6 +576,7 @@ let _rawLLM       = [];
 let _rawResults   = [];
 let _rawOracles   = [];
 let _rawResources = [];
+let _rawImpact    = null;
 
 // ── Chart management ────────────────────────────────────────────────────────
 const _charts = {};
@@ -1148,6 +1149,7 @@ function switchRunTab(tab) {
   _postRender(tab);
 }
 function _postRender(tab) {
+  if (tab === 'run')     _initImpactCharts(_rawImpact, _rawResources);
   if (tab === 'llm')     _initLLMCharts(_rawLLM);
   if (tab === 'metrics') _initMetricsChart(_rawResults, _rawOracles);
   if (tab === 'faults')  _initResourceChart(_rawResources);
@@ -1196,6 +1198,54 @@ function _initLLMCharts(calls) {
       }}}},
       scales:{x:{grid:{display:false},ticks:_xt},y:{grid:_gc,ticks:{callback:v=>v+'s',font:{size:9}}}}}
   });
+}
+function _initImpactCharts(impact, resources) {
+  const _gc = {color:'rgba(255,255,255,.05)'};
+  const _so = {responsive:true, maintainAspectRatio:false, animation:{duration:200}};
+
+  if (impact && document.getElementById('imp-ch-compare')) {
+    const rows = [
+      {label:'Avg Latency (s)',  b: impact.avg_latency_baseline||0, f: impact.avg_latency_fault||0},
+      {label:'p99 Latency (s)',  b: impact.p99_latency_baseline||0, f: impact.p99_latency_fault||0},
+      {label:'Error Rate (%)',   b: (impact.error_rate_baseline||0)*100, f: (impact.error_rate_fault||0)*100},
+      {label:'Cost (USD)',       b: impact.cost_baseline||0, f: impact.cost_fault||0},
+    ].filter(r => r.b > 0 || r.f > 0);
+    if (rows.length) {
+      _mkChart('imp-ch-compare', {
+        type:'bar',
+        data:{
+          labels: rows.map(r=>r.label),
+          datasets:[
+            {label:'Baseline', data:rows.map(r=>+r.b.toFixed(5)), backgroundColor:'rgba(99,102,241,.7)', borderRadius:3, barPercentage:.72},
+            {label:'Fault',    data:rows.map(r=>+r.f.toFixed(5)), backgroundColor:'rgba(239,68,68,.65)',  borderRadius:3, barPercentage:.72},
+          ]
+        },
+        options:{..._so, indexAxis:'y',
+          plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:10}}},
+          scales:{x:{grid:_gc,ticks:{font:{size:9}}},y:{grid:{display:false},ticks:{font:{size:10}}}}
+        }
+      });
+    }
+  }
+
+  if (resources && resources.length > 1 && document.getElementById('imp-ch-res')) {
+    const labels = resources.map(s => s.elapsed_s.toFixed(1)+'s');
+    _mkChart('imp-ch-res', {
+      type:'line',
+      data:{
+        labels,
+        datasets:[
+          {label:'CPU %',    data:resources.map(s=>s.cpu_pct),  borderColor:'#f97316', backgroundColor:'rgba(249,115,22,.1)', tension:.35, pointRadius:0, fill:true},
+          {label:'Memory %', data:resources.map(s=>s.mem_pct),  borderColor:'#6366f1', backgroundColor:'rgba(99,102,241,.1)', tension:.35, pointRadius:0, fill:true},
+        ]
+      },
+      options:{..._so,
+        plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:10}}},
+        scales:{x:{grid:{display:false},ticks:{font:{size:9},maxRotation:0,autoSkip:true,maxTicksLimit:10}},
+                y:{grid:_gc,min:0,max:100,ticks:{callback:v=>v+'%',font:{size:9}}}}
+      }
+    });
+  }
 }
 function _initMetricsChart(results, oracles) {
   let metricRows = [];
@@ -1282,6 +1332,7 @@ async function openDetail(id) {
     _rawResults   = sd.results||[];
     _rawOracles   = sd.oracles||[];
     _rawResources = resources;
+    _rawImpact    = impact;
 
     // Populate header
     document.getElementById('run-title').textContent = s.name || `Session #${id}`;
@@ -1294,7 +1345,7 @@ async function openDetail(id) {
     document.getElementById('run-meta').textContent = [dur, started].filter(Boolean).join('  ·  ');
 
     _dpData = {
-      run:      buildDPRun(s, sd.faults||[], impact),
+      run:      buildDPRun(s, sd.faults||[], impact, resources),
       faults:   buildDPFaults(sd.faults||[], resources),
       metrics:  buildDPMetrics(sd.results||[], sd.oracles||[]),
       commands: buildDPCommands(sd.commands||[]),
@@ -1380,7 +1431,7 @@ const _CAT_COLOR = {
 };
 
 // Detail tab builders
-function buildDPRun(s, faults, impact) {
+function buildDPRun(s, faults, impact, resources) {
   const agent = agentName(s.target_type, s.target_addr);
   faults = faults||[];
   function row(label, value, mono) {
@@ -1391,7 +1442,7 @@ function buildDPRun(s, faults, impact) {
   }
   const statusColor = s.status==='reverted'||s.status==='done'?'var(--green)':s.status==='running'?'var(--accent)':'var(--red)';
 
-  // ── Impact summary ──────────────────────────────────────────────────────────
+  // ── Impact summary + charts ──────────────────────────────────────────────────
   let impactHtml = '';
   if (impact && (impact.calls_baseline > 0 || impact.calls_fault > 0)) {
     function impKpi(label, bv, fv, fmt, higherIsBetter) {
@@ -1400,40 +1451,63 @@ function buildDPRun(s, faults, impact) {
       const worse = higherIsBetter ? fv < bv : fv > bv;
       const color = !changed ? 'var(--text3)' : worse ? 'var(--red)' : 'var(--green)';
       const arrow = !changed ? '' : worse ? ' ▲' : ' ▼';
-      return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px">
-        <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${label}</div>
-        <div style="display:flex;align-items:baseline;gap:8px">
-          <span style="font-size:11px;color:var(--text3)">Base <b style="color:var(--text);font-size:13px">${bvF}</b></span>
-          <span style="font-size:11px;color:${color};font-weight:600">Fault <b style="font-size:13px">${fvF}${arrow}</b></span>
+      const bg = !changed ? '' : worse ? 'border-top:2px solid var(--red)' : 'border-top:2px solid var(--green)';
+      return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px;${bg}">
+        <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${label}</div>
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:10px;color:var(--text3)">Baseline</span>
+            <span style="font-size:13px;font-weight:600;color:var(--text);font-family:var(--mono)">${bvF}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:10px;color:var(--text3)">Fault</span>
+            <span style="font-size:13px;font-weight:700;color:${color};font-family:var(--mono)">${fvF}${arrow}</span>
+          </div>
         </div>
       </div>`;
     }
     const errPct  = v => (v*100).toFixed(1)+'%';
     const latFmt  = v => v.toFixed(2)+'s';
     const costFmt = v => fmtCost(v);
-    const tokFmt  = v => v.toLocaleString();
+    const hasRes = resources && resources.length > 1;
+
     impactHtml = `<div style="margin-bottom:24px">
       <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Fault Impact</div>
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px">
-          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">LLM Calls</div>
-          <span style="font-size:11px;color:var(--text3)">Base <b style="color:var(--text);font-size:13px">${impact.calls_baseline}</b></span>
-          <span style="font-size:11px;color:var(--text3);margin-left:12px">Fault <b style="color:var(--text);font-size:13px">${impact.calls_fault}</b></span>
-        </div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px">
-          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Blocked / Modified / Retried</div>
-          <span style="font-size:13px;font-weight:700;color:${impact.blocked_count>0?'var(--red)':'var(--text3)'}">${impact.blocked_count}</span>
-          <span style="font-size:11px;color:var(--text3);margin:0 6px">/</span>
-          <span style="font-size:13px;font-weight:700;color:${impact.modified_count>0?'var(--yellow)':'var(--text3)'}">${impact.modified_count}</span>
-          <span style="font-size:11px;color:var(--text3);margin:0 6px">/</span>
-          <span style="font-size:13px;font-weight:700;color:${impact.retry_count>0?'var(--accent)':'var(--text3)'}">${impact.retry_count}</span>
-        </div>
+
+      <!-- summary badges row -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:11px;color:var(--text3)">
+          LLM calls&nbsp; <b style="color:var(--text)">${impact.calls_baseline}</b> baseline → <b style="color:var(--text)">${impact.calls_fault}</b> fault
+        </span>
+        <span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:11px;color:var(--text3)">
+          Blocked <b style="color:${impact.blocked_count>0?'var(--red)':'var(--text)'}">${impact.blocked_count}</b>
+          &nbsp;·&nbsp; Modified <b style="color:${impact.modified_count>0?'var(--yellow)':'var(--text)'}">${impact.modified_count}</b>
+          &nbsp;·&nbsp; Retries <b style="color:${impact.retry_count>0?'var(--accent)':'var(--text)'}">${impact.retry_count}</b>
+        </span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+
+      <!-- KPI comparison grid -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
         ${impKpi('Error rate',  impact.error_rate_baseline,  impact.error_rate_fault,  errPct,  false)}
         ${impKpi('Avg latency', impact.avg_latency_baseline, impact.avg_latency_fault,  latFmt,  false)}
         ${impKpi('p99 latency', impact.p99_latency_baseline, impact.p99_latency_fault,  latFmt,  false)}
         ${impKpi('Total cost',  impact.cost_baseline,        impact.cost_fault,         costFmt, false)}
+      </div>
+
+      <!-- visual comparison chart + resource timeline -->
+      <div style="display:grid;grid-template-columns:${hasRes?'1fr 1fr':'1fr'};gap:12px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">
+            Baseline vs Fault comparison
+          </div>
+          <canvas id="imp-ch-compare"></canvas>
+        </div>
+        ${hasRes ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">
+            Resource monitoring — <span style="color:#f97316">CPU %</span> · <span style="color:#6366f1">Memory %</span>
+          </div>
+          <canvas id="imp-ch-res"></canvas>
+        </div>` : ''}
       </div>
     </div>`;
   }
@@ -1461,6 +1535,52 @@ function buildDPRun(s, faults, impact) {
     </div>`;
   }
 
+  // ── Resource snapshot diff (from fault snapshots, no monitoring needed) ─────
+  let resourceSnapHtml = '';
+  if (!resources || resources.length < 2) {
+    // Try to pull snapshot_before/after from the first fault that has data
+    const snapFault = (faults||[]).find(f => {
+      try {
+        const sb = typeof f.snapshot_before==='string' ? JSON.parse(f.snapshot_before||'null') : f.snapshot_before;
+        return sb && Object.keys(sb).length > 0;
+      } catch(e) { return false; }
+    });
+    if (snapFault) {
+      try {
+        const sb = typeof snapFault.snapshot_before==='string' ? JSON.parse(snapFault.snapshot_before||'{}') : (snapFault.snapshot_before||{});
+        const sa = typeof snapFault.snapshot_after==='string'  ? JSON.parse(snapFault.snapshot_after||'{}')  : (snapFault.snapshot_after||{});
+        const metrics = [
+          {k:'cpu_pct',     label:'CPU %',      fmt:v=>v.toFixed(1)+'%'},
+          {k:'mem_pct',     label:'Memory %',   fmt:v=>v.toFixed(1)+'%'},
+          {k:'mem_used_mb', label:'Mem used',   fmt:v=>v.toFixed(0)+' MB'},
+          {k:'load_1',      label:'Load 1m',    fmt:v=>v.toFixed(2)},
+          {k:'disk_read_mb',label:'Disk read',  fmt:v=>v.toFixed(1)+' MB'},
+          {k:'net_rx_mb',   label:'Net RX',     fmt:v=>v.toFixed(1)+' MB'},
+        ].filter(m => sb[m.k] != null || sa[m.k] != null);
+        if (metrics.length) {
+          const rows = metrics.map(m => {
+            const bv = sb[m.k], fv = sa[m.k];
+            const changed = bv != null && fv != null && Math.abs(fv - bv) > 0.05;
+            const worse = fv > bv;
+            const color = changed ? (worse ? 'var(--red)' : 'var(--green)') : 'var(--text2)';
+            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
+              <span style="width:80px;flex-shrink:0;font-size:11px;color:var(--text3)">${m.label}</span>
+              <span style="font-size:11px;font-family:var(--mono);color:var(--text3)">${bv!=null?m.fmt(bv):'—'}</span>
+              <span style="font-size:10px;color:var(--text3)">→</span>
+              <span style="font-size:11px;font-family:var(--mono);font-weight:${changed?'600':'400'};color:${color}">${fv!=null?m.fmt(fv):'—'}</span>
+              ${changed?`<span style="font-size:10px;color:${color};margin-left:auto">${fv>bv?'▲':'▼'} ${m.fmt(Math.abs(fv-bv))}</span>`:''}
+            </div>`;
+          }).join('');
+          resourceSnapHtml = `<div style="margin-bottom:24px">
+            <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">System Resources — before → after injection</div>
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px">${rows}</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:5px">Snapshot taken immediately before and after fault injection. Enable <code style="font-family:var(--mono)">monitor_resources=True</code> for continuous timeline.</div>
+          </div>`;
+        }
+      } catch(e) {}
+    }
+  }
+
   return `
     <div style="margin-bottom:24px">
       <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Session</div>
@@ -1474,6 +1594,7 @@ function buildDPRun(s, faults, impact) {
       ${row('Stopped', fmtDate(s.stopped_at), true)}
     </div>
     ${impactHtml}
+    ${resourceSnapHtml}
     ${faultSummary}`;
 }
 
