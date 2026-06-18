@@ -508,10 +508,11 @@ class ChaosRunner:
             self.policy.check_target(self.target)
 
         _ttype, _taddr = _target_info(self.target)
-        self._session_id = self.db.open_session(
-            self.scenario.name, target_type=_ttype, target_addr=_taddr
-        )
-        self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
+        if self._session_id is None:
+            self._session_id = self.db.open_session(
+                self.scenario.name, target_type=_ttype, target_addr=_taddr
+            )
+            self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
 
         # wrap target so every command is logged to the session DB
         logged = LoggingTarget(self.target, self.db, self._session_id)
@@ -743,6 +744,7 @@ class ChaosRunner:
         strategy: "CollectStrategy | None" = None,
         metric_set: "MetricSet | None" = None,
         on_session_start: "Callable[[int], None] | None" = None,
+        on_fault_start: "Callable[[int], None] | None" = None,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -845,6 +847,18 @@ class ChaosRunner:
             _active_system   = [m for m in _active if m in _SYSTEM_CMDS]
             _active_workload = [m for m in _active if m not in _SYSTEM_CMDS]
 
+        # Pre-create DB session so baseline LLM calls are tracked
+        _ttype, _taddr = _target_info(self.target)
+        self._session_id = self.db.open_session(
+            self.scenario.name, target_type=_ttype, target_addr=_taddr
+        )
+        self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
+        if on_session_start is not None:
+            try:
+                on_session_start(self._session_id)
+            except Exception:
+                pass
+
         # ── 1. Baseline runs (no fault) ───────────────────────────
         print(f"[chaos-jungle] Measuring baseline ({n_baseline} trial(s)) ...")
         raw_baseline: list[dict] = []
@@ -869,9 +883,9 @@ class ChaosRunner:
         # ── 2. Fault runs ─────────────────────────────────────────
         print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
         self.start()
-        if on_session_start is not None and self._session_id is not None:
+        if on_fault_start is not None and self._session_id is not None:
             try:
-                on_session_start(self._session_id)
+                on_fault_start(self._session_id)
             except Exception:
                 pass
         raw_fault: list[dict] = []
