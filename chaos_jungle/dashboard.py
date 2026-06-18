@@ -1941,18 +1941,52 @@ function buildDPLLM(calls) {
     </div>
   </div>`;
 
-  // Per-call cards
-  html += '<div style="margin-top:4px">';
-  html += calls.map((c,i) => {
+  // ── Group calls by agent addr ────────────────────────────────────────────
+  // Assign friendly names to agent IPs
+  const _agentColors = ['#6366f1','#06b6d4','#f59e0b','#22c55e','#ec4899','#8b5cf6','#f97316'];
+  const _agentMap = {};   // ip -> {name, color, idx}
+  let _agentIdx = 0;
+  function _resolveAgent(addr) {
+    if (!addr) addr = 'unknown';
+    if (!_agentMap[addr]) {
+      // Try to derive a friendly name from the IP (Docker assigns sequential IPs)
+      const name = addr === '127.0.0.1' || addr === '::1' ? 'localhost'
+                 : addr.match(/\.(\d+)$/) ? `agent-${addr.match(/\.(\d+)$/)[1]}` : addr;
+      _agentMap[addr] = {name, color: _agentColors[_agentIdx % _agentColors.length], idx: _agentIdx++};
+    }
+    return _agentMap[addr];
+  }
+
+  // Pre-resolve all agents so the map is built in encounter order
+  calls.forEach(c => _resolveAgent(c.agent_addr||''));
+  const agents = [...new Set(calls.map(c => c.agent_addr||''))];
+  const multiAgent = agents.length > 1;
+
+  // Add agent legend if multiple agents detected
+  if (multiAgent) {
+    html += `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px">
+      <span style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em">Agents</span>
+      ${agents.map(a => {
+        const ag = _resolveAgent(a);
+        const cnt = calls.filter(c=>(c.agent_addr||'')==a).length;
+        return `<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;background:${ag.color}1a;border:1px solid ${ag.color}55;border-radius:20px;font-size:11px">
+          <span style="width:7px;height:7px;border-radius:50%;background:${ag.color};flex-shrink:0"></span>
+          <span style="color:var(--text);font-weight:500">${ag.name}</span>
+          <span style="color:var(--text3)">${a}</span>
+          <span style="color:var(--text3)">· ${cnt} calls</span>
+        </span>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // Render calls — grouped by agent when multi-agent, flat otherwise
+  const renderCall = (c, i, globalIdx) => {
     const isBlocked  = !!c.was_blocked;
     const isModified = !!c.was_modified;
     const bdrCol = isBlocked?'rgba(239,68,68,.5)':isModified?'rgba(245,158,11,.5)':'var(--border)';
     const bgCol  = isBlocked?'rgba(239,68,68,.04)':isModified?'rgba(245,158,11,.03)':'var(--surface)';
+    const ag = multiAgent ? _resolveAgent(c.agent_addr||'') : null;
 
-    const statusBadge = isBlocked
-      ? `<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px">BLOCKED</span>`
-      : isModified
-      ? `<span style="background:rgba(245,158,11,.15);color:var(--yellow);font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px">MODIFIED</span>` : '';
     const phaseBadge = c.phase
       ? `<span style="font-size:10px;color:var(--text3);background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:2px 7px">${c.phase}</span>` : '';
     const errType = c.error_type && c.error_type !== 'none' ? c.error_type : null;
@@ -1995,12 +2029,14 @@ function buildDPLLM(calls) {
       ? `<div style="background:rgba(245,158,11,.1);padding:4px 14px;font-size:10px;font-weight:700;color:var(--yellow);letter-spacing:.05em">⚠ MODIFIED</div>`
       : '';
 
-    return `<div style="background:${bgCol};border:1px solid ${bdrCol};border-left:3px solid ${leftAccent};border-radius:var(--radius);overflow:hidden;margin-bottom:7px">
+    const agentDot = ag ? `<span style="width:7px;height:7px;border-radius:50%;background:${ag.color};flex-shrink:0;display:inline-block"></span>` : '';
+    return `<div style="background:${bgCol};border:1px solid ${bdrCol};border-left:3px solid ${ag?ag.color:leftAccent};border-radius:var(--radius);overflow:hidden;margin-bottom:7px">
       ${alertBar}
       <div style="padding:9px 14px">
         <!-- header row -->
         <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:6px">
-          <span style="font-size:10px;font-weight:600;color:var(--text3);font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:1px 5px">#${i+1}</span>
+          <span style="font-size:10px;font-weight:600;color:var(--text3);font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:1px 5px">#${globalIdx+1}</span>
+          ${agentDot}
           <span style="font-size:13px;font-weight:600;color:var(--text)">${c.model||'unknown'}</span>
           ${phaseBadge}${errBadge}${retryBadge}${finalBadge}
           ${c.finish_reason?`<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${c.finish_reason}</span>`:''}
@@ -2031,7 +2067,35 @@ function buildDPLLM(calls) {
         ${textBlock('Response / Output', resp, cTok)}
       </div>
     </div>`;
-  }).join('');
+  };  // end renderCall
+
+  html += '<div style="margin-top:4px">';
+  if (multiAgent) {
+    // Group by agent, show each agent's calls in a collapsible section
+    for (const addr of agents) {
+      const ag = _resolveAgent(addr);
+      const agCalls = calls.filter(c => (c.agent_addr||'') === addr);
+      const agLat = agCalls.reduce((a,c)=>a+(c.latency_s||0),0)/agCalls.length;
+      const agTok = agCalls.reduce((a,c)=>a+(c.prompt_tokens||0)+(c.completion_tokens||0),0);
+      const agBlk = agCalls.filter(c=>c.was_blocked).length;
+      html += `<details open style="margin-bottom:12px">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:8px 12px;background:${ag.color}12;border:1px solid ${ag.color}44;border-radius:var(--radius);user-select:none;margin-bottom:8px">
+          <span style="width:9px;height:9px;border-radius:50%;background:${ag.color};flex-shrink:0"></span>
+          <span style="font-size:12px;font-weight:600;color:var(--text)">${ag.name}</span>
+          <span style="font-size:11px;color:var(--text3);font-family:var(--mono)">${addr}</span>
+          <span style="margin-left:auto;display:flex;gap:10px;align-items:center">
+            <span style="font-size:10px;color:var(--text3)">${agCalls.length} calls</span>
+            <span style="font-size:10px;color:var(--text3)">avg ${agLat.toFixed(2)}s</span>
+            <span style="font-size:10px;color:var(--text3)">${agTok.toLocaleString()} tok</span>
+            ${agBlk?`<span style="font-size:10px;color:var(--red);font-weight:600">${agBlk} blocked</span>`:''}
+          </span>
+        </summary>
+        ${agCalls.map((c,i) => renderCall(c, i, calls.indexOf(c))).join('')}
+      </details>`;
+    }
+  } else {
+    html += calls.map((c,i) => renderCall(c, i, i)).join('');
+  }
   html += '</div>';
 
   return html;

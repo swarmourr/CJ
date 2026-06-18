@@ -247,6 +247,7 @@ class SessionDB:
             ("is_retry",                      "INTEGER NOT NULL DEFAULT 0"),
             ("is_final_response",             "INTEGER NOT NULL DEFAULT 0"),
             ("fault_offset_s",                "REAL"),
+            ("agent_addr",                    "TEXT NOT NULL DEFAULT ''"),
         ]
         for col, defn in _new_cols:
             try:

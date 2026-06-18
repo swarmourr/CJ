@@ -847,6 +847,7 @@ def _record_llm_call(
     is_retry: int = 0,
     is_final_response: int = 0,
     fault_offset_s: float | None = None,
+    agent_addr: str = "",
 ) -> int:
     """Write one LLM call row to the chaos-jungle session DB (best-effort).
 
@@ -873,8 +874,8 @@ def _record_llm_call(
             "  response_length_chars, ttft_s, system_fingerprint,"
             "  rate_limit_remaining_requests, rate_limit_remaining_tokens,"
             "  system_prompt, full_messages_json, error_type,"
-            "  is_retry, is_final_response, fault_offset_s"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "  is_retry, is_final_response, fault_offset_s, agent_addr"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 _SESSION_ID, _PHASE, idx, ts, model,
                 prompt_tokens, completion_tokens, cost_usd, finish_reason,
@@ -889,7 +890,7 @@ def _record_llm_call(
                 response_length_chars, ttft_s, system_fingerprint,
                 rate_limit_remaining_requests, rate_limit_remaining_tokens,
                 system_prompt, full_messages_json, error_type,
-                is_retry, is_final_response, fault_offset_s,
+                is_retry, is_final_response, fault_offset_s, agent_addr,
             ),
         )
         llm_call_id = cur.lastrowid or 0
@@ -1379,6 +1380,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     is_retry=1 if _is_retry(_req["prompt_text"]) else 0,
                     is_final_response=1 if _is_fin else 0,
                     fault_offset_s=_fault_offset(),
+                    agent_addr=self.client_address[0] if self.client_address else "",
                 )
                 _record_tool_calls(
                     _SESSION_ID, _llm_call_id, req_body, _PHASE,
