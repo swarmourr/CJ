@@ -104,6 +104,149 @@ def _mock_response(status: int, payload: dict, response: Any) -> Any:
     return response
 
 
+# ── DB trace context (optional — set by inject() when session_id is given) ───
+
+class _TraceCtx:
+    """Holds DB write context for one inject() scope."""
+    __slots__ = ("db_path", "session_id", "phase", "_lock", "_counter")
+
+    def __init__(self, db_path: str, session_id: int, phase: str) -> None:
+        self.db_path   = db_path
+        self.session_id = session_id
+        self.phase      = phase
+        self._lock      = threading.Lock()
+        self._counter   = 0
+
+    def next_index(self) -> int:
+        with self._lock:
+            self._counter += 1
+            return self._counter
+
+
+_trace_local: threading.local = threading.local()
+
+
+def _get_trace() -> "_TraceCtx | None":
+    return getattr(_trace_local, "ctx", None)
+
+
+def _set_trace(ctx: "_TraceCtx | None") -> None:
+    _trace_local.ctx = ctx
+
+
+def _trace_record(
+    url: str,
+    request: Any,
+    response: Any,
+    latency_s: float,
+    was_blocked: bool = False,
+    was_modified: bool = False,
+) -> None:
+    """Write one LLM call record to the DB.  Never raises — best-effort only."""
+    ctx = _get_trace()
+    if ctx is None:
+        return
+    try:
+        import json as _j
+
+        # ── Parse request ──────────────────────────────────────────────────
+        model = ""
+        prompt_text = ""
+        message_count = 0
+        temperature: float | None = None
+        max_tokens_req: int | None = None
+        request_size = 0
+
+        if request is not None:
+            try:
+                body = getattr(request, "content", None) or getattr(request, "body", b"") or b""
+                if isinstance(body, str):
+                    body = body.encode()
+                request_size = len(body)
+                rb = _j.loads(body)
+                model = rb.get("model", "")
+                msgs  = rb.get("messages", [])
+                message_count = len(msgs)
+                temperature   = rb.get("temperature")
+                max_tokens_req = rb.get("max_tokens")
+                if msgs:
+                    c = msgs[-1].get("content", "")
+                    prompt_text = (c if isinstance(c, str) else str(c))[:500]
+            except Exception:
+                pass
+
+        # ── Parse response ─────────────────────────────────────────────────
+        prompt_tokens = 0
+        completion_tokens = 0
+        finish_reason = "error" if was_blocked else ""
+        response_text = ""
+        http_status   = 0 if (was_blocked and response is None) else 200
+        response_size = 0
+        response_tool_calls = 0
+
+        if response is not None:
+            http_status = getattr(response, "status_code", 200)
+            try:
+                rb2 = _j.loads(getattr(response, "content", b"") or b"")
+                response_size     = len(getattr(response, "content", b"") or b"")
+                usage             = rb2.get("usage", {})
+                prompt_tokens     = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
+                choices = rb2.get("choices", [])
+                if choices:
+                    finish_reason = choices[0].get("finish_reason", "") or finish_reason
+                    msg = choices[0].get("message", {})
+                    response_text = str(msg.get("content", ""))[:500]
+                    tcs = msg.get("tool_calls", [])
+                    response_tool_calls = len(tcs) if isinstance(tcs, list) else 0
+            except Exception:
+                pass
+
+        # ── Cost lookup ────────────────────────────────────────────────────
+        cost_usd = 0.0
+        try:
+            from chaos_jungle.faults.llm import MODEL_PRICING
+            pricing = MODEL_PRICING.get(model)
+            if pricing is None:
+                for k, v in MODEL_PRICING.items():
+                    if k in model:
+                        pricing = v
+                        break
+            if pricing:
+                in_p, out_p = pricing
+                cost_usd = round((prompt_tokens * in_p + completion_tokens * out_p) / 1000.0, 8)
+        except Exception:
+            pass
+
+        # ── Write ──────────────────────────────────────────────────────────
+        from chaos_jungle.db.session_db import SessionDB
+        idx = ctx.next_index()
+        SessionDB(ctx.db_path).record_llm_call(
+            session_id=ctx.session_id,
+            phase=ctx.phase,
+            call_index=idx,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+            finish_reason=finish_reason,
+            prompt_text=prompt_text,
+            response_text=response_text,
+            latency_s=round(latency_s, 4),
+            http_status=http_status,
+            was_blocked=was_blocked,
+            was_modified=was_modified,
+            request_size_bytes=request_size,
+            response_size_bytes=response_size,
+            message_count=message_count,
+            temperature=temperature,
+            max_tokens_requested=max_tokens_req,
+            response_tool_calls=response_tool_calls,
+        )
+    except Exception:
+        pass  # never break the real call
+
+
 # ── Behavior base class ───────────────────────────────────────────────────────
 
 class Behavior:
@@ -462,46 +605,96 @@ def _sample(layers: list[list[Behavior]]) -> list[list[Behavior]]:
     ]
 
 
-def _run(url: str, call: Callable[[], Any]) -> Any:
-    layers = _Stack.matching(url)
+def _run(url: str, call: Callable[[], Any], request: Any = None) -> Any:
+    layers  = _Stack.matching(url)
+    tracing = _get_trace() is not None
+
     if not layers:
-        return call()
+        if not tracing:
+            return call()
+        t0 = time.time()
+        try:
+            resp = call()
+            _trace_record(url, request, resp, time.time() - t0)
+            return resp
+        except Exception:
+            _trace_record(url, request, None, time.time() - t0, was_blocked=True)
+            raise
 
     fired = _sample(layers)
+    t0 = time.time()
+    try:
+        # before hooks — any can raise to abort the request
+        for layer in fired:
+            for b in layer:
+                b.before(url)
 
-    # before hooks — any can raise to abort the request
-    for layer in fired:
-        for b in layer:
-            b.before(url)
+        response = call()
+        latency_s = time.time() - t0
+        orig_status = getattr(response, "status_code", 200)
 
-    response = call()
+        # after hooks — can replace the response
+        for layer in fired:
+            for b in layer:
+                response = b.after(url, response)
 
-    # after hooks — can replace the response
-    for layer in fired:
-        for b in layer:
-            response = b.after(url, response)
+        if tracing:
+            final_status = getattr(response, "status_code", 200)
+            _trace_record(
+                url, request, response, latency_s,
+                was_blocked=final_status >= 400,
+                was_modified=final_status != orig_status,
+            )
+        return response
+    except Exception:
+        if tracing:
+            _trace_record(url, request, None, time.time() - t0, was_blocked=True)
+        raise
 
-    return response
 
+async def _run_async(url: str, coro_factory: Callable, request: Any = None) -> Any:
+    layers  = _Stack.matching(url)
+    tracing = _get_trace() is not None
 
-async def _run_async(url: str, coro_factory: Callable) -> Any:
-    layers = _Stack.matching(url)
     if not layers:
-        return await coro_factory()
+        if not tracing:
+            return await coro_factory()
+        t0 = time.time()
+        try:
+            resp = await coro_factory()
+            _trace_record(url, request, resp, time.time() - t0)
+            return resp
+        except Exception:
+            _trace_record(url, request, None, time.time() - t0, was_blocked=True)
+            raise
 
     fired = _sample(layers)
+    t0 = time.time()
+    try:
+        for layer in fired:
+            for b in layer:
+                b.before(url)
 
-    for layer in fired:
-        for b in layer:
-            b.before(url)
+        response = await coro_factory()
+        latency_s = time.time() - t0
+        orig_status = getattr(response, "status_code", 200)
 
-    response = await coro_factory()
+        for layer in fired:
+            for b in layer:
+                response = b.after(url, response)
 
-    for layer in fired:
-        for b in layer:
-            response = b.after(url, response)
-
-    return response
+        if tracing:
+            final_status = getattr(response, "status_code", 200)
+            _trace_record(
+                url, request, response, latency_s,
+                was_blocked=final_status >= 400,
+                was_modified=final_status != orig_status,
+            )
+        return response
+    except Exception:
+        if tracing:
+            _trace_record(url, request, None, time.time() - t0, was_blocked=True)
+        raise
 
 
 # ── Transport patches ─────────────────────────────────────────────────────────
@@ -514,15 +707,15 @@ _patch_lock = threading.Lock()
 
 
 def _httpx_send(self: Any, request: Any, **kw: Any) -> Any:
-    return _run(str(request.url), lambda: _orig_httpx_send(self, request, **kw))  # type: ignore[misc]
+    return _run(str(request.url), lambda: _orig_httpx_send(self, request, **kw), request=request)  # type: ignore[misc]
 
 
 async def _httpx_asend(self: Any, request: Any, **kw: Any) -> Any:
-    return await _run_async(str(request.url), lambda: _orig_httpx_asend(self, request, **kw))  # type: ignore[misc]
+    return await _run_async(str(request.url), lambda: _orig_httpx_asend(self, request, **kw), request=request)  # type: ignore[misc]
 
 
 def _req_send(self: Any, request: Any, **kw: Any) -> Any:
-    return _run(str(request.url), lambda: _orig_req_send(self, request, **kw))  # type: ignore[misc]
+    return _run(str(request.url), lambda: _orig_req_send(self, request, **kw), request=request)  # type: ignore[misc]
 
 
 def _patch() -> None:
@@ -560,6 +753,9 @@ def _unpatch() -> None:
 def inject(
     *behaviors: Behavior,
     urls: list[str] | None = None,
+    session_id: int | None = None,
+    phase: str = "fault",
+    db_path: str | None = None,
 ) -> Generator[None, None, None]:
     """
     Context manager that injects HTTP-level faults into all LLM SDK calls.
@@ -608,11 +804,20 @@ def inject(
     patterns = urls if urls is not None else DEFAULT_LLM_HOSTS
     _patch()
     _Stack.push(list(behaviors), patterns)
+    old_trace = _get_trace()
+    if session_id is not None:
+        from chaos_jungle.db.session_db import _DEFAULT_DB
+        _set_trace(_TraceCtx(
+            db_path=db_path or _DEFAULT_DB,
+            session_id=session_id,
+            phase=phase,
+        ))
     try:
         yield
     finally:
         _Stack.pop()
         _unpatch()
+        _set_trace(old_trace)
 
 
 def door(
