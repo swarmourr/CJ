@@ -1,6 +1,71 @@
 Changelog
 =========
 
+1.3.0 (2026-06-18) — agent-chaos parity
+-----------------------------------------
+
+**New features**
+
+* **Per-call fault targeting in** ``inject()``
+
+  Three new parameters give surgical control over which LLM calls are affected:
+
+  - ``after_n_calls=N`` — skip the first N calls before activating the fault.
+  - ``only_model="gpt-4"`` — only fire when the request targets a model whose
+    name contains this substring (case-insensitive).
+  - ``only_tool="search"`` — only fire when the request contains a tool result
+    whose name matches.
+
+  .. code-block:: python
+
+     with inject(RateLimit(after_n=0), after_n_calls=2, only_model="gpt-4o"):
+         run_pipeline()   # first 2 calls pass, then gpt-4o calls get 429
+
+* **``ToolMutate`` behavior** (``chaos_jungle.intercept``)
+
+  Silently rewrites ``role: "tool"`` messages before the LLM sees them.
+  The HTTP status stays 200 and no exception is raised — the hardest fault
+  to detect.  Modes: ``"garble"``, ``"empty"``, ``"null"``, ``"wrong_type"``,
+  or a custom ``replacement`` value.
+
+* **``PromptInjection`` behavior** (``chaos_jungle.intercept``)
+
+  Appends adversarial text to outgoing LLM messages.  Targets: ``"user"``,
+  ``"system"``, or ``"all"``.  Tests injection resistance without modifying
+  agent code.
+
+* **``Evaluator`` protocol** (``chaos_jungle.judge``)
+
+  A ``@runtime_checkable`` ``Protocol`` that any object with a compatible
+  ``score(question, context, response) -> JudgeScore`` method satisfies.
+  ``LLMJudge`` already conforms.  Enables DeepEval, Pydantic Evals, or any
+  custom evaluator via the same ``evaluator=`` parameter in
+  ``ChaosRunner.measure()``.
+
+* **``fuzz_scenarios()``** (``chaos_jungle.fuzzing``, new module)
+
+  Randomly combines faults from a pool and measures each combination.
+  Parameters: ``n_combinations``, ``max_faults_per_run``, ``seed``,
+  ``stop_on_first_failure``.  Includes ``summarise_fuzz()`` for tabular output.
+
+* **``ConversationScenario`` + ``Turn``** (``chaos_jungle.conversation``, new module)
+
+  Multi-turn agent conversation runner with per-turn fault injection.
+  ``Turn`` supports static or dynamic (lambda) inputs, ``chaos=``,
+  ``chaos_after_n=``, and ``expected=`` substring assertions.
+  ``ConversationScenario.run(agent)`` executes the full conversation and
+  returns a ``list[TurnResult]``.
+
+**New documentation**
+
+* :ref:`guide-conversation` — multi-turn conversation fault injection guide
+* :ref:`guide-fuzzing` — fault fuzzer guide
+* :ref:`guide-intercept` — updated with ``ToolMutate``, ``PromptInjection``,
+  per-call targeting, and the ``modify_request`` hook
+* :ref:`guide-judge` — updated with Evaluator protocol and DeepEval adapter example
+
+----
+
 1.2.0 (2026-06-16)
 ------------------
 

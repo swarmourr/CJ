@@ -77,6 +77,8 @@ macOS laptop, controlled via Python, SSH, or HTTP daemon.
    guides/judge
    guides/ollama
    guides/scenarios
+   guides/conversation
+   guides/fuzzing
 
 .. toctree::
    :maxdepth: 2
