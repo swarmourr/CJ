@@ -510,10 +510,10 @@ td.mono{font-family:var(--mono);font-size:11px}
     </div>
     <div class="dp-tabs" id="run-tabs" style="padding:0 18px;display:flex;overflow-x:auto;border-bottom:1px solid var(--border);flex-shrink:0;scrollbar-width:none">
       <div class="dp-tab active" data-tab="run"      onclick="switchRunTab('run')">Overview</div>
+      <div class="dp-tab"        data-tab="faults"   onclick="switchRunTab('faults')">Faults</div>
       <div class="dp-tab"        data-tab="metrics"  onclick="switchRunTab('metrics')">Metrics</div>
       <div class="dp-tab"        data-tab="llm"      onclick="switchRunTab('llm')">LLM Calls</div>
       <div class="dp-tab"        data-tab="tools"    onclick="switchRunTab('tools')">Tool Calls</div>
-      <div class="dp-tab"        data-tab="faults"   onclick="switchRunTab('faults')">Faults</div>
       <div class="dp-tab"        data-tab="commands" onclick="switchRunTab('commands')">Commands</div>
       <div class="dp-tab"        data-tab="events"   onclick="switchRunTab('events')">Events</div>
     </div>
@@ -577,6 +577,7 @@ let _rawResults   = [];
 let _rawOracles   = [];
 let _rawResources = [];
 let _rawImpact    = null;
+let _rawFaults    = [];
 
 // ── Chart management ────────────────────────────────────────────────────────
 const _charts = {};
@@ -1233,6 +1234,46 @@ function _initImpactCharts(impact, resources) {
     }
   }
 
+  // ── System resources before/after chart ─────────────────────────────────────
+  if (document.getElementById('res-ch-compare') && (_rawFaults||[]).length) {
+    const snapFault = _rawFaults.find(f => {
+      try {
+        const sb = typeof f.snapshot_before==='string'?JSON.parse(f.snapshot_before||'null'):f.snapshot_before;
+        return sb && Object.keys(sb).length > 0;
+      } catch(e) { return false; }
+    });
+    if (snapFault) {
+      const sb = typeof snapFault.snapshot_before==='string'?JSON.parse(snapFault.snapshot_before||'{}'):(snapFault.snapshot_before||{});
+      const sa = typeof snapFault.snapshot_after==='string'?JSON.parse(snapFault.snapshot_after||'{}'):(snapFault.snapshot_after||{});
+      const rCat = (_rawFaults[0]||{}).category||'other';
+      const _SNAP_META = {
+        resource:[{k:'cpu_pct'},{k:'mem_pct'},{k:'load_1'},{k:'mem_used_mb'}],
+        network: [{k:'cpu_pct'},{k:'net_rx_mb'},{k:'net_tx_mb'},{k:'mem_pct'}],
+        process: [{k:'cpu_pct'},{k:'mem_pct'},{k:'load_1'},{k:'mem_used_mb'}],
+        storage: [{k:'disk_read_mb'},{k:'disk_write_mb'},{k:'cpu_pct'},{k:'mem_pct'}],
+      };
+      const preferred = (_SNAP_META[rCat]||_SNAP_META.resource).map(x=>x.k);
+      const allKeys = [...new Set([...Object.keys(sb),...Object.keys(sa)])].filter(k=>sb[k]!=null||sa[k]!=null);
+      const keys = [...preferred.filter(k=>allKeys.includes(k)), ...allKeys.filter(k=>!preferred.includes(k))].slice(0,6);
+      if (keys.length) {
+        _mkChart('res-ch-compare', {
+          type:'bar',
+          data:{
+            labels: keys.map(k=>k.replace(/_/g,' ')),
+            datasets:[
+              {label:'Before', data:keys.map(k=>+(+(sb[k]||0)).toFixed(2)), backgroundColor:'rgba(99,102,241,.7)', borderRadius:3, barPercentage:.72},
+              {label:'After',  data:keys.map(k=>+(+(sa[k]||0)).toFixed(2)), backgroundColor:'rgba(239,68,68,.65)',  borderRadius:3, barPercentage:.72},
+            ]
+          },
+          options:{..._so, indexAxis:'y',
+            plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:10}}},
+            scales:{x:{grid:_gc,ticks:{font:{size:9}}},y:{grid:{display:false},ticks:{font:{size:10}}}}
+          }
+        });
+      }
+    }
+  }
+
   if (impact && document.getElementById('imp-ch-compare')) {
     const rows = [
       {label:'Avg Latency (s)',  b: impact.avg_latency_baseline||0, f: impact.avg_latency_fault||0},
@@ -1363,6 +1404,7 @@ async function openDetail(id) {
     _rawOracles   = sd.oracles||[];
     _rawResources = resources;
     _rawImpact    = impact;
+    _rawFaults    = sd.faults||[];
 
     // Populate header
     document.getElementById('run-title').textContent = s.name || `Session #${id}`;
@@ -1465,6 +1507,7 @@ function buildDPRun(s, faults, impact, resources, results) {
   const agent = agentName(s.target_type, s.target_addr);
   faults = faults||[];
   results = results||[];
+  const domCat = (faults[0]||{}).category||'other';
   function row(label, value, mono) {
     return `<div style="display:flex;gap:0;padding:7px 0;border-bottom:1px solid var(--border)">
       <span style="width:120px;flex-shrink:0;font-size:11px;color:var(--text3)">${label}</span>
@@ -1515,7 +1558,7 @@ function buildDPRun(s, faults, impact, resources, results) {
     }
   }
 
-  // ── Section 2: System resources (always when data exists) ────────────────────
+  // ── Section 2: System resources — KPI cards + chart (always when data exists) ─
   let resourcesHtml = '';
   {
     const hasMonitoring = resources && resources.length > 1;
@@ -1525,48 +1568,64 @@ function buildDPRun(s, faults, impact, resources, results) {
         return sb && Object.keys(sb).length > 0;
       } catch(e) { return false; }
     });
+
     if (hasMonitoring || snapFault) {
-      let snapHtml = '';
+      // Metric definitions per fault category — controls which KPI cards appear
+      const _SNAP_META = {
+        resource: [{k:'cpu_pct',l:'CPU %',u:'%'},{k:'mem_pct',l:'Mem %',u:'%'},{k:'load_1',l:'Load 1m',u:''},{k:'mem_used_mb',l:'Mem used',u:' MB'}],
+        network:  [{k:'cpu_pct',l:'CPU %',u:'%'},{k:'net_rx_mb',l:'Net RX',u:' MB'},{k:'net_tx_mb',l:'Net TX',u:' MB'},{k:'mem_pct',l:'Mem %',u:'%'}],
+        process:  [{k:'cpu_pct',l:'CPU %',u:'%'},{k:'mem_pct',l:'Mem %',u:'%'},{k:'load_1',l:'Load 1m',u:''},{k:'mem_used_mb',l:'Mem used',u:' MB'}],
+        storage:  [{k:'disk_read_mb',l:'Disk Read',u:' MB'},{k:'disk_write_mb',l:'Disk Write',u:' MB'},{k:'cpu_pct',l:'CPU %',u:'%'},{k:'mem_pct',l:'Mem %',u:'%'}],
+      };
+      const metaDefs = _SNAP_META[domCat] || [{k:'cpu_pct',l:'CPU %',u:'%'},{k:'mem_pct',l:'Mem %',u:'%'},{k:'load_1',l:'Load 1m',u:''},{k:'mem_used_mb',l:'Mem used',u:' MB'}];
+
+      let sb = {}, sa = {};
       if (snapFault) {
         try {
-          const sb = typeof snapFault.snapshot_before==='string'?JSON.parse(snapFault.snapshot_before||'{}'):(snapFault.snapshot_before||{});
-          const sa = typeof snapFault.snapshot_after==='string'?JSON.parse(snapFault.snapshot_after||'{}'):(snapFault.snapshot_after||{});
-          const snapMetrics = [
-            {k:'cpu_pct',     label:'CPU %',    fmt:v=>v.toFixed(1)+'%'},
-            {k:'mem_pct',     label:'Mem %',    fmt:v=>v.toFixed(1)+'%'},
-            {k:'mem_used_mb', label:'Mem used', fmt:v=>v.toFixed(0)+' MB'},
-            {k:'load_1',      label:'Load 1m',  fmt:v=>v.toFixed(2)},
-            {k:'disk_read_mb',label:'Disk R',   fmt:v=>v.toFixed(1)+' MB'},
-            {k:'net_rx_mb',   label:'Net RX',   fmt:v=>v.toFixed(1)+' MB'},
-          ].filter(m => sb[m.k] != null || sa[m.k] != null);
-          if (snapMetrics.length) {
-            const snapRows = snapMetrics.map(m => {
-              const bv=sb[m.k], fv=sa[m.k];
-              const changed = bv!=null&&fv!=null&&Math.abs(fv-bv)>0.05;
-              const color = changed?(fv>bv?'var(--red)':'var(--green)'):'var(--text2)';
-              return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
-                <span style="width:70px;flex-shrink:0;font-size:11px;color:var(--text3)">${m.label}</span>
-                <span style="font-size:11px;font-family:var(--mono);color:var(--text3)">${bv!=null?m.fmt(bv):'—'}</span>
-                <span style="font-size:10px;color:var(--text3)">→</span>
-                <span style="font-size:11px;font-family:var(--mono);font-weight:${changed?'600':'400'};color:${color}">${fv!=null?m.fmt(fv):'—'}</span>
-                ${changed?`<span style="font-size:10px;color:${color};margin-left:auto">${fv>bv?'▲':'▼'} ${m.fmt(Math.abs(fv-bv))}</span>`:''}
-              </div>`;
-            }).join('');
-            snapHtml = `<div style="${hasMonitoring?'flex:1;min-width:180px':''}">
-              <div style="font-size:10px;font-weight:600;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Snapshot before → after injection</div>
-              <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px">${snapRows}</div>
-            </div>`;
-          }
+          sb = typeof snapFault.snapshot_before==='string'?JSON.parse(snapFault.snapshot_before||'{}'):(snapFault.snapshot_before||{});
+          sa = typeof snapFault.snapshot_after==='string'?JSON.parse(snapFault.snapshot_after||'{}'):(snapFault.snapshot_after||{});
         } catch(e){}
       }
-      const monitorHtml = hasMonitoring ? `<div style="flex:2;min-width:240px">
-        <div style="font-size:10px;font-weight:600;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Continuous monitoring — <span style="color:#f97316">CPU %</span> · <span style="color:#6366f1">Mem %</span></div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:180px"><canvas id="imp-ch-res"></canvas></div>
+
+      const kpiCards = metaDefs.filter(m => sb[m.k] != null || sa[m.k] != null).map(m => {
+        const bv = sb[m.k], fv = sa[m.k];
+        const fmtV = v => v != null ? v.toFixed(m.k==='load_1'?2:m.k.endsWith('_mb')?0:1)+m.u : '—';
+        const changed = bv != null && fv != null && Math.abs(fv - bv) > 0.1;
+        const worse = changed && fv > bv;
+        const color = !changed?'var(--text3)':worse?'var(--red)':'var(--green)';
+        const arrow = !changed?'':worse?' ▲':' ▼';
+        const bg = !changed?'':worse?'border-top:2px solid var(--red)':'border-top:2px solid var(--green)';
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px;${bg}">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${m.l}</div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:10px;color:var(--text3)">Before</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text);font-family:var(--mono)">${fmtV(bv)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:10px;color:var(--text3)">After</span>
+              <span style="font-size:13px;font-weight:700;color:${color};font-family:var(--mono)">${fmtV(fv)}${arrow}</span>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+
+      const hasKpi = kpiCards.length > 0;
+      const snapChartHtml = hasKpi ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Before vs after injection</div>
+        <canvas id="res-ch-compare"></canvas>
       </div>` : '';
-      if (snapHtml || monitorHtml) {
+      const monitorHtml = hasMonitoring ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Continuous monitoring — <span style="color:#f97316">CPU %</span> · <span style="color:#6366f1">Mem %</span></div>
+        <canvas id="imp-ch-res"></canvas>
+      </div>` : '';
+
+      if (hasKpi || hasMonitoring) {
+        const chartCols = [snapChartHtml, monitorHtml].filter(Boolean).length;
         resourcesHtml = `<div style="margin-bottom:24px">
           <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">System Resources</div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap">${snapHtml}${monitorHtml}</div>
+          ${hasKpi?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:12px">${kpiCards}</div>`:''}
+          ${chartCols?`<div style="display:grid;grid-template-columns:repeat(${chartCols},1fr);gap:12px">${snapChartHtml}${monitorHtml}</div>`:''}
         </div>`;
       }
     }
