@@ -644,6 +644,7 @@ class SessionDB:
             "faults": fault_list,
             "events": [dict(e) for e in events],
             "commands": self.get_commands(session_id),
+            "results": self.get_results(session_id),
             "llm_calls": self.get_llm_calls(session_id),
         }
 

@@ -1572,34 +1572,15 @@ function buildDPRun(s, faults, impact, resources, results) {
     }
   }
 
-  // ── Section 3: LLM call impact (only when LLM proxy data is present) ────────
+  // ── Section 3: LLM call impact (shown whenever LLM calls are present) ────────
   let llmImpactHtml = '';
-  if (impact && (impact.calls_baseline > 0 || impact.calls_fault > 0)) {
-    function impKpi(label, bv, fv, fmt, higherIsBetter) {
-      const bvF=fmt(bv), fvF=fmt(fv);
-      const changed=bv!==fv;
-      const worse=higherIsBetter?fv<bv:fv>bv;
-      const color=!changed?'var(--text3)':worse?'var(--red)':'var(--green)';
-      const arrow=!changed?'':worse?' ▲':' ▼';
-      const bg=!changed?'':worse?'border-top:2px solid var(--red)':'border-top:2px solid var(--green)';
-      return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px;${bg}">
-        <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${label}</div>
-        <div style="display:flex;flex-direction:column;gap:3px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:10px;color:var(--text3)">Baseline</span>
-            <span style="font-size:13px;font-weight:600;color:var(--text);font-family:var(--mono)">${bvF}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:10px;color:var(--text3)">Fault</span>
-            <span style="font-size:13px;font-weight:700;color:${color};font-family:var(--mono)">${fvF}${arrow}</span>
-          </div>
-        </div>
-      </div>`;
-    }
-    const errPct=v=>(v*100).toFixed(1)+'%', latFmt=v=>v.toFixed(2)+'s', costFmt=v=>fmtCost(v);
-    llmImpactHtml = `<div style="margin-bottom:24px">
-      <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">LLM Call Impact</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+  const _hasImpact = impact && (impact.calls_baseline > 0 || impact.calls_fault > 0);
+  const _hasRawLLM = _rawLLM && _rawLLM.length > 0;
+  if (_hasImpact || _hasRawLLM) {
+    // Quick stats from raw calls when impact summary is unavailable
+    let summaryBadges = '';
+    if (_hasImpact) {
+      summaryBadges = `
         <span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:11px;color:var(--text3)">
           Calls&nbsp; <b style="color:var(--text)">${impact.calls_baseline}</b> baseline → <b style="color:var(--text)">${impact.calls_fault}</b> fault
         </span>
@@ -1607,9 +1588,48 @@ function buildDPRun(s, faults, impact, resources, results) {
           Blocked <b style="color:${impact.blocked_count>0?'var(--red)':'var(--text)'}">${impact.blocked_count}</b>
           &nbsp;·&nbsp; Modified <b style="color:${impact.modified_count>0?'var(--yellow)':'var(--text)'}">${impact.modified_count}</b>
           &nbsp;·&nbsp; Retries <b style="color:${impact.retry_count>0?'var(--accent)':'var(--text)'}">${impact.retry_count}</b>
+        </span>`;
+    } else if (_hasRawLLM) {
+      const totalCalls = _rawLLM.length;
+      const totalCost  = _rawLLM.reduce((a,c)=>a+(c.cost_usd||0),0);
+      const avgLat     = _rawLLM.reduce((a,c)=>a+(c.latency_s||0),0)/totalCalls;
+      const blocked    = _rawLLM.filter(c=>c.was_blocked).length;
+      summaryBadges = `
+        <span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:11px;color:var(--text3)">
+          <b style="color:var(--text)">${totalCalls}</b> LLM calls &nbsp;·&nbsp; avg <b style="color:var(--text)">${avgLat.toFixed(2)}s</b> &nbsp;·&nbsp; ${fmtCost(totalCost)}
         </span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+        ${blocked>0?`<span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:11px;color:var(--text3)">Blocked <b style="color:var(--red)">${blocked}</b></span>`:''}
+        <span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:10px;color:var(--text3)">
+          Baseline/fault split unavailable — see LLM Calls tab
+        </span>`;
+    }
+
+    // KPI comparison grid (only when impact data exists)
+    let kpiGrid = '';
+    if (_hasImpact) {
+      function impKpi(label, bv, fv, fmt, higherIsBetter) {
+        const bvF=fmt(bv), fvF=fmt(fv);
+        const changed=bv!==fv;
+        const worse=higherIsBetter?fv<bv:fv>bv;
+        const color=!changed?'var(--text3)':worse?'var(--red)':'var(--green)';
+        const arrow=!changed?'':worse?' ▲':' ▼';
+        const bg=!changed?'':worse?'border-top:2px solid var(--red)':'border-top:2px solid var(--green)';
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px;${bg}">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${label}</div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:10px;color:var(--text3)">Baseline</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text);font-family:var(--mono)">${bvF}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:10px;color:var(--text3)">Fault</span>
+              <span style="font-size:13px;font-weight:700;color:${color};font-family:var(--mono)">${fvF}${arrow}</span>
+            </div>
+          </div>
+        </div>`;
+      }
+      const errPct=v=>(v*100).toFixed(1)+'%', latFmt=v=>v.toFixed(2)+'s', costFmt=v=>fmtCost(v);
+      kpiGrid = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
         ${impKpi('Error rate',  impact.error_rate_baseline,  impact.error_rate_fault,  errPct,  false)}
         ${impKpi('Avg latency', impact.avg_latency_baseline, impact.avg_latency_fault,  latFmt,  false)}
         ${impKpi('p99 latency', impact.p99_latency_baseline, impact.p99_latency_fault,  latFmt,  false)}
@@ -1618,7 +1638,13 @@ function buildDPRun(s, faults, impact, resources, results) {
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
         <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">LLM metrics comparison</div>
         <canvas id="imp-ch-compare"></canvas>
-      </div>
+      </div>`;
+    }
+
+    llmImpactHtml = `<div style="margin-bottom:24px">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">LLM Calls</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${summaryBadges}</div>
+      ${kpiGrid}
     </div>`;
   }
 
