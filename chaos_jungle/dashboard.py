@@ -1234,40 +1234,69 @@ function _initImpactCharts(impact, resources) {
     }
   }
 
-  // ── System resources before/after chart ─────────────────────────────────────
-  if (document.getElementById('res-ch-compare') && (_rawFaults||[]).length) {
-    const snapFault = _rawFaults.find(f => {
-      try {
-        const sb = typeof f.snapshot_before==='string'?JSON.parse(f.snapshot_before||'null'):f.snapshot_before;
-        return sb && Object.keys(sb).length > 0;
-      } catch(e) { return false; }
-    });
-    if (snapFault) {
-      const sb = typeof snapFault.snapshot_before==='string'?JSON.parse(snapFault.snapshot_before||'{}'):(snapFault.snapshot_before||{});
-      const sa = typeof snapFault.snapshot_after==='string'?JSON.parse(snapFault.snapshot_after||'{}'):(snapFault.snapshot_after||{});
-      const rCat = (_rawFaults[0]||{}).category||'other';
-      const _SNAP_META = {
-        resource:[{k:'cpu_pct'},{k:'mem_pct'},{k:'load_1'},{k:'mem_used_mb'}],
-        network: [{k:'cpu_pct'},{k:'net_rx_mb'},{k:'net_tx_mb'},{k:'mem_pct'}],
-        process: [{k:'cpu_pct'},{k:'mem_pct'},{k:'load_1'},{k:'mem_used_mb'}],
-        storage: [{k:'disk_read_mb'},{k:'disk_write_mb'},{k:'cpu_pct'},{k:'mem_pct'}],
-      };
-      const preferred = (_SNAP_META[rCat]||_SNAP_META.resource).map(x=>x.k);
-      const allKeys = [...new Set([...Object.keys(sb),...Object.keys(sa)])].filter(k=>sb[k]!=null||sa[k]!=null);
-      const keys = [...preferred.filter(k=>allKeys.includes(k)), ...allKeys.filter(k=>!preferred.includes(k))].slice(0,6);
-      if (keys.length) {
-        _mkChart('res-ch-compare', {
+  // ── System resources — 3 split charts ───────────────────────────────────────
+  const _snapChartFault = (_rawFaults||[]).find(f => {
+    try {
+      const sb = typeof f.snapshot_before==='string'?JSON.parse(f.snapshot_before||'null'):f.snapshot_before;
+      return sb && Object.keys(sb).length > 0;
+    } catch(e) { return false; }
+  });
+  if (_snapChartFault) {
+    const _sb = typeof _snapChartFault.snapshot_before==='string'?JSON.parse(_snapChartFault.snapshot_before||'{}'):(_snapChartFault.snapshot_before||{});
+    const _sa = typeof _snapChartFault.snapshot_after==='string'?JSON.parse(_snapChartFault.snapshot_after||'{}'):(_snapChartFault.snapshot_after||{});
+    const _baChart = (id, pairs) => {
+      // pairs: [{k, label}] — before vs after grouped bar
+      const rows = pairs.filter(p => _sb[p.k] != null || _sa[p.k] != null);
+      if (!rows.length || !document.getElementById(id)) return;
+      _mkChart(id, {
+        type:'bar',
+        data:{
+          labels: rows.map(p => p.label),
+          datasets:[
+            {label:'Before', data:rows.map(p=>+(+(_sb[p.k]||0)).toFixed(2)), backgroundColor:'rgba(99,102,241,.7)', borderRadius:3, barPercentage:.72},
+            {label:'After',  data:rows.map(p=>+(+(_sa[p.k]||0)).toFixed(2)), backgroundColor:'rgba(239,68,68,.65)',  borderRadius:3, barPercentage:.72},
+          ]
+        },
+        options:{..._so, indexAxis:'y',
+          plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:10}}},
+          scales:{x:{grid:_gc,ticks:{font:{size:9}}},y:{grid:{display:false},ticks:{font:{size:10}}}}
+        }
+      });
+    };
+    // CPU chart: cpu_pct, load_1, load_5
+    _baChart('res-ch-cpu', [
+      {k:'cpu_pct', label:'CPU %'},
+      {k:'load_1',  label:'Load 1m'},
+      {k:'load_5',  label:'Load 5m'},
+    ]);
+    // Memory chart: mem_pct, mem_used_mb
+    _baChart('res-ch-mem', [
+      {k:'mem_pct',     label:'Mem %'},
+      {k:'mem_used_mb', label:'Mem used (MB)'},
+    ]);
+    // I/O chart: delta (after − before) — cumulative counters, delta = activity during fault
+    if (document.getElementById('res-ch-io')) {
+      const ioPairs = [
+        {k:'disk_read_mb',  label:'Disk read'},
+        {k:'disk_write_mb', label:'Disk write'},
+        {k:'net_rx_mb',     label:'Net RX'},
+        {k:'net_tx_mb',     label:'Net TX'},
+      ].filter(p => _sb[p.k] != null && _sa[p.k] != null);
+      if (ioPairs.length) {
+        _mkChart('res-ch-io', {
           type:'bar',
           data:{
-            labels: keys.map(k=>k.replace(/_/g,' ')),
-            datasets:[
-              {label:'Before', data:keys.map(k=>+(+(sb[k]||0)).toFixed(2)), backgroundColor:'rgba(99,102,241,.7)', borderRadius:3, barPercentage:.72},
-              {label:'After',  data:keys.map(k=>+(+(sa[k]||0)).toFixed(2)), backgroundColor:'rgba(239,68,68,.65)',  borderRadius:3, barPercentage:.72},
-            ]
+            labels: ioPairs.map(p => p.label),
+            datasets:[{
+              label:'MB during fault',
+              data: ioPairs.map(p => +Math.max(0, +(_sa[p.k]||0) - +(_sb[p.k]||0)).toFixed(2)),
+              backgroundColor: ioPairs.map(p => p.k.startsWith('disk')?'rgba(249,115,22,.75)':'rgba(34,197,94,.75)'),
+              borderRadius:3, barPercentage:.65,
+            }]
           },
           options:{..._so, indexAxis:'y',
             plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:10}}},
-            scales:{x:{grid:_gc,ticks:{font:{size:9}}},y:{grid:{display:false},ticks:{font:{size:10}}}}
+            scales:{x:{grid:_gc,ticks:{font:{size:9},callback:v=>v+' MB'}},y:{grid:{display:false},ticks:{font:{size:10}}}}
           }
         });
       }
@@ -1611,21 +1640,30 @@ function buildDPRun(s, faults, impact, resources, results) {
       }).join('');
 
       const hasKpi = kpiCards.length > 0;
-      const snapChartHtml = hasKpi ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
-        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Before vs after injection</div>
-        <canvas id="res-ch-compare"></canvas>
-      </div>` : '';
-      const monitorHtml = hasMonitoring ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
+      // Three split canvases: CPU · Memory · I/O (each only rendered when data exists)
+      const _mkSnapDiv = (id, label) =>
+        `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:180px">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${label}</div>
+          <canvas id="${id}"></canvas>
+        </div>`;
+      const hasCpu = sb.cpu_pct != null || sa.cpu_pct != null;
+      const hasMem = sb.mem_pct != null || sa.mem_pct != null;
+      const hasIO  = sb.disk_read_mb != null || sa.disk_read_mb != null || sb.net_rx_mb != null || sa.net_rx_mb != null;
+      const cpuChartHtml = (hasKpi && hasCpu) ? _mkSnapDiv('res-ch-cpu','CPU · Load — before vs after') : '';
+      const memChartHtml = (hasKpi && hasMem) ? _mkSnapDiv('res-ch-mem','Memory — before vs after') : '';
+      const ioChartHtml  = (hasKpi && hasIO)  ? _mkSnapDiv('res-ch-io', 'I/O activity during fault') : '';
+      const monitorHtml = hasMonitoring ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:180px">
         <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Continuous monitoring — <span style="color:#f97316">CPU %</span> · <span style="color:#6366f1">Mem %</span></div>
         <canvas id="imp-ch-res"></canvas>
       </div>` : '';
 
       if (hasKpi || hasMonitoring) {
-        const chartCols = [snapChartHtml, monitorHtml].filter(Boolean).length;
+        const snapDivs = [cpuChartHtml, memChartHtml, ioChartHtml, monitorHtml].filter(Boolean);
+        const snapCols = Math.min(snapDivs.length, 4);
         resourcesHtml = `<div style="margin-bottom:24px">
           <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">System Resources</div>
           ${hasKpi?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:12px">${kpiCards}</div>`:''}
-          ${chartCols?`<div style="display:grid;grid-template-columns:repeat(${chartCols},1fr);gap:12px">${snapChartHtml}${monitorHtml}</div>`:''}
+          ${snapDivs.length?`<div style="display:grid;grid-template-columns:repeat(${snapCols},1fr);gap:12px">${snapDivs.join('')}</div>`:''}
         </div>`;
       }
     }
