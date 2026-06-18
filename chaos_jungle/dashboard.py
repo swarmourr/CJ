@@ -517,7 +517,7 @@ td.mono{font-family:var(--mono);font-size:11px}
       <div class="dp-tab"        data-tab="commands" onclick="switchRunTab('commands')">Commands</div>
       <div class="dp-tab"        data-tab="events"   onclick="switchRunTab('events')">Events</div>
     </div>
-    <div id="run-body" style="flex:1;overflow-y:auto;padding:20px 24px;max-width:960px;width:100%">
+    <div id="run-body" style="flex:1;overflow-y:auto;padding:20px 24px;width:100%">
       <div class="empty-state"><div class="empty-icon">&#8598;</div><div class="empty-text">Select a run from the left panel</div></div>
     </div>
   </div>
