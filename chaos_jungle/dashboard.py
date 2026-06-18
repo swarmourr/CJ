@@ -1154,22 +1154,23 @@ function _postRender(tab) {
 }
 function _initLLMCharts(calls) {
   if (!calls || !calls.length) return;
-  const labels = calls.map((c,i) => `#${i+1} ${(c.model||'?').split('/').pop().split('-')[0].slice(0,12)}`);
+  const labels = calls.map((_,i) => `#${i+1}`);
   const _gc = {color:'rgba(255,255,255,.05)'};
-  const _so = {responsive:true, maintainAspectRatio:false, animation:{duration:300}};
+  const _so = {responsive:true, maintainAspectRatio:false, animation:{duration:200}};
+  const _xt = {font:{size:9}, maxRotation:0, autoSkip:true, maxTicksLimit:24};
 
   _mkChart('llm-ch-tokens', {
     type:'bar',
     data:{
       labels,
       datasets:[
-        {label:'Prompt',     data:calls.map(c=>c.prompt_tokens||0),     backgroundColor:'rgba(99,102,241,.75)', borderRadius:3, stack:'t'},
-        {label:'Completion', data:calls.map(c=>c.completion_tokens||0), backgroundColor:'rgba(34,197,94,.75)',  borderRadius:3, stack:'t'},
+        {label:'Prompt',     data:calls.map(c=>c.prompt_tokens||0),     backgroundColor:'rgba(99,102,241,.75)', borderRadius:2, stack:'t'},
+        {label:'Completion', data:calls.map(c=>c.completion_tokens||0), backgroundColor:'rgba(34,197,94,.75)',  borderRadius:2, stack:'t'},
       ]
     },
-    options:{..._so, plugins:{legend:{position:'bottom'}},
-      scales:{x:{stacked:true,grid:{display:false},ticks:{font:{size:9}}},
-              y:{stacked:true,grid:_gc,ticks:{callback:v=>v>=1000?Math.round(v/100)/10+'k':v}}}}
+    options:{..._so, plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:10}}},
+      scales:{x:{stacked:true,grid:{display:false},ticks:_xt},
+              y:{stacked:true,grid:_gc,ticks:{callback:v=>v>=1000?Math.round(v/100)/10+'k':v,font:{size:9}}}}}
   });
 
   _mkChart('llm-ch-lat', {
@@ -1180,15 +1181,20 @@ function _initLLMCharts(calls) {
         label:'Latency (s)',
         data: calls.map(c=>+(c.latency_s||0).toFixed(3)),
         backgroundColor: calls.map(c => c.was_blocked?'rgba(239,68,68,.75)':c.was_modified?'rgba(245,158,11,.75)':'rgba(6,182,212,.65)'),
-        borderRadius:3, barPercentage:.7
+        borderRadius:2, barPercentage:.75
       }]
     },
     options:{..._so, plugins:{legend:{display:false},
-      tooltip:{callbacks:{afterLabel:ctx=>{
+      tooltip:{callbacks:{label:ctx=>{
         const c=calls[ctx.dataIndex];
-        return [c.ttft_s>0?'TTFT: '+c.ttft_s.toFixed(3)+'s':'', c.was_blocked?'BLOCKED':'', c.was_modified?'MODIFIED':''].filter(Boolean);
+        const parts=[ctx.parsed.y.toFixed(2)+'s'];
+        if(c.ttft_s>0) parts.push('TTFT '+c.ttft_s.toFixed(3)+'s');
+        if(c.was_blocked) parts.push('BLOCKED');
+        if(c.was_modified) parts.push('MODIFIED');
+        if(c.error_type&&c.error_type!=='none') parts.push(c.error_type);
+        return parts;
       }}}},
-      scales:{x:{grid:{display:false},ticks:{font:{size:9}}},y:{grid:_gc,ticks:{callback:v=>v+'s'}}}}
+      scales:{x:{grid:{display:false},ticks:_xt},y:{grid:_gc,ticks:{callback:v=>v+'s',font:{size:9}}}}}
   });
 }
 function _initMetricsChart(results, oracles) {
@@ -1793,18 +1799,25 @@ function buildDPLLM(calls) {
     </div>`;
   }
 
-  let html = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:16px">
+  const retryCnt = calls.filter(c=>c.is_retry).length;
+  let html = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px">
     ${kpi('Calls', total, 'var(--text)', models.length===1?models[0].split('/').pop().slice(0,18):models.length+' models')}
     ${kpi('Total cost', fmtCost(cost), 'var(--cyan)', totIn.toLocaleString()+' in / '+totOut.toLocaleString()+' out tok')}
     ${kpi('Avg latency', avgLat.toFixed(2)+'s', 'var(--text)', 'p99 '+p99Lat.toFixed(2)+'s')}
     ${kpi('Blocked', blkCnt, blkCnt>0?'var(--red)':'var(--green)', blkCnt>0?'fault intercepted':'all through')}
-    ${kpi('Modified', modCnt, modCnt>0?'var(--yellow)':'var(--text3)', modCnt>0?'response altered':'')}
+    ${kpi('Retries', retryCnt, retryCnt>0?'var(--yellow)':'var(--text3)', retryCnt>0?retryCnt+' retry calls':'')}
   </div>`;
 
-  // Charts row
-  html += `<div class="charts-2col">
-    <div class="chart-card"><div class="chart-title">Token usage per call — prompt (indigo) + completion (green)</div><canvas id="llm-ch-tokens"></canvas></div>
-    <div class="chart-card"><div class="chart-title">Latency per call — cyan=normal · red=blocked · yellow=modified</div><canvas id="llm-ch-lat"></canvas></div>
+  // Charts: tokens stacked + latency side by side
+  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;height:180px">
+      <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Token usage per call</div>
+      <canvas id="llm-ch-tokens" style="height:140px!important"></canvas>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;height:180px">
+      <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Latency per call <span style="font-weight:400;text-transform:none;letter-spacing:0">— <span style="color:var(--cyan)">■</span> normal <span style="color:var(--red)">■</span> blocked <span style="color:var(--yellow)">■</span> modified</span></div>
+      <canvas id="llm-ch-lat" style="height:140px!important"></canvas>
+    </div>
   </div>`;
 
   // Per-call cards
@@ -1833,33 +1846,19 @@ function buildDPLLM(calls) {
 
     const pTok = c.prompt_tokens||0, cTok = c.completion_tokens||0, totTok = pTok+cTok||1;
     const pPct = Math.round(100*pTok/totTok), cPct = 100-pPct;
-    const tokBar = `<div class="tok-bar-wrap">
-      <div class="tok-bar"><div class="tok-seg-p" style="width:${pPct}%"></div><div class="tok-seg-c" style="width:${cPct}%"></div></div>
-      <div class="tok-legend">
-        <span class="tok-leg"><span class="tok-leg-dot" style="background:#6366f1"></span>Prompt ${pTok.toLocaleString()} tok (${pPct}%)</span>
-        <span class="tok-leg"><span class="tok-leg-dot" style="background:#22c55e"></span>Completion ${cTok.toLocaleString()} tok (${cPct}%)</span>
-        ${c.ttft_s&&c.ttft_s>0?`<span class="tok-leg" style="margin-left:auto">TTFT <b style="color:var(--text2)">${c.ttft_s.toFixed(3)}s</b></span>`:''}
-      </div>
-    </div>`;
-
-    function statChip(label, value, color) {
-      return `<div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:5px 10px;text-align:center">
-        <div style="font-size:10px;color:var(--text3)">${label}</div>
-        <div style="font-size:13px;font-weight:600;color:${color||'var(--text)'};font-family:var(--mono)">${value}</div>
-      </div>`;
-    }
 
     function textBlock(label, text, tokens) {
       if (!text) return '';
       const safe = text.slice(0,4000).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const trunc = text.length>4000?`<div style="font-size:10px;color:var(--text3);margin-top:4px;font-style:italic">… truncated — ${text.length.toLocaleString()} chars total</div>`:'';
-      return `<details style="margin-top:8px">
-        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:4px;user-select:none">
+      const tokStr = tokens>0 ? `<span style="font-size:10px;color:var(--text3);margin-left:auto">${tokens.toLocaleString()} tokens</span>` : '';
+      return `<details style="margin-top:5px">
+        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;padding:5px 9px;background:var(--panel);border:1px solid var(--border);border-radius:4px;user-select:none">
           <span style="font-size:10px;color:var(--text3)">▶</span>
-          <span style="font-size:11px;font-weight:600;color:var(--text2)">${label}</span>
-          <span style="font-size:10px;color:var(--text3);margin-left:auto">${tokens.toLocaleString()} tokens</span>
+          <span style="font-size:11px;font-weight:500;color:var(--text2)">${label}</span>
+          ${tokStr}
         </summary>
-        <div style="margin-top:1px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-top:none;border-radius:0 0 4px 4px;font-family:var(--mono);font-size:11px;color:var(--text2);white-space:pre-wrap;word-break:break-word;max-height:320px;overflow-y:auto;line-height:1.7">${safe}</div>
+        <div style="margin-top:1px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-top:none;border-radius:0 0 4px 4px;font-family:var(--mono);font-size:11px;color:var(--text2);white-space:pre-wrap;word-break:break-word;max-height:280px;overflow-y:auto;line-height:1.65">${safe}</div>
         ${trunc}
       </details>`;
     }
@@ -1868,38 +1867,44 @@ function buildDPLLM(calls) {
     const resp     = (c.response_text||'').trim();
     const sysPrmpt = (c.system_prompt||'').trim();
 
+    const leftAccent = isBlocked?'var(--red)':isModified?'var(--yellow)':c.is_retry?'#818cf8':'var(--border)';
     const alertBar = isBlocked
-      ? `<div style="background:rgba(239,68,68,.2);border-bottom:1px solid rgba(239,68,68,.4);padding:6px 16px;font-size:11px;font-weight:700;color:var(--red);letter-spacing:.04em;display:flex;align-items:center;gap:6px">⊘ BLOCKED — fault intercepted this call</div>`
+      ? `<div style="background:rgba(239,68,68,.12);padding:4px 14px;font-size:10px;font-weight:700;color:var(--red);letter-spacing:.05em">⊘ BLOCKED</div>`
       : isModified
-      ? `<div style="background:rgba(245,158,11,.15);border-bottom:1px solid rgba(245,158,11,.3);padding:6px 16px;font-size:11px;font-weight:700;color:var(--yellow);letter-spacing:.04em;display:flex;align-items:center;gap:6px">⚠ MODIFIED — response was altered by fault</div>`
+      ? `<div style="background:rgba(245,158,11,.1);padding:4px 14px;font-size:10px;font-weight:700;color:var(--yellow);letter-spacing:.05em">⚠ MODIFIED</div>`
       : '';
-    return `<div style="background:${bgCol};border:1px solid ${bdrCol};border-radius:var(--radius);overflow:hidden;margin-bottom:12px">
+
+    return `<div style="background:${bgCol};border:1px solid ${bdrCol};border-left:3px solid ${leftAccent};border-radius:var(--radius);overflow:hidden;margin-bottom:7px">
       ${alertBar}
-      <div style="padding:12px 16px 0">
-        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-          <span style="font-size:11px;font-weight:700;color:var(--text3);font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:2px 7px">#${i+1}</span>
-          <span style="font-size:14px;font-weight:700;color:var(--text)">${c.model||'unknown'}</span>
+      <div style="padding:9px 14px">
+        <!-- header row -->
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:6px">
+          <span style="font-size:10px;font-weight:600;color:var(--text3);font-family:var(--mono);background:var(--panel);border:1px solid var(--border);border-radius:3px;padding:1px 5px">#${i+1}</span>
+          <span style="font-size:13px;font-weight:600;color:var(--text)">${c.model||'unknown'}</span>
           ${phaseBadge}${errBadge}${retryBadge}${finalBadge}
           ${c.finish_reason?`<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${c.finish_reason}</span>`:''}
-          ${offsetBadge}
+          ${c.fault_offset_s!=null?`<span style="font-size:10px;color:var(--text3);margin-left:auto">⚡+${c.fault_offset_s.toFixed(1)}s</span>`:''}
         </div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
-          <div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:8px 12px">
-            <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Cost</div>
-            <div style="font-size:18px;font-weight:700;color:var(--cyan);font-family:var(--mono)">${fmtCost(c.cost_usd)}</div>
+        <!-- stats inline row -->
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:7px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:600;color:var(--text);font-family:var(--mono)">${c.latency_s!=null?c.latency_s.toFixed(2)+'s':'—'}</span>
+          <span style="font-size:11px;color:var(--text3)">|</span>
+          <span style="font-size:11px;color:var(--text2);font-family:var(--mono)">${(pTok+cTok).toLocaleString()} tok</span>
+          <span style="font-size:11px;color:var(--text3)">|</span>
+          <span style="font-size:11px;color:var(--cyan);font-family:var(--mono)">${fmtCost(c.cost_usd)}</span>
+          ${c.ttft_s&&c.ttft_s>0?`<span style="font-size:10px;color:var(--text3)">TTFT <b style="color:var(--text2)">${c.ttft_s.toFixed(3)}s</b></span>`:''}
+        </div>
+        <!-- compact token bar -->
+        <div style="margin-bottom:7px">
+          <div style="display:flex;height:4px;border-radius:3px;overflow:hidden;background:var(--border)">
+            <div style="width:${pPct}%;background:#6366f1"></div><div style="width:${cPct}%;background:#22c55e"></div>
           </div>
-          <div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:8px 12px">
-            <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Latency</div>
-            <div style="font-size:18px;font-weight:700;color:var(--text);font-family:var(--mono)">${c.latency_s!=null?c.latency_s.toFixed(2)+'s':'—'}${c.ttft_s&&c.ttft_s>0?`<span style="font-size:10px;color:var(--text3);font-weight:400"> TTFT ${c.ttft_s.toFixed(3)}s</span>`:''}</div>
-          </div>
-          <div style="background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:8px 12px">
-            <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Tokens</div>
-            <div style="font-size:18px;font-weight:700;color:var(--text);font-family:var(--mono)">${(pTok+cTok).toLocaleString()}</div>
+          <div style="display:flex;justify-content:space-between;margin-top:2px">
+            <span style="font-size:9px;color:var(--text3)">Prompt ${pTok.toLocaleString()} (${pPct}%)</span>
+            <span style="font-size:9px;color:var(--text3)">Completion ${cTok.toLocaleString()} (${cPct}%)</span>
           </div>
         </div>
-        ${tokBar}
-      </div>
-      <div style="padding:0 16px 14px">
+        <!-- collapsible text blocks -->
         ${sysPrmpt ? textBlock('System Prompt', sysPrmpt, 0) : ''}
         ${textBlock('Prompt / Input', prompt, pTok)}
         ${textBlock('Response / Output', resp, cTok)}
