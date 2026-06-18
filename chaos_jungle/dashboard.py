@@ -1745,7 +1745,62 @@ function buildDPRun(s, faults, impact, resources, results) {
     </div>`;
   }
 
-  // ── Section 4: Injected faults ───────────────────────────────────────────────
+  // ── Section 4: Response Quality (faithfulness, hallucination, coherence) ─────
+  let qualityHtml = '';
+  {
+    let jb = null, jf = null, jd = null;
+    for (const r of (results||[])) {
+      const m = typeof r.metrics==='string'?JSON.parse(r.metrics||'{}'):(r.metrics||{});
+      if (m.judge_fault || m.judge_baseline) {
+        jf = m.judge_fault  || {};
+        jb = m.judge_baseline || {};
+        jd = m.judge_delta   || {};
+        break;
+      }
+    }
+    if (jf || jb) {
+      const _qDefs = [
+        {k:'faithfulness',  l:'Faithfulness',  lowBad:true},
+        {k:'hallucination', l:'Hallucination',  lowBad:false},
+        {k:'coherence',     l:'Coherence',      lowBad:true},
+      ];
+      const qCards = _qDefs.map(({k, l, lowBad}) => {
+        const bv = jb&&jb[k]!=null ? +jb[k] : null;
+        const fv = jf&&jf[k]!=null ? +jf[k] : null;
+        const dv = jd&&jd[k]!=null ? +jd[k] : (fv!=null&&bv!=null ? fv-bv : null);
+        const changed = dv!=null && Math.abs(dv) > 0.02;
+        const worse = changed && (lowBad ? dv < 0 : dv > 0);
+        const border = !changed ? '' : worse ? 'border-top:2px solid var(--red)' : 'border-top:2px solid var(--green)';
+        const fvColor = !changed ? 'var(--text)' : worse ? 'var(--red)' : 'var(--green)';
+        const arrow = !changed ? '' : worse ? ' ▼' : ' ▲';
+        const fmt = v => v!=null ? Math.round(v*100)+'%' : '—';
+        const dstr = dv!=null ? ` <span style="font-size:10px;color:${worse?'var(--red)':'var(--green)'};">(${dv>0?'+':''}${(dv*100).toFixed(1)}pp)</span>` : '';
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px;${border}">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${l}</div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:10px;color:var(--text3)">Baseline</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text);font-family:var(--mono)">${fmt(bv)}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:10px;color:var(--text3)">Under fault</span>
+              <span style="font-size:13px;font-weight:700;color:${fvColor};font-family:var(--mono)">${fmt(fv)}${arrow}${dstr}</span>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+      const gv = jf&&jf.guardrail_violation;
+      const guardrailBadge = gv ? `<div style="margin-top:10px;padding:8px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.4);border-radius:var(--radius);font-size:12px;color:var(--red);font-weight:500">⚠ Guardrail violation detected in fault phase</div>` : '';
+      const reasoning = jf&&jf.reasoning ? `<div style="margin-top:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:11px;color:var(--text2);line-height:1.65">${jf.reasoning.replace(/&/g,'&amp;').replace(/</g,'&lt;').slice(0,300)}</div>` : '';
+      qualityHtml = `<div style="margin-bottom:24px">
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Response Quality</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${qCards}</div>
+        ${guardrailBadge}${reasoning}
+      </div>`;
+    }
+  }
+
+  // ── Section 5: Injected faults ───────────────────────────────────────────────
   let faultSummary = '';
   if (faults.length) {
     faultSummary = `<div style="margin-bottom:24px">
@@ -1782,6 +1837,7 @@ function buildDPRun(s, faults, impact, resources, results) {
     ${workloadHtml}
     ${resourcesHtml}
     ${llmImpactHtml}
+    ${qualityHtml}
     ${faultSummary}`;
 }
 
@@ -1928,18 +1984,23 @@ function buildDPMetrics(results, oracles) {
 
   // ── 1. Quality Scores ──────────────────────────────────────────────────────
   if (judgeM) {
-    const jf = judgeM.judge_fault || {};
-    const jd = judgeM.judge_delta || {};
-    function gauge(label, val, low) {
-      const pct = val!=null ? Math.round(val*100) : null;
+    const jf = judgeM.judge_fault     || {};
+    const jb = judgeM.judge_baseline  || {};
+    const jd = judgeM.judge_delta     || {};
+    function gauge(label, bval, fval, low) {
+      const bp = bval!=null ? Math.round(+bval*100) : null;
+      const fp = fval!=null ? Math.round(+fval*100) : null;
+      const pct = fp!=null ? fp : bp;
       const c = pct==null ? 'var(--text3)' : low
         ? (pct<=30?'var(--green)':pct<=60?'var(--yellow)':'var(--red)')
         : (pct>=70?'var(--green)':pct>=40?'var(--yellow)':'var(--red)');
       const dv = jd[label.toLowerCase()];
       const dstr = dv!=null ? `<span style="font-size:11px;color:${+dv>0.02?'var(--red)':+dv<-0.02?'var(--green)':'var(--text3)'};font-family:var(--mono);margin-left:4px">${(+dv>0?'+':'')+dv.toFixed(3)}</span>` : '';
+      const baselineRow = bp!=null ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">Baseline: <b style="color:var(--text2)">${bp}%</b></div>` : '';
       return `<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ${c};border-radius:var(--radius);padding:14px 16px">
         <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${label}</div>
         <div style="font-size:28px;font-weight:700;color:${c};font-variant-numeric:tabular-nums;line-height:1">${pct!=null?pct+'%':'—'}${dstr}</div>
+        ${baselineRow}
         <div style="margin-top:8px;height:4px;background:var(--border);border-radius:2px;overflow:hidden">
           <div style="height:100%;width:${pct||0}%;background:${c};border-radius:2px"></div>
         </div>
@@ -1947,9 +2008,9 @@ function buildDPMetrics(results, oracles) {
       </div>`;
     }
     let qContent = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
-      ${gauge('Faithfulness', jf.faithfulness, false)}
-      ${gauge('Hallucination', jf.hallucination, true)}
-      ${gauge('Coherence', jf.coherence, false)}
+      ${gauge('Faithfulness', jb.faithfulness, jf.faithfulness, false)}
+      ${gauge('Hallucination', jb.hallucination, jf.hallucination, true)}
+      ${gauge('Coherence', jb.coherence, jf.coherence, false)}
     </div>`;
     if (jf.reasoning) {
       qContent += `<div style="margin-top:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">

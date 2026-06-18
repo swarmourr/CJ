@@ -1066,6 +1066,8 @@ class ChaosRunner:
             db_result["judge_delta"] = judge_delta
             if judge_fault_score:
                 db_result["judge_fault"] = judge_fault_score.to_dict()
+            if judge_baseline_score:
+                db_result["judge_baseline"] = judge_baseline_score.to_dict()
         self.record_result(db_result)
 
         if oracle_results and self._session_id is not None:
