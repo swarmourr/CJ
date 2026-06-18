@@ -125,11 +125,15 @@ from chaos_jungle.intercept import (
     Unavailable,
     Timeout as InterceptTimeout,
     CorruptResponse,
+    ToolMutate,
+    PromptInjection,
     DEFAULT_LLM_HOSTS,
 )
 from chaos_jungle.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
 from chaos_jungle.faults.bpf import iface_for_ip
-from chaos_jungle.judge import LLMJudge, JudgeScore, average_scores
+from chaos_jungle.judge import LLMJudge, JudgeScore, average_scores, Evaluator
+from chaos_jungle.fuzzing import fuzz_scenarios, summarise_fuzz
+from chaos_jungle.conversation import ConversationScenario, Turn, TurnResult
 
 __version__ = "0.1.0"
 
@@ -237,10 +241,11 @@ __all__ = [
     "SkillFileMemoryStale",
     "SkillFileConflict",
     "SkillFilePermissionDenied",
-    # Judge evaluator
+    # Judge evaluator + protocol
     "LLMJudge",
     "JudgeScore",
     "average_scores",
+    "Evaluator",
     # HTTP transport intercept (provider-agnostic)
     "inject",
     "door",
@@ -251,5 +256,14 @@ __all__ = [
     "Unavailable",
     "InterceptTimeout",
     "CorruptResponse",
+    "ToolMutate",
+    "PromptInjection",
     "DEFAULT_LLM_HOSTS",
+    # Fault fuzzer
+    "fuzz_scenarios",
+    "summarise_fuzz",
+    # Multi-turn conversation
+    "ConversationScenario",
+    "Turn",
+    "TurnResult",
 ]

@@ -55,6 +55,61 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from typing import Protocol, runtime_checkable
+
+
+# ---------------------------------------------------------------------------
+# Evaluator protocol — any object with a matching .score() can be used
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class Evaluator(Protocol):
+    """Protocol for response quality evaluators.
+
+    Any object that implements ``score(question, context, response) -> JudgeScore``
+    is a valid evaluator.  This lets users plug in DeepEval, Pydantic Evals,
+    or any other evaluation library alongside (or instead of) :class:`LLMJudge`.
+
+    Examples
+    --------
+    Using the built-in judge::
+
+        from chaos_jungle.judge import LLMJudge
+        evaluator = LLMJudge(model="gpt-4o-mini")
+
+    Wrapping a custom evaluator::
+
+        from chaos_jungle.judge import Evaluator, JudgeScore
+
+        class MyEval:
+            def score(self, question: str, context: str = "", response: str = "") -> JudgeScore:
+                score = my_eval_library.evaluate(question, response)
+                return JudgeScore(faithfulness=score.faith, hallucination=1-score.faith)
+
+        # MyEval() now satisfies the Evaluator protocol
+        assert isinstance(MyEval(), Evaluator)
+
+    Wrapping DeepEval (example)::
+
+        from deepeval.metrics import FaithfulnessMetric, HallucinationMetric
+        from chaos_jungle.judge import JudgeScore
+
+        class DeepEvalAdapter:
+            def score(self, question, context="", response="") -> JudgeScore:
+                faith = FaithfulnessMetric().measure(question=question, actual_output=response, retrieval_context=[context])
+                hall  = HallucinationMetric().measure(actual_output=response, contexts=[context])
+                return JudgeScore(faithfulness=faith.score, hallucination=hall.score)
+    """
+
+    def score(
+        self,
+        question: str,
+        context: str = "",
+        response: str = "",
+    ) -> "JudgeScore":
+        """Score a response against a question and optional context."""
+        ...
 
 
 # ---------------------------------------------------------------------------
