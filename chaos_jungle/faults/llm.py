@@ -140,6 +140,20 @@ class _LLMProxyFault(Fault):
         self._saved_env = os.environ.get(self.base_url_env)
         os.environ[self.base_url_env] = f"http://127.0.0.1:{self.port}/v1"
 
+        # Tell the proxy when the fault went active so it can compute fault_offset_s
+        try:
+            import urllib.request as _ur, json as _json
+            _payload = _json.dumps({"fault_start_time": time.time()}).encode()
+            _req = _ur.Request(
+                f"http://127.0.0.1:{self.port}/_cj/session",
+                data=_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _ur.urlopen(_req, timeout=2)
+        except Exception:
+            pass  # best-effort
+
     def stop(self, target: "Target") -> None:  # noqa: ARG002
         # Restore original env var
         if self._saved_env is None:

@@ -149,6 +149,76 @@ class SessionDB:
 
             CREATE INDEX IF NOT EXISTS idx_llm_calls_session
                 ON llm_calls(session_id);
+
+            CREATE TABLE IF NOT EXISTS tool_calls (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id   INTEGER NOT NULL REFERENCES sessions(id),
+                llm_call_id  INTEGER NOT NULL DEFAULT 0,
+                timestamp    TEXT    NOT NULL,
+                phase        TEXT    NOT NULL DEFAULT '',
+                seq          INTEGER NOT NULL DEFAULT 0,
+                tool_name    TEXT    NOT NULL DEFAULT '',
+                tool_id      TEXT    NOT NULL DEFAULT '',
+                arguments    TEXT    NOT NULL DEFAULT '{}',
+                result       TEXT    NOT NULL DEFAULT '',
+                was_error    INTEGER NOT NULL DEFAULT 0,
+                agent_addr   TEXT    NOT NULL DEFAULT ''
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_session
+                ON tool_calls(session_id);
+
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_llm_call
+                ON tool_calls(llm_call_id);
+
+            CREATE TABLE IF NOT EXISTS resource_samples (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id     INTEGER NOT NULL REFERENCES sessions(id),
+                fault_id       INTEGER REFERENCES faults(id),
+                timestamp      TEXT    NOT NULL,
+                elapsed_s      REAL    NOT NULL DEFAULT 0.0,
+                phase          TEXT    NOT NULL DEFAULT 'fault',
+                cpu_pct        REAL,
+                mem_pct        REAL,
+                mem_used_mb    REAL,
+                mem_total_mb   REAL,
+                disk_read_mb   REAL,
+                disk_write_mb  REAL,
+                net_rx_mb      REAL,
+                net_tx_mb      REAL,
+                load_1         REAL,
+                load_5         REAL,
+                extra          TEXT    NOT NULL DEFAULT '{}'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_resource_samples_session
+                ON resource_samples(session_id);
+
+            CREATE TABLE IF NOT EXISTS fault_impact (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id              INTEGER NOT NULL REFERENCES sessions(id),
+                computed_at             TEXT    NOT NULL,
+                calls_baseline          INTEGER NOT NULL DEFAULT 0,
+                calls_fault             INTEGER NOT NULL DEFAULT 0,
+                error_rate_baseline     REAL    NOT NULL DEFAULT 0.0,
+                error_rate_fault        REAL    NOT NULL DEFAULT 0.0,
+                avg_latency_baseline    REAL    NOT NULL DEFAULT 0.0,
+                avg_latency_fault       REAL    NOT NULL DEFAULT 0.0,
+                p99_latency_baseline    REAL    NOT NULL DEFAULT 0.0,
+                p99_latency_fault       REAL    NOT NULL DEFAULT 0.0,
+                cost_baseline           REAL    NOT NULL DEFAULT 0.0,
+                cost_fault              REAL    NOT NULL DEFAULT 0.0,
+                tokens_baseline         INTEGER NOT NULL DEFAULT 0,
+                tokens_fault            INTEGER NOT NULL DEFAULT 0,
+                blocked_count           INTEGER NOT NULL DEFAULT 0,
+                modified_count          INTEGER NOT NULL DEFAULT 0,
+                retry_count             INTEGER NOT NULL DEFAULT 0,
+                tool_calls_baseline     INTEGER NOT NULL DEFAULT 0,
+                tool_calls_fault        INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_fault_impact_session
+                ON fault_impact(session_id);
         """)
         # Migrate existing llm_calls tables that are missing the new columns
         _new_cols = [
@@ -170,12 +240,31 @@ class SessionDB:
             ("system_fingerprint",            "TEXT NOT NULL DEFAULT ''"),
             ("rate_limit_remaining_requests", "INTEGER"),
             ("rate_limit_remaining_tokens",   "INTEGER"),
+            # New enrichment columns
+            ("system_prompt",                 "TEXT NOT NULL DEFAULT ''"),
+            ("full_messages_json",            "TEXT NOT NULL DEFAULT ''"),
+            ("error_type",                    "TEXT NOT NULL DEFAULT 'none'"),
+            ("is_retry",                      "INTEGER NOT NULL DEFAULT 0"),
+            ("is_final_response",             "INTEGER NOT NULL DEFAULT 0"),
+            ("fault_offset_s",                "REAL"),
         ]
         for col, defn in _new_cols:
             try:
                 self._conn.execute(f"ALTER TABLE llm_calls ADD COLUMN {col} {defn}")
             except Exception:
                 pass  # column already exists
+
+        _fault_cols = [
+            ("injection_verified",  "INTEGER NOT NULL DEFAULT 0"),
+            ("verification_output", "TEXT NOT NULL DEFAULT ''"),
+            ("snapshot_before",     "TEXT NOT NULL DEFAULT '{}'"),
+            ("snapshot_after",      "TEXT NOT NULL DEFAULT '{}'"),
+        ]
+        for col, defn in _fault_cols:
+            try:
+                self._conn.execute(f"ALTER TABLE faults ADD COLUMN {col} {defn}")
+            except Exception:
+                pass
 
         _session_cols = [
             ("target_type", "TEXT NOT NULL DEFAULT ''"),
@@ -187,6 +276,206 @@ class SessionDB:
             except Exception:
                 pass
         self._conn.commit()
+
+    # ── Tool Calls ────────────────────────────────────────────────
+
+    def add_tool_call(
+        self,
+        session_id: int,
+        tool_name: str,
+        arguments: dict | str,
+        result: str = "",
+        *,
+        llm_call_id: int = 0,
+        phase: str = "",
+        seq: int = 0,
+        tool_id: str = "",
+        was_error: bool = False,
+        agent_addr: str = "",
+    ) -> int:
+        """Record a single tool call captured by the proxy."""
+        if isinstance(arguments, dict):
+            arguments = json.dumps(arguments)
+        cur = self._conn.execute(
+            "INSERT INTO tool_calls "
+            "(session_id, llm_call_id, timestamp, phase, seq, tool_name, tool_id, arguments, result, was_error, agent_addr) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (session_id, llm_call_id, _now(), phase, seq, tool_name, tool_id, arguments, result, 1 if was_error else 0, agent_addr),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_tool_calls(
+        self,
+        session_id: int,
+        phase: str | None = None,
+        llm_call_id: int | None = None,
+    ) -> list[dict]:
+        """Return tool call records for a session."""
+        clauses = ["session_id = ?"]
+        params: list = [session_id]
+        if phase is not None:
+            clauses.append("phase = ?")
+            params.append(phase)
+        if llm_call_id is not None:
+            clauses.append("llm_call_id = ?")
+            params.append(llm_call_id)
+        where = " AND ".join(clauses)
+        rows = self._conn.execute(
+            f"SELECT * FROM tool_calls WHERE {where} ORDER BY id",
+            params,
+        ).fetchall()
+        out = []
+        for r in rows:
+            row = dict(r)
+            try:
+                row["arguments"] = json.loads(row["arguments"])
+            except (TypeError, ValueError):
+                pass
+            out.append(row)
+        return out
+
+    # ── Resource Samples ──────────────────────────────────────────
+
+    def add_resource_sample(
+        self,
+        session_id: int,
+        elapsed_s: float,
+        *,
+        fault_id: int | None = None,
+        phase: str = "fault",
+        cpu_pct: float | None = None,
+        mem_pct: float | None = None,
+        mem_used_mb: float | None = None,
+        mem_total_mb: float | None = None,
+        disk_read_mb: float | None = None,
+        disk_write_mb: float | None = None,
+        net_rx_mb: float | None = None,
+        net_tx_mb: float | None = None,
+        load_1: float | None = None,
+        load_5: float | None = None,
+        extra: dict | None = None,
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO resource_samples "
+            "(session_id, fault_id, timestamp, elapsed_s, phase, "
+            " cpu_pct, mem_pct, mem_used_mb, mem_total_mb, "
+            " disk_read_mb, disk_write_mb, net_rx_mb, net_tx_mb, "
+            " load_1, load_5, extra) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (session_id, fault_id, _now(), elapsed_s, phase,
+             cpu_pct, mem_pct, mem_used_mb, mem_total_mb,
+             disk_read_mb, disk_write_mb, net_rx_mb, net_tx_mb,
+             load_1, load_5, json.dumps(extra or {})),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_resource_samples(self, session_id: int, fault_id: int | None = None) -> list[dict]:
+        if fault_id is not None:
+            rows = self._conn.execute(
+                "SELECT * FROM resource_samples WHERE session_id=? AND fault_id=? ORDER BY elapsed_s",
+                (session_id, fault_id),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM resource_samples WHERE session_id=? ORDER BY elapsed_s",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Fault enrichment ──────────────────────────────────────────
+
+    def update_fault_snapshot(
+        self,
+        fault_id: int,
+        *,
+        snapshot_before: dict | None = None,
+        snapshot_after: dict | None = None,
+        injection_verified: bool | None = None,
+        verification_output: str | None = None,
+    ) -> None:
+        sets, params = [], []
+        if snapshot_before is not None:
+            sets.append("snapshot_before=?"); params.append(json.dumps(snapshot_before))
+        if snapshot_after is not None:
+            sets.append("snapshot_after=?"); params.append(json.dumps(snapshot_after))
+        if injection_verified is not None:
+            sets.append("injection_verified=?"); params.append(1 if injection_verified else 0)
+        if verification_output is not None:
+            sets.append("verification_output=?"); params.append(verification_output)
+        if not sets:
+            return
+        params.append(fault_id)
+        self._conn.execute(f"UPDATE faults SET {', '.join(sets)} WHERE id=?", params)
+        self._conn.commit()
+
+    # ── Fault Impact ──────────────────────────────────────────────
+
+    def compute_and_store_impact(self, session_id: int) -> dict:
+        """Compute fault impact summary from llm_calls and store it."""
+        rows = self._conn.execute(
+            "SELECT phase, latency_s, http_status, was_blocked, was_modified, "
+            "       is_retry, total_tokens, cost_usd, response_tool_calls "
+            "FROM llm_calls WHERE session_id=?",
+            (session_id,),
+        ).fetchall()
+
+        def _stats(calls: list) -> dict:
+            if not calls:
+                return {"count": 0, "error_rate": 0.0, "avg_lat": 0.0, "p99_lat": 0.0,
+                        "cost": 0.0, "tokens": 0, "tool_calls": 0, "retries": 0}
+            lats = sorted(r["latency_s"] or 0 for r in calls)
+            errors = sum(1 for r in calls if (r["http_status"] or 200) >= 400 or r["was_blocked"])
+            p99 = lats[max(0, int(len(lats) * 0.99) - 1)] if lats else 0.0
+            return {
+                "count":      len(calls),
+                "error_rate": round(errors / len(calls), 4),
+                "avg_lat":    round(sum(lats) / len(lats), 4),
+                "p99_lat":    round(p99, 4),
+                "cost":       round(sum(r["cost_usd"] or 0 for r in calls), 8),
+                "tokens":     sum(r["total_tokens"] or 0 for r in calls),
+                "tool_calls": sum(r["response_tool_calls"] or 0 for r in calls),
+                "retries":    sum(1 for r in calls if r["is_retry"]),
+            }
+
+        baseline = [r for r in rows if r["phase"] == "baseline"]
+        fault    = [r for r in rows if r["phase"] != "baseline"]
+        bs = _stats(baseline)
+        fs = _stats(fault)
+
+        cur = self._conn.execute(
+            "INSERT INTO fault_impact "
+            "(session_id, computed_at, calls_baseline, calls_fault, "
+            " error_rate_baseline, error_rate_fault, "
+            " avg_latency_baseline, avg_latency_fault, "
+            " p99_latency_baseline, p99_latency_fault, "
+            " cost_baseline, cost_fault, "
+            " tokens_baseline, tokens_fault, "
+            " blocked_count, modified_count, retry_count, "
+            " tool_calls_baseline, tool_calls_fault) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (session_id, _now(),
+             bs["count"], fs["count"],
+             bs["error_rate"], fs["error_rate"],
+             bs["avg_lat"], fs["avg_lat"],
+             bs["p99_lat"], fs["p99_lat"],
+             bs["cost"], fs["cost"],
+             bs["tokens"], fs["tokens"],
+             sum(1 for r in rows if r["was_blocked"]),
+             sum(1 for r in rows if r["was_modified"]),
+             bs["retries"] + fs["retries"],
+             bs["tool_calls"], fs["tool_calls"]),
+        )
+        self._conn.commit()
+        return {"baseline": bs, "fault": fs}
+
+    def get_fault_impact(self, session_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM fault_impact WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
     # ── Sessions ──────────────────────────────────────────────────
 

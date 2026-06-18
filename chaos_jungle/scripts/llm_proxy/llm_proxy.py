@@ -98,6 +98,12 @@ _SESSION_ID: int = 0
 _PHASE: str = "fault"
 _call_index: int = 0
 _call_index_lock: Lock = Lock()
+# Fault timing — set via /_cj/session {"fault_start_time": "<iso>"}
+_FAULT_START_TIME: float | None = None   # unix timestamp, set when fault goes active
+_fault_start_lock: Lock = Lock()
+# Retry detection — rolling buffer of (prompt_hash, unix_time) for last 8 calls
+_recent_prompts: list[tuple[int, float]] = []
+_recent_prompts_lock: Lock = Lock()
 
 # ---------------------------------------------------------------------------
 # Pricing table — (input_per_1k_usd, output_per_1k_usd)
@@ -167,7 +173,7 @@ _STATIC = {
     ),
     "skill_permission_denied": (
         403,
-        b'{"error":{"message":"Skill permission denied — insufficient privileges (chaos-jungle)","type":"chaos_skill_permission","code":"permission_denied"}}',
+        b'{"error":{"message":"Skill permission denied - insufficient privileges (chaos-jungle)","type":"chaos_skill_permission","code":"permission_denied"}}',
     ),
     "skill_dependency_missing": (
         400,
@@ -668,24 +674,69 @@ def _lookup_cost(model: str, prompt_tokens: int, completion_tokens: int) -> floa
     return round((prompt_tokens * in_p + completion_tokens * out_p) / 1000.0, 8)
 
 
+def _classify_error(http_status: int, resp_body: bytes) -> str:
+    """Return a short error type string from status + body."""
+    if http_status == 0 or http_status == 200:
+        return "none"
+    if http_status == 429:
+        return "rate_limited"
+    if http_status in (408, 504):
+        return "timeout"
+    if http_status in (503, 502):
+        return "unavailable"
+    if http_status == 402:
+        return "budget_exceeded"
+    if http_status >= 400:
+        # Check for context length error
+        try:
+            body = json.loads(resp_body)
+            msg = str(body.get("error", {}).get("message", "") or body.get("error", "") or "").lower()
+            if "context" in msg or "length" in msg or "token" in msg:
+                return "context_overflow"
+            if "corrupt" in msg or "invalid" in msg:
+                return "corrupted"
+        except Exception:
+            pass
+        return "other"
+    return "none"
+
+
 def _extract_req_fields(req_body: dict | None, raw_body: bytes) -> dict:
     """Extract all capturable fields from a request body."""
     if not req_body:
         return {
-            "model": "", "prompt_text": "", "message_count": 0,
+            "model": "", "prompt_text": "", "system_prompt": "",
+            "full_messages_json": "", "message_count": 0,
             "tool_count": 0, "is_streaming": 0, "temperature": None,
             "max_tokens_requested": None, "request_size_bytes": len(raw_body),
         }
     messages = req_body.get("messages", [])
     prompt_text = ""
+    system_prompt = ""
+    for m in messages:
+        role = m.get("role", "")
+        if role == "system":
+            c = m.get("content", "")
+            system_prompt = (c if isinstance(c, str) else json.dumps(c))[:4000]
     for m in reversed(messages):
         if m.get("role") == "user":
             c = m.get("content", "")
             prompt_text = c if isinstance(c, str) else json.dumps(c)
             break
+    # Store full messages JSON, capped at 8KB to avoid DB bloat
+    try:
+        full_json = json.dumps(messages)
+        if len(full_json) > 8192:
+            # Keep first and last few messages + truncation marker
+            trimmed = messages[:2] + [{"role": "...", "content": f"[{len(messages)-4} messages trimmed]"}] + messages[-2:]
+            full_json = json.dumps(trimmed)
+    except Exception:
+        full_json = ""
     return {
         "model":                req_body.get("model", ""),
         "prompt_text":          prompt_text,
+        "system_prompt":        system_prompt,
+        "full_messages_json":   full_json,
         "message_count":        len(messages),
         "tool_count":           len(req_body.get("tools", [])),
         "is_streaming":         1 if req_body.get("stream") else 0,
@@ -740,6 +791,28 @@ def _extract_resp_fields(resp_body: bytes, resp_headers=None) -> dict:
     return result
 
 
+def _is_retry(prompt_text: str) -> bool:
+    """Return True if this prompt was seen recently (within 30 s), indicating a retry."""
+    global _recent_prompts
+    h = hash(prompt_text[:500])
+    now = time.time()
+    with _recent_prompts_lock:
+        # expire entries older than 30 s
+        _recent_prompts = [(ph, pt) for ph, pt in _recent_prompts if now - pt < 30]
+        is_dup = any(ph == h for ph, _ in _recent_prompts)
+        _recent_prompts.append((h, now))
+        if len(_recent_prompts) > 16:
+            _recent_prompts = _recent_prompts[-16:]
+    return is_dup
+
+
+def _fault_offset() -> float | None:
+    """Seconds since the current fault was injected, or None if no fault active."""
+    with _fault_start_lock:
+        ts = _FAULT_START_TIME
+    return round(time.time() - ts, 3) if ts is not None else None
+
+
 def _record_llm_call(
     model: str,
     prompt_tokens: int,
@@ -768,11 +841,20 @@ def _record_llm_call(
     system_fingerprint: str = "",
     rate_limit_remaining_requests=None,
     rate_limit_remaining_tokens=None,
-) -> None:
-    """Write one LLM call row to the chaos-jungle session DB (best-effort)."""
+    system_prompt: str = "",
+    full_messages_json: str = "",
+    error_type: str = "none",
+    is_retry: int = 0,
+    is_final_response: int = 0,
+    fault_offset_s: float | None = None,
+) -> int:
+    """Write one LLM call row to the chaos-jungle session DB (best-effort).
+
+    Returns the new row id, or 0 on failure.
+    """
     global _call_index
     if not _DB_PATH or not _SESSION_ID:
-        return
+        return 0
     try:
         with _call_index_lock:
             idx = _call_index
@@ -780,7 +862,7 @@ def _record_llm_call(
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()
         conn = sqlite3.connect(_DB_PATH, timeout=5)
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO llm_calls ("
             "  session_id, phase, call_index, timestamp, model,"
             "  prompt_tokens, completion_tokens, cost_usd, finish_reason,"
@@ -789,8 +871,10 @@ def _record_llm_call(
             "  request_size_bytes, response_size_bytes, message_count, tool_count,"
             "  response_tool_calls, is_streaming, temperature, max_tokens_requested,"
             "  response_length_chars, ttft_s, system_fingerprint,"
-            "  rate_limit_remaining_requests, rate_limit_remaining_tokens"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "  rate_limit_remaining_requests, rate_limit_remaining_tokens,"
+            "  system_prompt, full_messages_json, error_type,"
+            "  is_retry, is_final_response, fault_offset_s"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 _SESSION_ID, _PHASE, idx, ts, model,
                 prompt_tokens, completion_tokens, cost_usd, finish_reason,
@@ -804,12 +888,86 @@ def _record_llm_call(
                 temperature, max_tokens_requested,
                 response_length_chars, ttft_s, system_fingerprint,
                 rate_limit_remaining_requests, rate_limit_remaining_tokens,
+                system_prompt, full_messages_json, error_type,
+                is_retry, is_final_response, fault_offset_s,
             ),
         )
+        llm_call_id = cur.lastrowid or 0
+        conn.commit()
+        conn.close()
+        return llm_call_id
+    except Exception:  # noqa: BLE001
+        return 0  # never crash the proxy for a DB write failure
+
+
+def _extract_tool_pairs(req_body: dict | None) -> list[dict]:
+    """Return completed tool call+result pairs from the request messages.
+
+    In the OpenAI chat format, the messages array will contain:
+    - role="assistant" entries with ``tool_calls`` (the call args/id)
+    - role="tool" entries with ``tool_call_id`` + ``content`` (the result)
+
+    We match them by ``tool_call_id`` to produce complete pairs.
+    """
+    if not req_body:
+        return []
+    messages = req_body.get("messages", [])
+    # Build call_id -> {tool_name, arguments} from assistant messages
+    call_map: dict[str, dict] = {}
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in (msg.get("tool_calls") or []):
+                fn = tc.get("function", {})
+                call_map[tc.get("id", "")] = {
+                    "tool_name": fn.get("name", ""),
+                    "tool_id":   tc.get("id", ""),
+                    "arguments": fn.get("arguments", "{}"),
+                }
+    pairs: list[dict] = []
+    for msg in messages:
+        if msg.get("role") == "tool":
+            tid = msg.get("tool_call_id", "")
+            info = call_map.get(tid, {})
+            pairs.append({
+                "tool_name": info.get("tool_name", msg.get("name", "")),
+                "tool_id":   tid,
+                "arguments": info.get("arguments", "{}"),
+                "result":    (msg.get("content", "") or "")[:2000],
+                "was_error": 0,
+            })
+    return pairs
+
+
+def _record_tool_calls(
+    session_id: int,
+    llm_call_id: int,
+    req_body: dict | None,
+    phase: str,
+    agent_addr: str,
+) -> None:
+    """Store completed tool call pairs for this LLM request (best-effort)."""
+    if not _DB_PATH or not session_id:
+        return
+    pairs = _extract_tool_pairs(req_body)
+    if not pairs:
+        return
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(_DB_PATH, timeout=5)
+        for seq, p in enumerate(pairs):
+            conn.execute(
+                "INSERT INTO tool_calls "
+                "(session_id, llm_call_id, timestamp, phase, seq, tool_name, tool_id, arguments, result, was_error, agent_addr) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (session_id, llm_call_id, ts, phase, seq,
+                 p["tool_name"], p["tool_id"], p["arguments"], p["result"],
+                 p["was_error"], agent_addr),
+            )
         conn.commit()
         conn.close()
     except Exception:  # noqa: BLE001
-        pass  # never crash the proxy for a DB write failure
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -912,7 +1070,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def do_DELETE(self): self._handle()
 
     def _handle(self) -> None:
-        global _request_count
+        global _request_count, _cost_usd, _SESSION_ID, _PHASE
         _t_start = time.time()
 
         with _count_lock:
@@ -924,6 +1082,33 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0) or 0)
         raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        # ── Control endpoint: POST /_cj/session ───────────────────
+        if self.path == "/_cj/session":
+            try:
+                data = json.loads(raw_body) if raw_body else {}
+                if "session_id" in data:
+                    _SESSION_ID = int(data["session_id"])
+                if "phase" in data:
+                    _PHASE = str(data["phase"])
+                if "fault_start_time" in data:
+                    with _fault_start_lock:
+                        v = data["fault_start_time"]
+                        if v is None:
+                            _FAULT_START_TIME = None
+                        else:
+                            # Accept ISO string or unix float
+                            try:
+                                _FAULT_START_TIME = float(v)
+                            except (TypeError, ValueError):
+                                from datetime import datetime, timezone
+                                _FAULT_START_TIME = datetime.fromisoformat(str(v)).timestamp()
+                resp = json.dumps({"ok": True, "session_id": _SESSION_ID, "phase": _PHASE}).encode()
+                self._reply(200, resp)
+            except Exception as exc:
+                self._reply(400, json.dumps({"error": str(exc)}).encode())
+            return
+
         req_body = _parse_body(raw_body)
 
         upstream_url = _build_upstream_url(self.path)
@@ -1126,7 +1311,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             resp_body = _inject_skill_conflict(resp_body, FAULT_ARGS.get("conflict_text", ""))
 
         if fault == "budget_exceeded":
-            global _cost_usd
             try:
                 data = json.loads(resp_body)
                 usage = data.get("usage", {})
@@ -1157,7 +1341,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 else:
                     _call_cost = _lookup_cost(_req["model"], _pt, _ct)
                 _tps = round(_ct / _latency_s, 2) if _latency_s > 0 and _ct > 0 else 0.0
-                _record_llm_call(
+                _is_fin = (
+                    _resp["finish_reason"] == "stop"
+                    and _resp["response_tool_calls"] == 0
+                )
+                _llm_call_id = _record_llm_call(
                     model=_req["model"],
                     prompt_tokens=_pt,
                     completion_tokens=_ct,
@@ -1181,10 +1369,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     temperature=_req["temperature"],
                     max_tokens_requested=_req["max_tokens_requested"],
                     response_length_chars=_resp["response_length_chars"],
-                    ttft_s=None,   # non-streaming path; TTFT captured in _stream_interrupt
+                    ttft_s=None,
                     system_fingerprint=_resp["system_fingerprint"],
                     rate_limit_remaining_requests=_resp["rate_limit_remaining_requests"],
                     rate_limit_remaining_tokens=_resp["rate_limit_remaining_tokens"],
+                    system_prompt=_req.get("system_prompt", ""),
+                    full_messages_json=_req.get("full_messages_json", ""),
+                    error_type=_classify_error(status, resp_body),
+                    is_retry=1 if _is_retry(_req["prompt_text"]) else 0,
+                    is_final_response=1 if _is_fin else 0,
+                    fault_offset_s=_fault_offset(),
+                )
+                _record_tool_calls(
+                    _SESSION_ID, _llm_call_id, req_body, _PHASE,
+                    self.client_address[0] if self.client_address else "",
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -1206,6 +1404,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
 
 _ALL_FAULTS = [
+    "passthrough",
     "latency", "rate_limit", "budget_exceeded", "timeout", "corrupt", "unavailable",
     "tool_fault", "hallucinate", "stream_interrupt", "token_starve",
     "mcp_tool_error", "mcp_unavailable", "mcp_timeout",
@@ -1227,7 +1426,7 @@ def main() -> None:
     )
     p.add_argument("--port", type=int, default=18000)
     p.add_argument("--upstream", default="https://api.openai.com")
-    p.add_argument("--fault", required=True, choices=_ALL_FAULTS)
+    p.add_argument("--fault", required=False, default="passthrough", choices=_ALL_FAULTS)
     # LLM call capture
     p.add_argument("--db-path", default="", help="Path to chaos-jungle SQLite DB for LLM call capture")
     p.add_argument("--session-id", type=int, default=0, help="Session ID for LLM call capture")
@@ -1323,7 +1522,7 @@ def main() -> None:
         "conflict_text":         args.skill_conflict_text,
     }
 
-    server = HTTPServer(("127.0.0.1", args.port), _ProxyHandler)
+    server = HTTPServer(("0.0.0.0", args.port), _ProxyHandler)
     print(
         f"chaos-jungle proxy  fault={FAULT}  "
         f"port={args.port}  upstream={args.upstream}",

@@ -41,8 +41,12 @@ os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
 # ---------------------------------------------------------------------------
 
 def _add_revert(base_cls: type) -> type:
-    """Return a concrete subclass of *base_cls* with revert() delegating to stop()."""
+    """Return a concrete subclass of *base_cls* with revert() and preflight() fixed."""
     class _Bridged(base_cls):  # type: ignore[valid-type]
+        def preflight(self, target, **kwargs) -> None:
+            # absorb auto_install and any future kwargs ChaosRunner passes
+            super().preflight(target)
+
         def revert(self, target) -> None:
             self.stop(target)
     _Bridged.__name__ = base_cls.__name__

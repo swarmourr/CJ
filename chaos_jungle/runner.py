@@ -14,6 +14,70 @@ from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
 from chaos_jungle.targets.logging import LoggingTarget
 
+
+# ── Resource collection helpers ───────────────────────────────────────────────
+
+def _collect_resources() -> dict:
+    """Snapshot CPU, memory, disk I/O and network counters.
+
+    Tries ``psutil`` first; falls back to ``/proc`` files on Linux.
+    Returns an empty dict on failure or unsupported platform.
+    """
+    snap: dict = {}
+    try:
+        import psutil  # type: ignore[import]
+        snap["cpu_pct"]      = psutil.cpu_percent(interval=0.1)
+        vm = psutil.virtual_memory()
+        snap["mem_pct"]      = vm.percent
+        snap["mem_used_mb"]  = round(vm.used / 1_048_576, 1)
+        snap["mem_total_mb"] = round(vm.total / 1_048_576, 1)
+        try:
+            la = psutil.getloadavg()
+            snap["load_1"] = la[0]
+            snap["load_5"] = la[1]
+        except Exception:
+            pass
+        try:
+            dc = psutil.disk_io_counters()
+            if dc:
+                snap["disk_read_mb"]  = round(dc.read_bytes  / 1_048_576, 2)
+                snap["disk_write_mb"] = round(dc.write_bytes / 1_048_576, 2)
+        except Exception:
+            pass
+        try:
+            nc = psutil.net_io_counters()
+            if nc:
+                snap["net_rx_mb"] = round(nc.bytes_recv / 1_048_576, 2)
+                snap["net_tx_mb"] = round(nc.bytes_sent / 1_048_576, 2)
+        except Exception:
+            pass
+    except ImportError:
+        # psutil not installed — try /proc on Linux
+        try:
+            with open("/proc/loadavg") as f:
+                parts = f.read().split()
+                snap["load_1"] = float(parts[0])
+                snap["load_5"] = float(parts[1])
+        except Exception:
+            pass
+        try:
+            with open("/proc/meminfo") as f:
+                info = {}
+                for line in f:
+                    k, _, v = line.partition(":")
+                    info[k.strip()] = int(v.split()[0])
+                total = info.get("MemTotal", 0)
+                avail = info.get("MemAvailable", 0)
+                used  = total - avail
+                snap["mem_used_mb"]  = round(used  / 1024, 1)
+                snap["mem_total_mb"] = round(total / 1024, 1)
+                snap["mem_pct"]      = round(used / total * 100, 1) if total else 0.0
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return snap
+
 if TYPE_CHECKING:
     from chaos_jungle.judge import JudgeScore, LLMJudge
     from chaos_jungle.oracles import Oracle, OracleResult
@@ -339,6 +403,8 @@ class ChaosRunner:
         auto_install: bool = False,
         conflict: str = "raise",
         policy: SafetyPolicy | None = None,
+        monitor_resources: bool = False,
+        resource_interval_s: float = 2.0,
     ) -> None:
         if conflict not in ("raise", "warn", "force"):
             raise ValueError(f"conflict must be 'raise', 'warn', or 'force', got {conflict!r}")
@@ -349,9 +415,14 @@ class ChaosRunner:
         self.auto_install = auto_install
         self.conflict = conflict
         self.policy = policy
+        self.monitor_resources = monitor_resources
+        self.resource_interval_s = resource_interval_s
         self._session_id: int | None = None
         self._fault_ids: list[int] = []
         self._timer: threading.Timer | None = None
+        self._resource_thread: threading.Thread | None = None
+        self._resource_stop: threading.Event = threading.Event()
+        self._fault_start_ts: float | None = None
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -464,16 +535,61 @@ class ChaosRunner:
                 fault_id=fid,
             )
             _dry = self.policy is not None and self.policy.dry_run
+
+            # Resource snapshot BEFORE injection (optional)
+            if self.monitor_resources:
+                try:
+                    snap_before = _collect_resources()
+                    self.db.update_fault_snapshot(fid, snapshot_before=snap_before)
+                except Exception:
+                    pass
+
             if _dry:
                 fault.dry_run(logged)
             else:
                 print(f"[chaos-jungle] Injecting {fault.__class__.__name__}({fault._parameters()})")
                 fault.start(logged)
+
+            # Resource snapshot AFTER injection (optional)
+            if self.monitor_resources:
+                try:
+                    snap_after = _collect_resources()
+                    self.db.update_fault_snapshot(fid, snapshot_after=snap_after)
+                except Exception:
+                    pass
+
             self.db.add_event(
                 self._session_id,
                 f"Fault started: {fault.__class__.__name__}",
                 fault_id=fid,
             )
+
+        # Record fault start time and start continuous resource monitoring (optional)
+        self._fault_start_ts = time.time()
+        if self.monitor_resources and self._fault_ids:
+            self._resource_stop.clear()
+            _fid = self._fault_ids[0]
+            _sid = self._session_id
+            _interval = self.resource_interval_s
+            _t0 = self._fault_start_ts
+
+            def _monitor_loop() -> None:
+                while not self._resource_stop.wait(timeout=_interval):
+                    try:
+                        snap = _collect_resources()
+                        elapsed = round(time.time() - _t0, 2)
+                        self.db.add_resource_sample(
+                            _sid, elapsed,
+                            fault_id=_fid, phase="fault",
+                            **snap,
+                        )
+                    except Exception:
+                        pass
+
+            self._resource_thread = threading.Thread(
+                target=_monitor_loop, daemon=True, name="cj-resource-monitor"
+            )
+            self._resource_thread.start()
 
         print(f"[chaos-jungle] Chaos ON  — scenario '{self.scenario.name}'  "
               f"(session id: {self._session_id})")
@@ -535,6 +651,18 @@ class ChaosRunner:
                     fault_id=fid,
                 )
                 print(f"[chaos-jungle] ERROR reverting {fault.__class__.__name__}: {exc}")
+
+        # Stop resource monitoring thread
+        if self._resource_thread is not None:
+            self._resource_stop.set()
+            self._resource_thread.join(timeout=5)
+            self._resource_thread = None
+
+        # Auto-compute fault impact summary from LLM call data
+        try:
+            self.db.compute_and_store_impact(self._session_id)
+        except Exception:
+            pass
 
         self.db.close_session(self._session_id, status="reverted")
         self.db.add_event(self._session_id, "Session closed")
@@ -614,6 +742,7 @@ class ChaosRunner:
         oracles: "list[Oracle] | None" = None,
         strategy: "CollectStrategy | None" = None,
         metric_set: "MetricSet | None" = None,
+        on_session_start: "Callable[[int], None] | None" = None,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -740,6 +869,11 @@ class ChaosRunner:
         # ── 2. Fault runs ─────────────────────────────────────────
         print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
         self.start()
+        if on_session_start is not None and self._session_id is not None:
+            try:
+                on_session_start(self._session_id)
+            except Exception:
+                pass
         raw_fault: list[dict] = []
         _f_sample = None
         try:
