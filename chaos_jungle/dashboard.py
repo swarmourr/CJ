@@ -1203,6 +1203,36 @@ function _initImpactCharts(impact, resources) {
   const _gc = {color:'rgba(255,255,255,.05)'};
   const _so = {responsive:true, maintainAspectRatio:false, animation:{duration:200}};
 
+  // ── Workload metrics chart ───────────────────────────────────────────────────
+  if (document.getElementById('wl-ch-compare')) {
+    let metricRows = [];
+    for (const r of (_rawResults||[])) {
+      const m = typeof r.metrics==='string'?JSON.parse(r.metrics||'{}'):(r.metrics||{});
+      if (m.baseline && typeof m.baseline==='object') {
+        const b=flattenObj(m.baseline,'',{}), f=flattenObj(m.fault||m.chaos||{},'',{});
+        const keys=[...new Set([...Object.keys(b),...Object.keys(f)])];
+        metricRows=keys.filter(k=>!isNaN(+b[k])&&b[k]!=='').map(k=>({key:k,b:+b[k]||0,f:+f[k]||0})).slice(0,8);
+        break;
+      }
+    }
+    if (metricRows.length) {
+      _mkChart('wl-ch-compare',{
+        type:'bar',
+        data:{
+          labels:metricRows.map(r=>r.key.replace(/_/g,' ')),
+          datasets:[
+            {label:'Baseline',data:metricRows.map(r=>r.b),backgroundColor:'rgba(99,102,241,.7)',borderRadius:3,barPercentage:.72},
+            {label:'Fault',   data:metricRows.map(r=>r.f),backgroundColor:'rgba(239,68,68,.65)', borderRadius:3,barPercentage:.72},
+          ]
+        },
+        options:{..._so,indexAxis:'y',
+          plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10,padding:10}}},
+          scales:{x:{grid:_gc,ticks:{font:{size:9}}},y:{grid:{display:false},ticks:{font:{size:10}}}}
+        }
+      });
+    }
+  }
+
   if (impact && document.getElementById('imp-ch-compare')) {
     const rows = [
       {label:'Avg Latency (s)',  b: impact.avg_latency_baseline||0, f: impact.avg_latency_fault||0},
@@ -1345,7 +1375,7 @@ async function openDetail(id) {
     document.getElementById('run-meta').textContent = [dur, started].filter(Boolean).join('  ·  ');
 
     _dpData = {
-      run:      buildDPRun(s, sd.faults||[], impact, resources),
+      run:      buildDPRun(s, sd.faults||[], impact, resources, sd.results||[]),
       faults:   buildDPFaults(sd.faults||[], resources),
       metrics:  buildDPMetrics(sd.results||[], sd.oracles||[]),
       commands: buildDPCommands(sd.commands||[]),
@@ -1431,9 +1461,10 @@ const _CAT_COLOR = {
 };
 
 // Detail tab builders
-function buildDPRun(s, faults, impact, resources) {
+function buildDPRun(s, faults, impact, resources, results) {
   const agent = agentName(s.target_type, s.target_addr);
   faults = faults||[];
+  results = results||[];
   function row(label, value, mono) {
     return `<div style="display:flex;gap:0;padding:7px 0;border-bottom:1px solid var(--border)">
       <span style="width:120px;flex-shrink:0;font-size:11px;color:var(--text3)">${label}</span>
@@ -1442,16 +1473,115 @@ function buildDPRun(s, faults, impact, resources) {
   }
   const statusColor = s.status==='reverted'||s.status==='done'?'var(--green)':s.status==='running'?'var(--accent)':'var(--red)';
 
-  // ── Impact summary + charts ──────────────────────────────────────────────────
-  let impactHtml = '';
+  // ── Section 1: Workload metrics (primary — always shown when data exists) ────
+  let workloadHtml = '';
+  {
+    let bMetrics={}, fMetrics={}, dMetrics={};
+    for (const r of results) {
+      const m = typeof r.metrics==='string'?JSON.parse(r.metrics||'{}'):(r.metrics||{});
+      if (m.baseline && typeof m.baseline==='object') {
+        bMetrics=flattenObj(m.baseline,'',{});
+        fMetrics=flattenObj(m.fault||m.chaos||{},'',{});
+        dMetrics=flattenObj(m.delta||{},'',{});
+        break;
+      }
+    }
+    const wlKeys = Object.keys(bMetrics).filter(k => !isNaN(+bMetrics[k]) && bMetrics[k]!=='');
+    if (wlKeys.length) {
+      const kpiCards = wlKeys.slice(0,6).map(k => {
+        const bv=+bMetrics[k]||0, fv=+fMetrics[k]||0, dv=+dMetrics[k]||0;
+        const changed = Math.abs(dv) > 1e-9;
+        const higherWorse = /error|latency|duration|time|fail/.test(k);
+        const worse = changed && (higherWorse ? fv > bv : fv < bv);
+        const color = !changed?'var(--text3)':worse?'var(--red)':'var(--green)';
+        const arrow = !changed?'':worse?' ▲':' ▼';
+        const bg = !changed?'':worse?'border-top:2px solid var(--red)':'border-top:2px solid var(--green)';
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;${bg}">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${k}">${k.replace(/_/g,' ')}</div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <div style="display:flex;justify-content:space-between"><span style="font-size:10px;color:var(--text3)">Baseline</span><span style="font-size:12px;font-weight:600;font-family:var(--mono)">${fmtMetric(k,bv)}</span></div>
+            <div style="display:flex;justify-content:space-between"><span style="font-size:10px;color:var(--text3)">Fault</span><span style="font-size:12px;font-weight:700;font-family:var(--mono);color:${color}">${fmtMetric(k,fv)}${arrow}</span></div>
+          </div>
+        </div>`;
+      }).join('');
+      workloadHtml = `<div style="margin-bottom:24px">
+        <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Workload Metrics — Baseline vs Fault</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:12px">${kpiCards}</div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:180px">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Metric comparison</div>
+          <canvas id="wl-ch-compare"></canvas>
+        </div>
+      </div>`;
+    }
+  }
+
+  // ── Section 2: System resources (always when data exists) ────────────────────
+  let resourcesHtml = '';
+  {
+    const hasMonitoring = resources && resources.length > 1;
+    const snapFault = faults.find(f => {
+      try {
+        const sb = typeof f.snapshot_before==='string'?JSON.parse(f.snapshot_before||'null'):f.snapshot_before;
+        return sb && Object.keys(sb).length > 0;
+      } catch(e) { return false; }
+    });
+    if (hasMonitoring || snapFault) {
+      let snapHtml = '';
+      if (snapFault) {
+        try {
+          const sb = typeof snapFault.snapshot_before==='string'?JSON.parse(snapFault.snapshot_before||'{}'):(snapFault.snapshot_before||{});
+          const sa = typeof snapFault.snapshot_after==='string'?JSON.parse(snapFault.snapshot_after||'{}'):(snapFault.snapshot_after||{});
+          const snapMetrics = [
+            {k:'cpu_pct',     label:'CPU %',    fmt:v=>v.toFixed(1)+'%'},
+            {k:'mem_pct',     label:'Mem %',    fmt:v=>v.toFixed(1)+'%'},
+            {k:'mem_used_mb', label:'Mem used', fmt:v=>v.toFixed(0)+' MB'},
+            {k:'load_1',      label:'Load 1m',  fmt:v=>v.toFixed(2)},
+            {k:'disk_read_mb',label:'Disk R',   fmt:v=>v.toFixed(1)+' MB'},
+            {k:'net_rx_mb',   label:'Net RX',   fmt:v=>v.toFixed(1)+' MB'},
+          ].filter(m => sb[m.k] != null || sa[m.k] != null);
+          if (snapMetrics.length) {
+            const snapRows = snapMetrics.map(m => {
+              const bv=sb[m.k], fv=sa[m.k];
+              const changed = bv!=null&&fv!=null&&Math.abs(fv-bv)>0.05;
+              const color = changed?(fv>bv?'var(--red)':'var(--green)'):'var(--text2)';
+              return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
+                <span style="width:70px;flex-shrink:0;font-size:11px;color:var(--text3)">${m.label}</span>
+                <span style="font-size:11px;font-family:var(--mono);color:var(--text3)">${bv!=null?m.fmt(bv):'—'}</span>
+                <span style="font-size:10px;color:var(--text3)">→</span>
+                <span style="font-size:11px;font-family:var(--mono);font-weight:${changed?'600':'400'};color:${color}">${fv!=null?m.fmt(fv):'—'}</span>
+                ${changed?`<span style="font-size:10px;color:${color};margin-left:auto">${fv>bv?'▲':'▼'} ${m.fmt(Math.abs(fv-bv))}</span>`:''}
+              </div>`;
+            }).join('');
+            snapHtml = `<div style="${hasMonitoring?'flex:1;min-width:180px':''}">
+              <div style="font-size:10px;font-weight:600;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Snapshot before → after injection</div>
+              <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px">${snapRows}</div>
+            </div>`;
+          }
+        } catch(e){}
+      }
+      const monitorHtml = hasMonitoring ? `<div style="flex:2;min-width:240px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Continuous monitoring — <span style="color:#f97316">CPU %</span> · <span style="color:#6366f1">Mem %</span></div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:180px"><canvas id="imp-ch-res"></canvas></div>
+      </div>` : '';
+      if (snapHtml || monitorHtml) {
+        resourcesHtml = `<div style="margin-bottom:24px">
+          <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">System Resources</div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">${snapHtml}${monitorHtml}</div>
+        </div>`;
+      }
+    }
+  }
+
+  // ── Section 3: LLM call impact (only when LLM proxy data is present) ────────
+  let llmImpactHtml = '';
   if (impact && (impact.calls_baseline > 0 || impact.calls_fault > 0)) {
     function impKpi(label, bv, fv, fmt, higherIsBetter) {
-      const bvF = fmt(bv), fvF = fmt(fv);
-      const changed = bv !== fv;
-      const worse = higherIsBetter ? fv < bv : fv > bv;
-      const color = !changed ? 'var(--text3)' : worse ? 'var(--red)' : 'var(--green)';
-      const arrow = !changed ? '' : worse ? ' ▲' : ' ▼';
-      const bg = !changed ? '' : worse ? 'border-top:2px solid var(--red)' : 'border-top:2px solid var(--green)';
+      const bvF=fmt(bv), fvF=fmt(fv);
+      const changed=bv!==fv;
+      const worse=higherIsBetter?fv<bv:fv>bv;
+      const color=!changed?'var(--text3)':worse?'var(--red)':'var(--green)';
+      const arrow=!changed?'':worse?' ▲':' ▼';
+      const bg=!changed?'':worse?'border-top:2px solid var(--red)':'border-top:2px solid var(--green)';
       return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px;${bg}">
         <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${label}</div>
         <div style="display:flex;flex-direction:column;gap:3px">
@@ -1466,18 +1596,12 @@ function buildDPRun(s, faults, impact, resources) {
         </div>
       </div>`;
     }
-    const errPct  = v => (v*100).toFixed(1)+'%';
-    const latFmt  = v => v.toFixed(2)+'s';
-    const costFmt = v => fmtCost(v);
-    const hasRes = resources && resources.length > 1;
-
-    impactHtml = `<div style="margin-bottom:24px">
-      <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Fault Impact</div>
-
-      <!-- summary badges row -->
+    const errPct=v=>(v*100).toFixed(1)+'%', latFmt=v=>v.toFixed(2)+'s', costFmt=v=>fmtCost(v);
+    llmImpactHtml = `<div style="margin-bottom:24px">
+      <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">LLM Call Impact</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         <span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:11px;color:var(--text3)">
-          LLM calls&nbsp; <b style="color:var(--text)">${impact.calls_baseline}</b> baseline → <b style="color:var(--text)">${impact.calls_fault}</b> fault
+          Calls&nbsp; <b style="color:var(--text)">${impact.calls_baseline}</b> baseline → <b style="color:var(--text)">${impact.calls_fault}</b> fault
         </span>
         <span style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:6px 12px;font-size:11px;color:var(--text3)">
           Blocked <b style="color:${impact.blocked_count>0?'var(--red)':'var(--text)'}">${impact.blocked_count}</b>
@@ -1485,100 +1609,39 @@ function buildDPRun(s, faults, impact, resources) {
           &nbsp;·&nbsp; Retries <b style="color:${impact.retry_count>0?'var(--accent)':'var(--text)'}">${impact.retry_count}</b>
         </span>
       </div>
-
-      <!-- KPI comparison grid -->
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
         ${impKpi('Error rate',  impact.error_rate_baseline,  impact.error_rate_fault,  errPct,  false)}
         ${impKpi('Avg latency', impact.avg_latency_baseline, impact.avg_latency_fault,  latFmt,  false)}
         ${impKpi('p99 latency', impact.p99_latency_baseline, impact.p99_latency_fault,  latFmt,  false)}
         ${impKpi('Total cost',  impact.cost_baseline,        impact.cost_fault,         costFmt, false)}
       </div>
-
-      <!-- visual comparison chart + resource timeline -->
-      <div style="display:grid;grid-template-columns:${hasRes?'1fr 1fr':'1fr'};gap:12px">
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
-          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">
-            Baseline vs Fault comparison
-          </div>
-          <canvas id="imp-ch-compare"></canvas>
-        </div>
-        ${hasRes ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
-          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">
-            Resource monitoring — <span style="color:#f97316">CPU %</span> · <span style="color:#6366f1">Memory %</span>
-          </div>
-          <canvas id="imp-ch-res"></canvas>
-        </div>` : ''}
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">LLM metrics comparison</div>
+        <canvas id="imp-ch-compare"></canvas>
       </div>
     </div>`;
   }
 
-  // ── Fault summary ───────────────────────────────────────────────────────────
+  // ── Section 4: Injected faults ───────────────────────────────────────────────
   let faultSummary = '';
   if (faults.length) {
     faultSummary = `<div style="margin-bottom:24px">
       <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Injected faults</div>
       ${faults.map(f => {
-        const p = typeof f.parameters==='string' ? JSON.parse(f.parameters||'{}') : (f.parameters||{});
-        const cat = f.category||'other';
-        const cc  = _CAT_COLOR[cat]||'#64748b';
-        const desc = faultDesc(f.kind, p);
-        const dur  = (f.started_at && f.stopped_at) ? fmtDur((new Date(f.stopped_at)-new Date(f.started_at))/1000) : null;
+        const p = typeof f.parameters==='string'?JSON.parse(f.parameters||'{}'):(f.parameters||{});
+        const cat=f.category||'other', cc=_CAT_COLOR[cat]||'#64748b';
+        const desc=faultDesc(f.kind,p);
+        const dur=(f.started_at&&f.stopped_at)?fmtDur((new Date(f.stopped_at)-new Date(f.started_at))/1000):null;
         return `<div style="border:1px solid var(--border);border-left:3px solid ${cc};border-radius:var(--radius);background:var(--surface);padding:9px 14px;margin-bottom:8px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span style="font-size:13px;font-weight:700;color:${cc}">${f.kind||'?'}</span>
-            ${chip(cat, cat)}
+            ${chip(cat,cat)}
             ${dur?`<span style="font-size:10px;color:var(--text3);margin-left:auto">⏱ ${dur}</span>`:''}
           </div>
           ${desc?`<div style="font-size:12px;color:var(--text2);margin-top:5px">${desc}</div>`:''}
         </div>`;
       }).join('')}
     </div>`;
-  }
-
-  // ── Resource snapshot diff (from fault snapshots, no monitoring needed) ─────
-  let resourceSnapHtml = '';
-  if (!resources || resources.length < 2) {
-    // Try to pull snapshot_before/after from the first fault that has data
-    const snapFault = (faults||[]).find(f => {
-      try {
-        const sb = typeof f.snapshot_before==='string' ? JSON.parse(f.snapshot_before||'null') : f.snapshot_before;
-        return sb && Object.keys(sb).length > 0;
-      } catch(e) { return false; }
-    });
-    if (snapFault) {
-      try {
-        const sb = typeof snapFault.snapshot_before==='string' ? JSON.parse(snapFault.snapshot_before||'{}') : (snapFault.snapshot_before||{});
-        const sa = typeof snapFault.snapshot_after==='string'  ? JSON.parse(snapFault.snapshot_after||'{}')  : (snapFault.snapshot_after||{});
-        const metrics = [
-          {k:'cpu_pct',     label:'CPU %',      fmt:v=>v.toFixed(1)+'%'},
-          {k:'mem_pct',     label:'Memory %',   fmt:v=>v.toFixed(1)+'%'},
-          {k:'mem_used_mb', label:'Mem used',   fmt:v=>v.toFixed(0)+' MB'},
-          {k:'load_1',      label:'Load 1m',    fmt:v=>v.toFixed(2)},
-          {k:'disk_read_mb',label:'Disk read',  fmt:v=>v.toFixed(1)+' MB'},
-          {k:'net_rx_mb',   label:'Net RX',     fmt:v=>v.toFixed(1)+' MB'},
-        ].filter(m => sb[m.k] != null || sa[m.k] != null);
-        if (metrics.length) {
-          const rows = metrics.map(m => {
-            const bv = sb[m.k], fv = sa[m.k];
-            const changed = bv != null && fv != null && Math.abs(fv - bv) > 0.05;
-            const worse = fv > bv;
-            const color = changed ? (worse ? 'var(--red)' : 'var(--green)') : 'var(--text2)';
-            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">
-              <span style="width:80px;flex-shrink:0;font-size:11px;color:var(--text3)">${m.label}</span>
-              <span style="font-size:11px;font-family:var(--mono);color:var(--text3)">${bv!=null?m.fmt(bv):'—'}</span>
-              <span style="font-size:10px;color:var(--text3)">→</span>
-              <span style="font-size:11px;font-family:var(--mono);font-weight:${changed?'600':'400'};color:${color}">${fv!=null?m.fmt(fv):'—'}</span>
-              ${changed?`<span style="font-size:10px;color:${color};margin-left:auto">${fv>bv?'▲':'▼'} ${m.fmt(Math.abs(fv-bv))}</span>`:''}
-            </div>`;
-          }).join('');
-          resourceSnapHtml = `<div style="margin-bottom:24px">
-            <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">System Resources — before → after injection</div>
-            <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px">${rows}</div>
-            <div style="font-size:10px;color:var(--text3);margin-top:5px">Snapshot taken immediately before and after fault injection. Enable <code style="font-family:var(--mono)">monitor_resources=True</code> for continuous timeline.</div>
-          </div>`;
-        }
-      } catch(e) {}
-    }
   }
 
   return `
@@ -1593,8 +1656,9 @@ function buildDPRun(s, faults, impact, resources) {
       ${row('Started', fmtDate(s.started_at), true)}
       ${row('Stopped', fmtDate(s.stopped_at), true)}
     </div>
-    ${impactHtml}
-    ${resourceSnapHtml}
+    ${workloadHtml}
+    ${resourcesHtml}
+    ${llmImpactHtml}
     ${faultSummary}`;
 }
 
