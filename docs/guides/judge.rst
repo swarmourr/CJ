@@ -194,9 +194,91 @@ Parameters
        timeout=30.0,                             # HTTP timeout for judge calls
    )
 
+Pluggable evaluator protocol
+-----------------------------
+
+``ChaosRunner.measure()`` accepts any object that satisfies the
+:class:`~chaos_jungle.judge.Evaluator` protocol — not just ``LLMJudge``.
+This lets you plug in DeepEval, Pydantic Evals, or any custom evaluator
+without changing your experiment code.
+
+The protocol requires a single method:
+
+.. code-block:: python
+
+   class Evaluator(Protocol):
+       def score(
+           self,
+           question: str,
+           context: str = "",
+           response: str = "",
+       ) -> JudgeScore: ...
+
+``LLMJudge`` already satisfies it.  To verify that a custom evaluator
+qualifies, use ``isinstance``:
+
+.. code-block:: python
+
+   from chaos_jungle.judge import Evaluator
+
+   assert isinstance(LLMJudge(), Evaluator)   # True
+
+Wrapping a custom evaluator
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Any class with a compatible ``score()`` method works:
+
+.. code-block:: python
+
+   from chaos_jungle.judge import Evaluator, JudgeScore
+
+   class MyEval:
+       def score(self, question: str, context: str = "", response: str = "") -> JudgeScore:
+           # call your own eval library here
+           result = my_eval_library.evaluate(question, response, context)
+           return JudgeScore(
+               faithfulness=result.faithfulness,
+               hallucination=1.0 - result.faithfulness,
+               coherence=result.coherence,
+           )
+
+   # Pass it directly to ChaosRunner.measure()
+   result = runner.measure(workload, n_baseline=3, n_fault=3, evaluator=MyEval())
+
+Wrapping DeepEval (example)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+   from chaos_jungle.judge import JudgeScore
+
+   class DeepEvalAdapter:
+       """Thin wrapper around DeepEval metrics."""
+
+       def score(self, question: str, context: str = "", response: str = "") -> JudgeScore:
+           from deepeval.metrics import FaithfulnessMetric, HallucinationMetric
+           from deepeval.test_case import LLMTestCase
+
+           tc    = LLMTestCase(input=question, actual_output=response,
+                               retrieval_context=[context])
+           faith = FaithfulnessMetric()
+           hall  = HallucinationMetric()
+           faith.measure(tc)
+           hall.measure(tc)
+           return JudgeScore(
+               faithfulness=faith.score,
+               hallucination=hall.score,
+               coherence=1.0,
+           )
+
+   result = runner.measure(workload, evaluator=DeepEvalAdapter())
+
+----
+
 See also
 --------
 
 * :ref:`guide-semantic` — the faults that most benefit from quality scoring
 * :ref:`guide-llm` — full LLM fault reference
+* :ref:`guide-conversation` — per-turn quality scoring in multi-turn flows
 * :ref:`guide-measurement` — ``ChaosRunner.measure()`` and ``MeasurementResult``
