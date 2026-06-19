@@ -100,12 +100,22 @@ class _LLMProxyFault(Fault):
         self._proc: subprocess.Popen | None = None
         self._saved_env: str | None = None
         self._extra_args = []
+        self._chain_args: dict = {}   # populated by subclasses for --fault-chain use
+        # Set by ChaosRunner when a shared proxy is started for multiple LLM faults.
+        # When True, start() and stop() are no-ops — the runner manages the proxy.
+        self._managed_externally: bool = False
+
+    def _fault_config(self) -> dict:
+        """Return the JSON config dict for this fault in a --fault-chain payload."""
+        return {"fault": self._fault_name, **self._chain_args}
 
     # ------------------------------------------------------------------
     # Fault lifecycle
     # ------------------------------------------------------------------
 
     def start(self, target: "Target") -> None:
+        if self._managed_externally:
+            return  # shared proxy already started by ChaosRunner
         script = _proxy_script_path()
         cmd = [
             sys.executable,
@@ -155,6 +165,8 @@ class _LLMProxyFault(Fault):
             pass  # best-effort
 
     def stop(self, target: "Target") -> None:  # noqa: ARG002
+        if self._managed_externally:
+            return  # shared proxy managed by ChaosRunner
         # Restore original env var
         if self._saved_env is None:
             os.environ.pop(self.base_url_env, None)
@@ -243,6 +255,7 @@ class LLMLatency(_LLMProxyFault):
         super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
         self.delay_s = delay_s
         self._extra_args = ["--latency-s", str(delay_s)]
+        self._chain_args = {"delay_s": delay_s}
 
     def _parameters(self) -> dict:
         return {**super()._parameters(), "delay_s": self.delay_s}
@@ -289,6 +302,7 @@ class LLMRateLimit(_LLMProxyFault):
         super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
         self.n = n
         self._extra_args = ["--rate-limit-n", str(n)]
+        self._chain_args = {"n": n}
 
     def _parameters(self) -> dict:
         return {**super()._parameters(), "n": self.n}

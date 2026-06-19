@@ -352,6 +352,68 @@ def _target_info(target) -> tuple[str, str]:
         return "local", "localhost"
 
 
+def _start_shared_llm_proxy(
+    faults: list,
+    session_id: "int | None",
+    db,
+) -> "tuple[object | None, str | None, str | None]":
+    """Start one shared proxy for all _LLMProxyFault instances in the scenario.
+
+    When multiple LLM proxy faults are present, instead of each spawning its own
+    proxy (which would conflict over OPENAI_BASE_URL), we start a single proxy
+    with a --fault-chain JSON payload that applies all faults in sequence on
+    every request — same process, same port, no inter-proxy TCP overhead.
+
+    Returns (proc, base_url_env, saved_env).
+    Returns (None, None, None) when fewer than 2 LLM proxy faults are found.
+    """
+    import json as _json
+    import os as _os
+    import subprocess
+    import sys
+
+    try:
+        from chaos_jungle.faults.llm import _LLMProxyFault, _proxy_script_path
+    except ImportError:
+        return None, None, None
+
+    llm = [f for f in faults if isinstance(f, _LLMProxyFault)]
+    if len(llm) < 2:
+        return None, None, None
+
+    chain    = [f._fault_config() for f in llm]
+    port     = llm[0].port
+    upstream = llm[-1].upstream
+    env_var  = llm[0].base_url_env
+    script   = _proxy_script_path()
+
+    cmd = [
+        sys.executable, script,
+        "--port",        str(port),
+        "--upstream",    upstream,
+        "--fault-chain", _json.dumps(chain),
+    ]
+    _db_path = getattr(db, "path", None)
+    if session_id and _db_path:
+        cmd += ["--db-path", _db_path, "--session-id", str(session_id), "--phase", "fault"]
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    time.sleep(0.4)
+    if proc.poll() is not None:
+        out = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
+        raise RuntimeError(f"Shared LLM proxy failed to start.\nOutput: {out}")
+
+    saved_env = _os.environ.get(env_var)
+    _os.environ[env_var] = f"http://127.0.0.1:{port}/v1"
+
+    for f in llm:
+        f._managed_externally = True
+
+    names = " + ".join(f.__class__.__name__ for f in llm)
+    print(f"[chaos-jungle] Shared LLM proxy ({names}) on port {port}")
+    return proc, env_var, saved_env
+
+
 class ChaosRunner:
     """Orchestrate the start/stop/revert lifecycle of a chaos scenario.
 
@@ -423,6 +485,9 @@ class ChaosRunner:
         self._resource_thread: threading.Thread | None = None
         self._resource_stop: threading.Event = threading.Event()
         self._fault_start_ts: float | None = None
+        self._shared_llm_proc = None
+        self._shared_llm_env_var: str | None = None
+        self._shared_llm_saved_env: str | None = None
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -520,6 +585,10 @@ class ChaosRunner:
         if self.auto_preflight:
             for fault in self.scenario.faults:
                 fault.preflight(logged, auto_install=self.auto_install)
+
+        self._shared_llm_proc, self._shared_llm_env_var, self._shared_llm_saved_env = (
+            _start_shared_llm_proxy(self.scenario.faults, self._session_id, self.db)
+        )
 
         self._fault_ids = []
         for fault in self.scenario.faults:
@@ -653,6 +722,24 @@ class ChaosRunner:
                 )
                 print(f"[chaos-jungle] ERROR reverting {fault.__class__.__name__}: {exc}")
 
+        # Stop shared LLM proxy (if one was started for multiple faults)
+        if self._shared_llm_proc is not None:
+            import os as _os, subprocess as _sp
+            if self._shared_llm_env_var:
+                if self._shared_llm_saved_env is None:
+                    _os.environ.pop(self._shared_llm_env_var, None)
+                else:
+                    _os.environ[self._shared_llm_env_var] = self._shared_llm_saved_env
+            if self._shared_llm_proc.poll() is None:
+                self._shared_llm_proc.terminate()
+                try:
+                    self._shared_llm_proc.wait(timeout=5)
+                except _sp.TimeoutExpired:
+                    self._shared_llm_proc.kill()
+            self._shared_llm_proc = None
+            self._shared_llm_env_var = None
+            self._shared_llm_saved_env = None
+
         # Stop resource monitoring thread
         if self._resource_thread is not None:
             self._resource_stop.set()
@@ -745,6 +832,7 @@ class ChaosRunner:
         metric_set: "MetricSet | None" = None,
         on_session_start: "Callable[[int], None] | None" = None,
         on_fault_start: "Callable[[int], None] | None" = None,
+        cooldown_s: float = 0.0,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -881,6 +969,10 @@ class ChaosRunner:
             )
 
         # ── 2. Fault runs ─────────────────────────────────────────
+        if cooldown_s > 0:
+            print(f"[chaos-jungle] Cooldown — waiting {cooldown_s:.1f}s before fault phase ...")
+            time.sleep(cooldown_s)
+
         print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
         self.start()
         if on_fault_start is not None and self._session_id is not None:

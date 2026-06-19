@@ -87,6 +87,7 @@ from threading import Lock
 
 FAULT: str = ""
 FAULT_ARGS: dict = {}
+FAULT_CHAIN: list[dict] = []   # set by --fault-chain; each element: {"fault": "...", ...args}
 _request_count: int = 0
 _count_lock: Lock = Lock()
 _cost_usd: float = 0.0
@@ -1056,6 +1057,137 @@ def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
 
 
 # ---------------------------------------------------------------------------
+# Fault chain helpers
+# ---------------------------------------------------------------------------
+
+
+def _effective_chain() -> list[dict]:
+    """Return the active fault list.
+
+    Prefers FAULT_CHAIN (set by --fault-chain).  Falls back to the single
+    FAULT/FAULT_ARGS globals for backward compatibility.
+    """
+    if FAULT_CHAIN:
+        return FAULT_CHAIN
+    if FAULT and FAULT != "passthrough":
+        return [{**{"fault": FAULT}, **FAULT_ARGS}]
+    return []
+
+
+def _check_block(cfg: dict, count: int, req_body: "dict | None") -> "tuple[int, bytes] | None":
+    """Return (status, body) if this fault should block the request, else None."""
+    fault = cfg["fault"]
+    if fault == "unavailable":
+        return _STATIC["unavailable"]
+    if fault == "mcp_unavailable":
+        return _STATIC["mcp_unavailable"]
+    if fault == "rate_limit" and count > cfg.get("n", 5):
+        return _STATIC["rate_limit"]
+    if fault == "budget_exceeded":
+        with _cost_lock:
+            current_cost = _cost_usd
+        if current_cost >= cfg.get("budget_max_cost_usd", 0.10):
+            return _STATIC["budget_exceeded"]
+    if fault in ("timeout", "mcp_timeout"):
+        time.sleep(cfg.get("timeout_s", 30.0))
+        return _STATIC[fault]
+    if fault == "tool_fault" and _is_tool_request(req_body):
+        tool_name = cfg.get("tool_name", "")
+        if not tool_name or any(
+            m.get("name") == tool_name
+            for m in (req_body.get("messages", []) if req_body else [])
+            if m.get("role") == "tool"
+        ):
+            return (400, _tool_error_response(req_body))
+    if fault == "skill_unavailable" and _is_tool_request(req_body):
+        if _skill_name_matches(req_body, cfg.get("skill_name", "")):
+            return _STATIC["skill_unavailable"]
+    if fault == "skill_permission_denied" and _is_tool_request(req_body):
+        if _skill_name_matches(req_body, cfg.get("skill_name", "")):
+            return _STATIC["skill_permission_denied"]
+    if fault == "skill_dependency_missing" and _is_tool_request(req_body):
+        if _skill_name_matches(req_body, cfg.get("skill_name", "")):
+            return _STATIC["skill_dependency_missing"]
+    if fault == "skill_timeout" and _is_tool_request(req_body):
+        if _skill_name_matches(req_body, cfg.get("skill_name", "")):
+            time.sleep(cfg.get("skill_timeout_s", 30.0))
+            return _STATIC["skill_timeout"]
+    if fault == "mcp_tool_error" and _is_mcp_request(req_body):
+        return (200, _mcp_tool_error_response(req_body))
+    return None
+
+
+def _mutate_request(cfg: dict, req_body: "dict | None", raw_body: bytes) -> "tuple[dict | None, bytes]":
+    """Apply request-modifying faults. Returns (modified_req_body, modified_raw_body)."""
+    fault = cfg["fault"]
+    if fault == "skill_bad_output" and _is_tool_request(req_body) and req_body:
+        if _skill_name_matches(req_body, cfg.get("skill_name", "")):
+            req_body = _inject_skill_bad_output(req_body, cfg.get("bad_output_mode", "invalid_json"))
+            raw_body = json.dumps(req_body).encode()
+    if fault == "skill_version_skew" and _is_tool_request(req_body) and req_body:
+        req_body = _inject_skill_version_skew(req_body, cfg.get("old_version", "0.1.0"))
+        raw_body = json.dumps(req_body).encode()
+    if fault == "skill_memory_stale" and _is_tool_request(req_body) and req_body:
+        req_body = _inject_skill_memory_stale(req_body, cfg.get("stale_data", ""))
+        raw_body = json.dumps(req_body).encode()
+    if fault == "skill_instruction_corrupt" and req_body is not None:
+        req_body = _inject_skill_instruction_corrupt(req_body, cfg.get("corrupt_instruction", ""))
+        raw_body = json.dumps(req_body).encode()
+    if fault == "token_starve" and req_body is not None:
+        n = cfg.get("max_tokens", 5)
+        req_body["max_tokens"] = n
+        req_body["num_predict"] = n
+        raw_body = json.dumps(req_body).encode()
+    if fault == "semantic_corrupt" and req_body is not None:
+        req_body = _apply_semantic_corrupt(req_body, cfg.get("semantic_mode", "entity_swap"))
+        raw_body = json.dumps(req_body).encode()
+    if fault == "latency":
+        time.sleep(cfg.get("delay_s", 2.0))
+    return req_body, raw_body
+
+
+def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None") -> bytes:
+    """Apply response-modifying faults. Returns modified resp_body."""
+    global _cost_usd
+    fault = cfg["fault"]
+    if fault == "corrupt":
+        mode = cfg.get("mode", "truncate")
+        if mode == "truncate":
+            resp_body = resp_body[: max(1, len(resp_body) // 2)]
+        elif mode == "empty":
+            resp_body = b"{}"
+        elif mode == "invalid_json":
+            resp_body = b"<<chaos-jungle: response corrupted>>"
+    if fault == "hallucinate":
+        generator_url   = cfg.get("generator_url", "")
+        generator_model = cfg.get("generator_model", "")
+        if generator_url and generator_model:
+            generated = _generate_hallucination(req_body, generator_url, generator_model)
+            text = generated or cfg.get("text", "WRONG ANSWER (injected by chaos-jungle)")
+        else:
+            text = cfg.get("text", "WRONG ANSWER (injected by chaos-jungle)")
+        resp_body = _inject_hallucination(resp_body, text)
+    if fault == "skill_misroute":
+        resp_body = _inject_skill_misroute(resp_body, cfg.get("wrong_skill", ""))
+    if fault == "skill_conflict":
+        resp_body = _inject_skill_conflict(resp_body, cfg.get("conflict_text", ""))
+    if fault == "budget_exceeded":
+        try:
+            data = json.loads(resp_body)
+            usage    = data.get("usage", {})
+            in_tok   = usage.get("prompt_tokens", 0)
+            out_tok  = usage.get("completion_tokens", 0)
+            in_p     = cfg.get("budget_input_price", 0.0)
+            out_p    = cfg.get("budget_output_price", 0.0)
+            cost     = (in_tok * in_p + out_tok * out_p) / 1000.0
+            with _cost_lock:
+                _cost_usd += cost
+        except Exception:
+            pass
+    return resp_body
+
+
+# ---------------------------------------------------------------------------
 # Request handler
 # ---------------------------------------------------------------------------
 
@@ -1078,7 +1210,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             _request_count += 1
             count = _request_count
 
-        fault = FAULT
+        # Build active fault chain (supports both single-fault and multi-fault modes)
+        chain = _effective_chain()
+        fault = chain[0]["fault"] if chain else "passthrough"  # used for DB recording
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0) or 0)
@@ -1139,139 +1273,40 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             )
 
         # ------------------------------------------------------------------
-        # Faults that never forward
+        # 1. Blocking faults — check each fault in chain; first block wins
         # ------------------------------------------------------------------
 
-        if fault == "unavailable":
-            self._reply(*_STATIC["unavailable"])
-            _blocked(503)
-            return
-
-        if fault == "mcp_unavailable":
-            self._reply(*_STATIC["mcp_unavailable"])
-            _blocked(503)
-            return
-
-        if fault == "rate_limit":
-            if count > FAULT_ARGS.get("n", 5):
-                self._reply(*_STATIC["rate_limit"])
-                _blocked(429)
-                return
-
-        if fault == "budget_exceeded":
-            with _cost_lock:
-                current_cost = _cost_usd
-            if current_cost >= FAULT_ARGS.get("budget_max_cost_usd", 0.10):
-                self._reply(*_STATIC["budget_exceeded"])
-                _blocked(402)
-                return
-
-        if fault in ("timeout", "mcp_timeout"):
-            time.sleep(FAULT_ARGS.get("timeout_s", 30.0))
-            self._reply(*_STATIC[fault])
-            _blocked(504)
-            return
-
-        # ------------------------------------------------------------------
-        # Faults that modify the REQUEST before forwarding
-        # ------------------------------------------------------------------
-
-        if fault == "tool_fault" and _is_tool_request(req_body):
-            tool_name = FAULT_ARGS.get("tool_name")
-            # Only block if tool_name matches (or no filter set)
-            if not tool_name or any(
-                m.get("name") == tool_name
-                for m in (req_body.get("messages", []) if req_body else [])
-                if m.get("role") == "tool"
-            ):
-                self._reply(400, _tool_error_response(req_body))
-                _blocked(400)
+        for cfg in chain:
+            block = _check_block(cfg, count, req_body)
+            if block is not None:
+                blk_status, blk_body = block
+                self._reply(blk_status, blk_body)
+                _blocked(blk_status)
                 return
 
         # ------------------------------------------------------------------
-        # Skill chaos faults — no-forward (return error immediately)
+        # 2. Request-modifying faults — each fault in chain may mutate body
         # ------------------------------------------------------------------
 
-        if fault == "skill_unavailable" and _is_tool_request(req_body):
-            if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
-                self._reply(*_STATIC["skill_unavailable"])
-                _blocked(400)
-                return
-
-        if fault == "skill_permission_denied" and _is_tool_request(req_body):
-            if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
-                self._reply(*_STATIC["skill_permission_denied"])
-                _blocked(403)
-                return
-
-        if fault == "skill_dependency_missing" and _is_tool_request(req_body):
-            if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
-                self._reply(*_STATIC["skill_dependency_missing"])
-                _blocked(400)
-                return
-
-        if fault == "skill_timeout" and _is_tool_request(req_body):
-            if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")):
-                time.sleep(FAULT_ARGS.get("skill_timeout_s", 30.0))
-                self._reply(*_STATIC["skill_timeout"])
-                _blocked(504)
-                return
+        for cfg in chain:
+            req_body, raw_body = _mutate_request(cfg, req_body, raw_body)
 
         # ------------------------------------------------------------------
-        # Skill chaos faults — modify REQUEST before forwarding
-        # ------------------------------------------------------------------
-
-        if fault == "skill_bad_output" and _is_tool_request(req_body):
-            if _skill_name_matches(req_body, FAULT_ARGS.get("skill_name", "")) and req_body:
-                req_body = _inject_skill_bad_output(req_body, FAULT_ARGS.get("bad_output_mode", "invalid_json"))
-                raw_body = json.dumps(req_body).encode()
-
-        if fault == "skill_version_skew" and _is_tool_request(req_body) and req_body:
-            req_body = _inject_skill_version_skew(req_body, FAULT_ARGS.get("old_version", "0.1.0"))
-            raw_body = json.dumps(req_body).encode()
-
-        if fault == "skill_memory_stale" and _is_tool_request(req_body) and req_body:
-            req_body = _inject_skill_memory_stale(req_body, FAULT_ARGS.get("stale_data", ""))
-            raw_body = json.dumps(req_body).encode()
-
-        if fault == "skill_instruction_corrupt" and req_body is not None:
-            req_body = _inject_skill_instruction_corrupt(req_body, FAULT_ARGS.get("corrupt_instruction", ""))
-            raw_body = json.dumps(req_body).encode()
-
-        if fault == "mcp_tool_error" and _is_mcp_request(req_body):
-            self._reply(200, _mcp_tool_error_response(req_body))
-            _blocked(200)
-            return
-
-        if fault == "token_starve" and req_body is not None:
-            n = FAULT_ARGS.get("max_tokens", 5)
-            req_body["max_tokens"] = n        # OpenAI / OpenAI-compat
-            req_body["num_predict"] = n       # Ollama native /api/generate + /api/chat
-            raw_body = json.dumps(req_body).encode()
-
-        if fault == "semantic_corrupt" and req_body is not None:
-            mode = FAULT_ARGS.get("semantic_mode", "entity_swap")
-            req_body = _apply_semantic_corrupt(req_body, mode)
-            raw_body = json.dumps(req_body).encode()
-
-        if fault == "latency":
-            time.sleep(FAULT_ARGS.get("delay_s", 2.0))
-
-        # ------------------------------------------------------------------
-        # Stream interrupt — requires special line-by-line handling
+        # 3. Stream interrupt — special line-by-line forwarding
         # ------------------------------------------------------------------
 
         is_streaming = req_body is not None and req_body.get("stream") is True
-        if fault == "stream_interrupt" and is_streaming:
+        stream_cfg = next((c for c in chain if c["fault"] == "stream_interrupt"), None)
+        if stream_cfg and is_streaming:
             fwd_hdrs = _build_fwd_headers(self.headers, raw_body)
             _stream_interrupt(
                 self, upstream_url, fwd_hdrs, raw_body,
-                interrupt_after=FAULT_ARGS.get("interrupt_after", 3),
+                interrupt_after=stream_cfg.get("interrupt_after", 3),
             )
             return
 
         # ------------------------------------------------------------------
-        # Forward request to upstream
+        # 4. Forward request to upstream
         # ------------------------------------------------------------------
 
         fwd_hdrs = _build_fwd_headers(self.headers, raw_body)
@@ -1279,51 +1314,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         _latency_s = round(time.time() - _t_start, 4)
 
         # ------------------------------------------------------------------
-        # Faults that modify the RESPONSE before returning
+        # 5. Response-modifying faults — each fault in chain may mutate resp
         # ------------------------------------------------------------------
 
-        if fault == "corrupt":
-            mode = FAULT_ARGS.get("mode", "truncate")
-            if mode == "truncate":
-                resp_body = resp_body[: max(1, len(resp_body) // 2)]
-            elif mode == "empty":
-                resp_body = b"{}"
-            elif mode == "invalid_json":
-                resp_body = b"<<chaos-jungle: response corrupted>>"
-
-        if fault == "hallucinate":
-            generator_url = FAULT_ARGS.get("generator_url", "")
-            generator_model = FAULT_ARGS.get("generator_model", "")
-            if generator_url and generator_model:
-                generated = _generate_hallucination(req_body, generator_url, generator_model)
-                text = generated or FAULT_ARGS.get("text", "WRONG ANSWER (injected by chaos-jungle)")
-            else:
-                text = FAULT_ARGS.get("text", "WRONG ANSWER (injected by chaos-jungle)")
-            resp_body = _inject_hallucination(resp_body, text)
-
-        # ------------------------------------------------------------------
-        # Skill chaos faults — modify RESPONSE after forwarding
-        # ------------------------------------------------------------------
-
-        if fault == "skill_misroute":
-            resp_body = _inject_skill_misroute(resp_body, FAULT_ARGS.get("wrong_skill", ""))
-
-        if fault == "skill_conflict":
-            resp_body = _inject_skill_conflict(resp_body, FAULT_ARGS.get("conflict_text", ""))
-
-        if fault == "budget_exceeded":
-            try:
-                data = json.loads(resp_body)
-                usage = data.get("usage", {})
-                in_tokens  = usage.get("prompt_tokens", 0)
-                out_tokens = usage.get("completion_tokens", 0)
-                in_price   = FAULT_ARGS.get("budget_input_price", 0.0)
-                out_price  = FAULT_ARGS.get("budget_output_price", 0.0)
-                cost = (in_tokens * in_price + out_tokens * out_price) / 1000.0
-                with _cost_lock:
-                    _cost_usd += cost
-            except Exception:
-                pass
+        for cfg in chain:
+            resp_body = _mutate_response(cfg, resp_body, req_body)
 
         # ------------------------------------------------------------------
         # Capture LLM call to session DB (best-effort, forwarded path)
@@ -1420,7 +1415,7 @@ _ALL_FAULTS = [
 
 
 def main() -> None:
-    global FAULT, FAULT_ARGS, _DB_PATH, _SESSION_ID, _PHASE
+    global FAULT, FAULT_ARGS, FAULT_CHAIN, _DB_PATH, _SESSION_ID, _PHASE
 
     p = argparse.ArgumentParser(
         description="Chaos Jungle LLM/MCP proxy",
@@ -1429,6 +1424,12 @@ def main() -> None:
     p.add_argument("--port", type=int, default=18000)
     p.add_argument("--upstream", default="https://api.openai.com")
     p.add_argument("--fault", required=False, default="passthrough", choices=_ALL_FAULTS)
+    p.add_argument(
+        "--fault-chain",
+        default="",
+        help='JSON array of fault configs, e.g. \'[{"fault":"latency","delay_s":2.0},{"fault":"rate_limit","n":2}]\'. '
+             "When set, --fault is ignored.",
+    )
     # LLM call capture
     p.add_argument("--db-path", default="", help="Path to chaos-jungle SQLite DB for LLM call capture")
     p.add_argument("--session-id", type=int, default=0, help="Session ID for LLM call capture")
@@ -1492,6 +1493,14 @@ def main() -> None:
     args = p.parse_args()
 
     FAULT = args.fault
+    if args.fault_chain:
+        try:
+            FAULT_CHAIN = json.loads(args.fault_chain)
+            if not isinstance(FAULT_CHAIN, list):
+                raise ValueError("--fault-chain must be a JSON array")
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(f"ERROR: --fault-chain invalid JSON: {exc}", file=sys.stderr)
+            sys.exit(1)
     _DB_PATH = args.db_path
     _SESSION_ID = args.session_id
     _PHASE = args.phase
@@ -1525,11 +1534,11 @@ def main() -> None:
     }
 
     server = HTTPServer(("0.0.0.0", args.port), _ProxyHandler)
-    print(
-        f"chaos-jungle proxy  fault={FAULT}  "
-        f"port={args.port}  upstream={args.upstream}",
-        flush=True,
-    )
+    if FAULT_CHAIN:
+        chain_str = "+".join(c["fault"] for c in FAULT_CHAIN)
+        print(f"chaos-jungle proxy  fault-chain=[{chain_str}]  port={args.port}  upstream={args.upstream}", flush=True)
+    else:
+        print(f"chaos-jungle proxy  fault={FAULT}  port={args.port}  upstream={args.upstream}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

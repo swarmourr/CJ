@@ -1726,11 +1726,14 @@ function buildDPRun(s, faults, impact, resources, results) {
         </div>`;
       }
       const errPct=v=>(v*100).toFixed(1)+'%', latFmt=v=>v.toFixed(2)+'s', costFmt=v=>fmtCost(v);
-      kpiGrid = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+      const tokFmt=v=>v>0?v.toLocaleString():'-', tcFmt=v=>v>0?v.toString():'-';
+      kpiGrid = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
         ${impKpi('Error rate',  impact.error_rate_baseline,  impact.error_rate_fault,  errPct,  false)}
         ${impKpi('Avg latency', impact.avg_latency_baseline, impact.avg_latency_fault,  latFmt,  false)}
         ${impKpi('p99 latency', impact.p99_latency_baseline, impact.p99_latency_fault,  latFmt,  false)}
         ${impKpi('Total cost',  impact.cost_baseline,        impact.cost_fault,         costFmt, false)}
+        ${impKpi('Tokens',      impact.tokens_baseline||0,   impact.tokens_fault||0,    tokFmt,  false)}
+        ${(impact.tool_calls_baseline||0)+(impact.tool_calls_fault||0)>0 ? impKpi('Tool calls', impact.tool_calls_baseline||0, impact.tool_calls_fault||0, tcFmt, false) : ''}
       </div>
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;height:200px">
         <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">LLM metrics comparison</div>
@@ -1791,11 +1794,24 @@ function buildDPRun(s, faults, impact, resources, results) {
       }).join('');
       const gv = jf&&jf.guardrail_violation;
       const guardrailBadge = gv ? `<div style="margin-top:10px;padding:8px 14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.4);border-radius:var(--radius);font-size:12px;color:var(--red);font-weight:500">⚠ Guardrail violation detected in fault phase</div>` : '';
-      const reasoning = jf&&jf.reasoning ? `<div style="margin-top:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:11px;color:var(--text2);line-height:1.65">${jf.reasoning.replace(/&/g,'&amp;').replace(/</g,'&lt;').slice(0,300)}</div>` : '';
+      const _esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const _expl = (jf&&jf.explanations&&Object.keys(jf.explanations).length)
+        ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+            <div style="font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Per-dimension analysis</div>
+            ${Object.entries(jf.explanations).map(([k,v])=>`<div style="margin-bottom:4px"><span style="font-size:10px;font-weight:600;color:var(--text2);text-transform:capitalize">${_esc(k)}: </span><span style="font-size:11px;color:var(--text2)">${_esc(v)}</span></div>`).join('')}
+           </div>` : '';
+      const verdictCard = (jb&&jb.reasoning)||(jf&&jf.reasoning) ? `<div style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px">
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Judge Verdict</div>
+        <div style="display:grid;grid-template-columns:${(jb&&jb.reasoning)&&(jf&&jf.reasoning)?'1fr 1fr':'1fr'};gap:10px">
+          ${jb&&jb.reasoning?`<div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Baseline</div><div style="font-size:11px;color:var(--text2);line-height:1.65">${_esc(jb.reasoning).slice(0,300)}</div></div>`:''}
+          ${jf&&jf.reasoning?`<div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Under fault</div><div style="font-size:11px;color:var(--text2);line-height:1.65">${_esc(jf.reasoning).slice(0,300)}</div></div>`:''}
+        </div>
+        ${_expl}
+      </div>` : '';
       qualityHtml = `<div style="margin-bottom:24px">
         <div style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px">Response Quality</div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${qCards}</div>
-        ${guardrailBadge}${reasoning}
+        ${guardrailBadge}${verdictCard}
       </div>`;
     }
   }
@@ -2012,10 +2028,20 @@ function buildDPMetrics(results, oracles) {
       ${gauge('Hallucination', jb.hallucination, jf.hallucination, true)}
       ${gauge('Coherence', jb.coherence, jf.coherence, false)}
     </div>`;
-    if (jf.reasoning) {
+    if (jb.reasoning || jf.reasoning) {
+      const _e = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const _expl2 = (jf.explanations&&Object.keys(jf.explanations).length)
+        ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+            <div style="font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Per-dimension analysis</div>
+            ${Object.entries(jf.explanations).map(([k,v])=>`<div style="margin-bottom:4px"><span style="font-size:10px;font-weight:600;color:var(--text2);text-transform:capitalize">${_e(k)}: </span><span style="font-size:11px;color:var(--text2)">${_e(v)}</span></div>`).join('')}
+           </div>` : '';
       qContent += `<div style="margin-top:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
-        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px">Judge Reasoning</div>
-        <div style="font-size:12px;color:var(--text2);line-height:1.7">${jf.reasoning.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+        <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Judge Verdict</div>
+        <div style="display:grid;grid-template-columns:${jb.reasoning&&jf.reasoning?'1fr 1fr':'1fr'};gap:10px">
+          ${jb.reasoning?`<div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Baseline</div><div style="font-size:12px;color:var(--text2);line-height:1.7">${_e(jb.reasoning)}</div></div>`:''}
+          ${jf.reasoning?`<div><div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Under fault</div><div style="font-size:12px;color:var(--text2);line-height:1.7">${_e(jf.reasoning)}</div></div>`:''}
+        </div>
+        ${_expl2}
       </div>`;
     }
     if (jf.guardrail_violation) {
@@ -2168,13 +2194,19 @@ function buildDPLLM(calls) {
     </div>`;
   }
 
-  const retryCnt = calls.filter(c=>c.is_retry).length;
-  let html = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px">
+  const retryCnt  = calls.filter(c=>c.is_retry).length;
+  const totTools  = calls.reduce((a,c)=>a+(c.response_tool_calls||0),0);
+  const tpsList   = calls.map(c=>c.tokens_per_second||0).filter(v=>v>0);
+  const avgTps    = tpsList.length ? tpsList.reduce((a,v)=>a+v,0)/tpsList.length : 0;
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;margin-bottom:12px">
     ${kpi('Calls', total, 'var(--text)', models.length===1?models[0].split('/').pop().slice(0,18):models.length+' models')}
     ${kpi('Total cost', fmtCost(cost), 'var(--cyan)', totIn.toLocaleString()+' in / '+totOut.toLocaleString()+' out tok')}
     ${kpi('Avg latency', avgLat.toFixed(2)+'s', 'var(--text)', 'p99 '+p99Lat.toFixed(2)+'s')}
+    ${avgTps>0?kpi('Avg tok/s', avgTps.toFixed(1), 'var(--text2)', tpsList.length+' measured'):''}
     ${kpi('Blocked', blkCnt, blkCnt>0?'var(--red)':'var(--green)', blkCnt>0?'fault intercepted':'all through')}
+    ${kpi('Modified', modCnt, modCnt>0?'var(--yellow)':'var(--text3)', modCnt>0?'response altered':'')}
     ${kpi('Retries', retryCnt, retryCnt>0?'var(--yellow)':'var(--text3)', retryCnt>0?retryCnt+' retry calls':'')}
+    ${totTools>0?kpi('Tool calls', totTools, '#a78bfa', 'from responses'):''}
   </div>`;
 
   // Charts: tokens stacked + latency side by side
@@ -2291,13 +2323,26 @@ function buildDPLLM(calls) {
           ${c.fault_offset_s!=null?`<span style="font-size:10px;color:var(--text3);margin-left:auto">⚡+${c.fault_offset_s.toFixed(1)}s</span>`:''}
         </div>
         <!-- stats inline row -->
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:7px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:5px;flex-wrap:wrap">
           <span style="font-size:13px;font-weight:600;color:var(--text);font-family:var(--mono)">${c.latency_s!=null?c.latency_s.toFixed(2)+'s':'—'}</span>
           <span style="font-size:11px;color:var(--text3)">|</span>
           <span style="font-size:11px;color:var(--text2);font-family:var(--mono)">${(pTok+cTok).toLocaleString()} tok</span>
+          ${c.tokens_per_second>0?`<span style="font-size:10px;color:var(--text3)">@ <b style="color:var(--text2)">${c.tokens_per_second.toFixed(1)}</b> tok/s</span>`:''}
           <span style="font-size:11px;color:var(--text3)">|</span>
           <span style="font-size:11px;color:var(--cyan);font-family:var(--mono)">${fmtCost(c.cost_usd)}</span>
           ${c.ttft_s&&c.ttft_s>0?`<span style="font-size:10px;color:var(--text3)">TTFT <b style="color:var(--text2)">${c.ttft_s.toFixed(3)}s</b></span>`:''}
+          ${c.message_count>0?`<span style="font-size:10px;color:var(--text3)">${c.message_count} msg${c.message_count!==1?'s':''}</span>`:''}
+          ${c.response_tool_calls>0?`<span style="font-size:10px;color:#a78bfa;font-weight:600">${c.response_tool_calls} tool call${c.response_tool_calls!==1?'s':''}</span>`:''}
+        </div>
+        <!-- secondary details chips -->
+        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:6px">
+          ${c.is_streaming?`<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid rgba(99,102,241,.4);color:#a5b4fc;background:rgba(99,102,241,.1)">streaming</span>`:''}
+          ${c.temperature!=null?`<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text3);background:var(--panel)">temp ${c.temperature}</span>`:''}
+          ${c.max_tokens_requested>0?`<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text3);background:var(--panel)">max ${c.max_tokens_requested.toLocaleString()} tok</span>`:''}
+          ${c.request_size_bytes>0?`<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text3);background:var(--panel)">req ${(c.request_size_bytes/1024).toFixed(1)} KB</span>`:''}
+          ${c.response_size_bytes>0?`<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text3);background:var(--panel)">res ${(c.response_size_bytes/1024).toFixed(1)} KB</span>`:''}
+          ${c.rate_limit_remaining_requests!=null?`<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text3);background:var(--panel)">rl-req ${c.rate_limit_remaining_requests.toLocaleString()}</span>`:''}
+          ${c.rate_limit_remaining_tokens!=null?`<span style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text3);background:var(--panel)">rl-tok ${c.rate_limit_remaining_tokens.toLocaleString()}</span>`:''}
         </div>
         <!-- compact token bar -->
         <div style="margin-bottom:7px">
