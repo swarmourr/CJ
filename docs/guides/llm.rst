@@ -3,6 +3,19 @@
 LLM API Faults
 ==============
 
+.. note::
+
+   **Proxy faults vs** ``inject()`` **— which to use?**
+
+   * Use **this page** (proxy faults: ``LLMLatency``, ``LLMRateLimit``, …) when
+     you need streaming interrupts, per-session cost tracking (``LLMBudgetExceeded``),
+     or network-level protocol realism.
+   * Use :ref:`guide-intercept` (``inject(Latency(3.0))``) when you want
+     zero-setup testing that works on macOS and CI with no port configuration.
+
+   Both inject the same logical faults — the proxy runs a real TCP server while
+   ``inject()`` patches Python's HTTP transport layer.
+
 Modern AI applications embed LLM calls deep inside agent loops, tool chains,
 and multi-step workflows.  When the model API is slow, throttled, or down the
 entire application can stall, retry infinitely, or produce silent wrong

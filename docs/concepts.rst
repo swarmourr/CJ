@@ -19,7 +19,7 @@ methods:
 
 Faults are grouped by the layer they target:
 
-**Infrastructure — Network**
+**Infrastructure — Network** (:ref:`guide-network`)
 
 .. list-table::
    :header-rows: 1
@@ -40,11 +40,23 @@ Faults are grouped by the layer they target:
    * - ``NetworkDuplicate``
      - Duplicate N % of packets
      - tc netem
+   * - ``NetworkBandwidthLimit``
+     - Cap interface throughput to a maximum rate
+     - tc netem rate
+   * - ``NetworkReorder``
+     - Deliver a fraction of packets out of order
+     - tc netem reorder
+   * - ``NetworkReset``
+     - Inject TCP RST to abruptly terminate connections
+     - iptables
+   * - ``NetworkPartition``
+     - Drop all traffic to/from a specific IP
+     - iptables
    * - ``SilentNetworkCorrupt``
      - Flip bits silently — TCP checksum still valid
      - BPF / XDP
 
-**Infrastructure — Storage**
+**Infrastructure — Storage** (:ref:`guide-storage`)
 
 .. list-table::
    :header-rows: 1
@@ -54,10 +66,16 @@ Faults are grouped by the layer they target:
      - Effect
      - Tool
    * - ``StorageCorrupt``
-     - Flip random bytes in files on a schedule; fully revertible
+     - Flip random bytes in files on a crontab schedule; fully revertible
      - dd + cj_storage
+   * - ``StorageCorruptImmediate``
+     - Corrupt specific bytes in a file instantly at ``start()``
+     - dd
+   * - ``SQLiteCorrupt``
+     - Overwrite a SQLite page — triggers "disk image is malformed"
+     - dd
 
-**Infrastructure — Process / Service / Container**
+**Infrastructure — Process / Service / Container** (:ref:`guide-process`)
 
 .. list-table::
    :header-rows: 1
@@ -76,7 +94,7 @@ Faults are grouped by the layer they target:
      - Kill / stop / pause / remove a Docker container
      - docker
 
-**Infrastructure — Resource Exhaustion**
+**Infrastructure — Resource Exhaustion** (:ref:`guide-resources`)
 
 .. list-table::
    :header-rows: 1
@@ -97,8 +115,17 @@ Faults are grouped by the layer they target:
    * - ``IOStress``
      - Generate sustained disk I/O load
      - stress-ng
+   * - ``InodeFull``
+     - Exhaust filesystem inodes with empty files
+     - touch / xargs
+   * - ``FDExhaust``
+     - Hold open ``count`` file descriptors until ``ulimit`` is hit
+     - python3
+   * - ``ProcessExhaust``
+     - Fork ``count`` background processes to hit kernel PID limit
+     - bash / sleep
 
-**LLM / AI — API Faults**
+**LLM / AI — API Faults** (:ref:`guide-llm`)
 
 .. list-table::
    :header-rows: 1
@@ -122,6 +149,18 @@ Faults are grouped by the layer they target:
    * - ``LLMUnavailable``
      - Return 503 for every call
      - HTTP proxy
+   * - ``LLMUnauthorized``
+     - Return 401 (invalid / expired API key) with realistic delay
+     - HTTP proxy
+   * - ``LLMForbidden``
+     - Return 403 (permission boundary) with realistic delay
+     - HTTP proxy
+   * - ``LLMAuthExpiry``
+     - First N calls succeed, then 401 (token expiry simulation)
+     - HTTP proxy
+   * - ``LLMContextLengthExceeded``
+     - Return 400 ``context_length_exceeded`` to test chunking fallbacks
+     - HTTP proxy
    * - ``LLMHallucination``
      - Replace the model's answer with a false statement
      - HTTP proxy
@@ -131,6 +170,9 @@ Faults are grouped by the layer they target:
    * - ``LLMTokenStarvation``
      - Force max_tokens to a very small value
      - HTTP proxy
+   * - ``LLMBudgetExceeded``
+     - Return 402 once cumulative cost exceeds ``max_cost_usd``
+     - HTTP proxy
    * - ``ToolFault``
      - Fail all tool calls (or a named tool)
      - HTTP proxy
@@ -138,7 +180,50 @@ Faults are grouped by the layer they target:
      - Fail / timeout / drop MCP server calls
      - HTTP proxy
 
-**LLM / AI — Semantic Faults**
+**LLM / AI — SDK Intercept Behaviors** (:ref:`guide-intercept`)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 45 25
+
+   * - Class
+     - Effect
+     - Mechanism
+   * - ``Latency``
+     - Sleep N seconds before every matching request
+     - Transport patch
+   * - ``Jitter``
+     - Sleep a random duration between min and max seconds
+     - Transport patch
+   * - ``RateLimit``
+     - Return 429 after the first N requests succeed
+     - Transport patch
+   * - ``Unavailable``
+     - Return 503 for every matching request
+     - Transport patch
+   * - ``Timeout``
+     - Raise ``httpx.TimeoutException`` / ``requests.Timeout``
+     - Transport patch
+   * - ``CorruptResponse``
+     - Return 200 with garbled JSON body
+     - Transport patch
+   * - ``Unauthorized``
+     - Return 401 with realistic delay; optional ``after_n`` pass-through
+     - Transport patch
+   * - ``Forbidden``
+     - Return 403 with realistic delay
+     - Transport patch
+   * - ``AuthExpiry``
+     - First N calls succeed, then 401
+     - Transport patch
+   * - ``ToolMutate``
+     - Silently corrupt tool-call results before the LLM sees them
+     - Transport patch
+   * - ``PromptInjection``
+     - Append adversarial text to outgoing LLM messages
+     - Transport patch
+
+**LLM / AI — Semantic Faults** (:ref:`guide-semantic`)
 
 .. list-table::
    :header-rows: 1
@@ -153,7 +238,7 @@ Faults are grouped by the layer they target:
 
   Modes: ``entity_swap``, ``context_truncate``, ``inject_distractor``, ``rag_poison``
 
-**LLM / AI — State Faults**
+**LLM / AI — State Faults** (:ref:`guide-state`)
 
 .. list-table::
    :header-rows: 1
@@ -173,6 +258,40 @@ Faults are grouped by the layer they target:
      - psql
 
   Mutation modes: ``nullify``, ``delete``, ``negate``, ``type_mismatch``, ``inject``
+
+**LLM / AI — Skill File Faults** (:ref:`guide-skill`)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 45 25
+
+   * - Class
+     - Effect
+     - Tool
+   * - ``SkillFileUnavailable``
+     - Empty the skill file — agent has no instructions
+     - file I/O
+   * - ``SkillFileInstructionCorrupt``
+     - Garble the instruction body (shuffle / truncate / contradict)
+     - file I/O
+   * - ``SkillFileVersionSkew``
+     - Replace version field in frontmatter with an old version string
+     - file I/O
+   * - ``SkillFileBadOutput``
+     - Corrupt examples section (empty / wrong / truncate)
+     - file I/O
+   * - ``SkillFileMemoryStale``
+     - Replace examples/context with caller-supplied stale data
+     - file I/O
+   * - ``SkillFileConflict``
+     - Append a contradictory override block at the end of the file
+     - file I/O
+   * - ``SkillFilePermissionDenied``
+     - Set file permissions to 000 — agent cannot read it
+     - chmod
+   * - ``SkillJSONCorrupt``
+     - Corrupt a field inside a JSON tool-definition file
+     - file I/O
 
 ----
 

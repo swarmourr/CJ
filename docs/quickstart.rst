@@ -1,6 +1,50 @@
 Quickstart
 ==========
 
+Two paths — pick yours
+-----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - **Testing an AI agent?**
+     - **Testing infrastructure?**
+   * - Inject faults into LLM API calls, tool results, RAG context, agent
+       state, or skill definitions.  Works on **macOS or Linux**.  No ``sudo``
+       or Linux kernel required for most faults.
+     - Inject network delay/loss, storage corruption, process crashes, CPU /
+       memory / disk exhaustion on a Linux machine via SSH.  Requires a Linux
+       target and ``sudo``.
+   * - **Start here →** Examples 1 & 2 below, then
+
+       * :ref:`guide-intercept` — zero-setup ``inject()`` API (recommended first)
+       * :ref:`guide-llm` — proxy-based faults (streaming, cost tracking)
+       * :ref:`guide-semantic` — RAG poison, entity swap
+       * :ref:`guide-skill` — skill / tool definition faults
+     - **Start here →** Examples 3 & 4 below, then
+
+       * :ref:`guide-network` — delay, loss, bandwidth, partition
+       * :ref:`guide-storage` — bit-flip, SQLite, immediate corruption
+       * :ref:`guide-process` — process kill, service stop, container chaos
+       * :ref:`guide-resources` — CPU, memory, disk, inode, FD exhaustion
+
+.. note::
+
+   **Which API should I use?**
+
+   chaos-jungle has two ways to inject faults into LLM calls:
+
+   * ``inject(Latency(3.0))`` — :ref:`intercept layer <guide-intercept>`.
+     Zero setup, works everywhere, best for local tests and CI.
+   * ``LLMLatency(delay_s=3.0)`` — :ref:`proxy faults <guide-llm>`.
+     Real TCP proxy, supports streaming faults and per-session cost tracking.
+
+   **If in doubt, start with** ``inject()``. Switch to proxy faults when you
+   need streaming interrupts, budget tracking, or network-level realism.
+
+----
+
 Installation
 ------------
 

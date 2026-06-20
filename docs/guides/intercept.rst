@@ -3,6 +3,50 @@
 SDK Intercept
 =============
 
+.. tip::
+
+   **New to chaos-jungle?  Start here.**  ``inject()`` is the fastest way to
+   test an AI agent — no subprocess, no port configuration, no Linux required.
+   It works on macOS and in CI out of the box.
+
+   If you need streaming fault injection, per-session cost tracking, or
+   network-level protocol realism, use the :ref:`proxy faults <guide-llm>`
+   instead.
+
+Intercept vs proxy — which to use
+-----------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Feature
+     - ``inject()`` **(this page)**
+     - Proxy faults (:ref:`guide-llm`)
+   * - Setup needed
+     - **None** — just import and wrap
+     - Port + upstream URL config per fault
+   * - OS support
+     - Any OS (macOS, Linux, Windows)
+     - Linux + macOS
+   * - Affects all SDKs
+     - Yes — all httpx / requests clients
+     - Only clients pointing to the proxy
+   * - Streaming (SSE) faults
+     - Response-level only
+     - Full per-chunk injection
+   * - Per-session cost tracking
+     - No
+     - Yes (``LLMBudgetExceeded``)
+   * - Network-level realism
+     - Medium (Python intercept)
+     - High (real TCP proxy)
+   * - Best for
+     - Local tests, CI, unit tests
+     - Integration tests, infrastructure chaos
+
+----
+
 The intercept layer injects faults **at the HTTP transport level** — it patches
 ``httpx`` and ``requests`` directly so every LLM SDK is affected without any
 per-SDK integration code.
@@ -205,8 +249,6 @@ CLI:
 
    chaos-jungle list        # see test sessions
    chaos-jungle dashboard   # browse in the web UI
-
-----
 
 ----
 
@@ -440,37 +482,6 @@ how ``ToolMutate`` and ``PromptInjection`` work internally:
 
    with inject(RedactPII()):
        agent.run("Contact support at alice@example.com")
-
-----
-
-Intercept vs proxy faults
---------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 35 35
-
-   * - Feature
-     - Proxy faults (``LLMLatency`` etc.)
-     - Intercept (``inject()``)
-   * - Works on
-     - Linux + macOS
-     - Any OS
-   * - Requires port setup
-     - Yes (``port=``, ``upstream=``)
-     - No
-   * - Affects all SDKs
-     - Only those pointing to proxy
-     - Yes — all httpx / requests
-   * - Streaming faults
-     - Yes
-     - Partial (response-level only)
-   * - Network-level realism
-     - High (real TCP proxy)
-     - Medium (Python-level)
-   * - Best for
-     - Infrastructure chaos
-     - Unit / integration tests
 
 ----
 
