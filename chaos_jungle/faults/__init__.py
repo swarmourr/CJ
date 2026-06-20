@@ -6,8 +6,16 @@ from chaos_jungle.faults.network import (
     NetworkDelay,
     NetworkDuplicate,
     NetworkLoss,
+    NetworkBandwidthLimit,
+    NetworkReorder,
+    NetworkReset,
+    NetworkPartition,
 )
-from chaos_jungle.faults.storage import StorageCorrupt
+from chaos_jungle.faults.storage import (
+    StorageCorrupt,
+    StorageCorruptImmediate,
+    SQLiteCorrupt,
+)
 from chaos_jungle.faults.bpf import SilentNetworkCorrupt
 from chaos_jungle.faults.llm import (
     LLMLatency,
@@ -21,6 +29,10 @@ from chaos_jungle.faults.llm import (
     LLMTokenStarvation,
     MCPFault,
     SemanticCorrupt,
+    LLMUnauthorized,
+    LLMForbidden,
+    LLMAuthExpiry,
+    LLMContextLengthExceeded,
 )
 from chaos_jungle.faults.state import (
     RedisStateCorrupt,
@@ -37,6 +49,9 @@ from chaos_jungle.faults.resources import (
     CPUStress,
     MemoryStress,
     IOStress,
+    InodeFull,
+    FDExhaust,
+    ProcessExhaust,
 )
 from chaos_jungle.faults.gpu import (
     GPUThrottle,
@@ -64,6 +79,7 @@ from chaos_jungle.faults.skill_file import (
     SkillFileMemoryStale,
     SkillFileConflict,
     SkillFilePermissionDenied,
+    SkillJSONCorrupt,
 )
 
 __all__ = [
@@ -75,8 +91,14 @@ __all__ = [
     "NetworkCorrupt",
     "NetworkDuplicate",
     "SilentNetworkCorrupt",
+    "NetworkBandwidthLimit",
+    "NetworkReorder",
+    "NetworkReset",
+    "NetworkPartition",
     # Storage
     "StorageCorrupt",
+    "StorageCorruptImmediate",
+    "SQLiteCorrupt",
     # LLM
     "LLMLatency",
     "LLMRateLimit",
@@ -89,6 +111,10 @@ __all__ = [
     "LLMTokenStarvation",
     "MCPFault",
     "SemanticCorrupt",
+    "LLMUnauthorized",
+    "LLMForbidden",
+    "LLMAuthExpiry",
+    "LLMContextLengthExceeded",
     # State
     "RedisStateCorrupt",
     "JsonStateCorrupt",
@@ -102,6 +128,9 @@ __all__ = [
     "CPUStress",
     "MemoryStress",
     "IOStress",
+    "InodeFull",
+    "FDExhaust",
+    "ProcessExhaust",
     # GPU
     "GPUThrottle",
     "GPUMemoryPressure",
@@ -126,4 +155,5 @@ __all__ = [
     "SkillFileMemoryStale",
     "SkillFileConflict",
     "SkillFilePermissionDenied",
+    "SkillJSONCorrupt",
 ]

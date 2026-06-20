@@ -47,6 +47,19 @@ Available faults
      - Allocate N MiB of RAM using ``stress-ng --vm``
    * - ``IOStress``
      - Generate sustained disk I/O load using ``stress-ng --hdd``
+   * - ``InodeFull``
+     - Exhaust filesystem inodes by creating many tiny files
+   * - ``FDExhaust``
+     - Hold open ``count`` file descriptors to exhaust per-process ``ulimit``
+   * - ``ProcessExhaust``
+     - Fork ``count`` background processes to approach the kernel PID limit
+
+.. note::
+
+   Each ``CPUStress``, ``MemoryStress``, and ``IOStress`` instance tracks its
+   ``stress-ng`` process via a unique UUID PID file.  ``stop()`` kills only
+   the process started by this instance — concurrent fault runs on the same
+   machine do not interfere.
 
 Installing dependencies on the target
 --------------------------------------
@@ -209,6 +222,92 @@ latency for all other I/O on the same disk.
 **Default metrics:** ``iops``, ``io_wait_ms``, ``read_latency_ms``, ``write_latency_ms``, ``duration_s``
 
 
+InodeFull
+---------
+
+Creates a hidden directory under ``path`` and populates it with ``count``
+zero-byte files in parallel (4 workers).  A filesystem can exhaust its
+inode table while still reporting free space — any subsequent ``open()``
+or ``mkdir()`` call will fail with ``ENOSPC`` even though ``df`` shows
+space available.
+
+``stop()`` / ``revert()`` remove the fill directory and all created files.
+
+.. code-block:: python
+
+   from chaos_jungle import InodeFull
+   from chaos_jungle.targets import SSHTarget
+
+   target = SSHTarget("10.0.0.5", user="ubuntu")
+
+   # Exhaust inodes on the /var/log filesystem
+   fault = InodeFull("/var/log/app", count=200_000)
+
+**What to observe:**
+
+* Does the application catch ``ENOSPC`` on inode exhaustion (vs. disk-full)?
+* Do log-rotation daemons fail silently and accumulate unbounded logs?
+
+**Default metrics:** ``inode_used``, ``write_errors``, ``duration_s``
+
+
+FDExhaust
+---------
+
+Starts a background Python process that opens ``count`` file descriptors
+(``/dev/null``) and holds them open until ``stop()``.  When the per-process
+``ulimit -n`` is hit, any further ``open()`` or ``socket()`` call in any
+process on the machine fails with ``EMFILE`` (Too many open files).
+
+.. code-block:: python
+
+   from chaos_jungle import FDExhaust
+   from chaos_jungle.targets import SSHTarget
+
+   fault = FDExhaust(count=60_000)
+
+**What to observe:**
+
+* Does the application handle ``EMFILE`` gracefully (close idle connections)?
+* Do connection pools fail to acquire new sockets?
+* Does the health-check endpoint itself fail, causing the load balancer to
+  remove the node from rotation?
+
+**Default metrics:** ``open_fds``, ``write_errors``, ``error_rate``, ``duration_s``
+
+
+ProcessExhaust
+--------------
+
+Spawns ``count`` background ``sleep 86400`` subprocesses under a single
+parent bash process.  When the kernel PID namespace limit
+(``/proc/sys/kernel/pid_max``) is approached, ``fork()`` / ``clone()``
+calls fail with ``EAGAIN``.  Services that need to spawn workers (gunicorn,
+celery, agent tool executors) will fail to start new processes.
+
+``stop()`` sends ``SIGKILL`` to the parent bash process group, which tears
+down all children simultaneously.
+
+.. code-block:: python
+
+   from chaos_jungle import ProcessExhaust
+   from chaos_jungle.targets import SSHTarget
+
+   fault = ProcessExhaust(count=5_000)
+
+**What to observe:**
+
+* Do agent tool executors fail to launch subprocesses gracefully?
+* Does the application surface a meaningful error instead of hanging?
+
+.. warning::
+
+   ``danger_level = 3``.  Set ``count`` conservatively.  Approaching
+   ``pid_max`` on a shared machine can disrupt unrelated processes.
+
+**Default metrics:** ``process_count``, ``error_rate``, ``duration_s``
+
+
 Combined degraded-node scenario
 ---------------------------------
 
@@ -248,15 +347,21 @@ Revert behaviour
 All resource faults clean up on ``stop()`` and ``revert()``:
 
 * ``DiskFull`` — deletes ``{path}/.cj_diskfill``
-* ``CPUStress`` — kills ``stress-ng --cpu`` processes, removes log file
-* ``MemoryStress`` — kills ``stress-ng --vm`` processes, removes log file
-* ``IOStress`` — kills ``stress-ng --hdd`` processes, removes log file
+* ``CPUStress`` — kills stress-ng by PID (unique per instance), removes PID file and log
+* ``MemoryStress`` — kills stress-ng by PID (unique per instance), removes PID file and log
+* ``IOStress`` — kills stress-ng by PID (unique per instance), removes PID file and log
+* ``InodeFull`` — removes the UUID fill directory and all created files
+* ``FDExhaust`` — kills the background Python process by PID
+* ``ProcessExhaust`` — kills the parent bash process group (all children die with it)
 
 If the target machine is lost mid-experiment, run this on the target to
 clean up manually::
 
    pkill -f stress-ng || true
-   rm -f /tmp/.cj_diskfill /tmp/cj_*.log
+   rm -f /tmp/cj_cpu_stress_*.pid /tmp/cj_mem_stress_*.pid
+   rm -f /tmp/cj_io_stress_*.pid  /tmp/cj_fd_exhaust_*.pid
+   rm -f /tmp/cj_proc_exhaust_*.pid /tmp/cj_*.log
+   rm -rf /tmp/.cj_inodefill_*
 
 See also
 --------

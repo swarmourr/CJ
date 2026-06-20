@@ -1314,6 +1314,199 @@ def door(
     return results
 
 
+class Unauthorized(Behavior):
+    """
+    Return HTTP 401 to simulate an invalid or expired API key.
+
+    Adds a short realistic delay before responding (default 100 ms + jitter)
+    so the agent sees the same timing it would in production.
+
+    Parameters
+    ----------
+    after_n : int
+        Number of requests to let through before returning 401. Default ``0``
+        (block immediately).
+    response_delay_s : float
+        Fixed delay in seconds added before every 401 response. Default ``0.1``.
+    jitter_s : float
+        Additional uniform-random jitter (0 to this value). Default ``0.05``.
+    probability : float
+        Fraction of matching requests this behavior fires on. Default ``1.0``.
+
+    Examples
+    --------
+    ::
+
+        # All requests fail immediately with 401
+        with inject(Unauthorized()):
+            client.chat.completions.create(...)
+
+        # First 3 succeed, then 401
+        with inject(Unauthorized(after_n=3)):
+            for _ in range(6):
+                client.chat.completions.create(...)
+    """
+
+    def __init__(
+        self,
+        after_n: int = 0,
+        response_delay_s: float = 0.1,
+        jitter_s: float = 0.05,
+        probability: float = 1.0,
+    ) -> None:
+        self.after_n = after_n
+        self.response_delay_s = response_delay_s
+        self.jitter_s = jitter_s
+        self.probability = probability
+        self._count = 0
+        self._lock = threading.Lock()
+
+    def after(self, url: str, response: Any) -> Any:
+        with self._lock:
+            self._count += 1
+            blocked = self._count > self.after_n
+
+        if not blocked:
+            return response
+
+        delay = self.response_delay_s
+        if self.jitter_s > 0:
+            delay += random.uniform(0.0, self.jitter_s)
+        if delay > 0:
+            time.sleep(delay)
+
+        payload = {
+            "error": {
+                "message": "Invalid API key or token expired — injected by chaos-jungle",
+                "type": "invalid_api_key",
+                "code": "unauthorized",
+            }
+        }
+        return _mock_response(401, payload, response)
+
+    def __repr__(self) -> str:
+        return f"Unauthorized(after_n={self.after_n})"
+
+
+class Forbidden(Behavior):
+    """
+    Return HTTP 403 to simulate a permission boundary or policy violation.
+
+    Parameters
+    ----------
+    response_delay_s : float
+        Fixed delay before the 403 response. Default ``0.1`` s.
+    jitter_s : float
+        Additional random jitter. Default ``0.05`` s.
+    probability : float
+        Fraction of matching requests this behavior fires on. Default ``1.0``.
+
+    Examples
+    --------
+    ::
+
+        with inject(Forbidden()):
+            client.chat.completions.create(...)
+    """
+
+    def __init__(
+        self,
+        response_delay_s: float = 0.1,
+        jitter_s: float = 0.05,
+        probability: float = 1.0,
+    ) -> None:
+        self.response_delay_s = response_delay_s
+        self.jitter_s = jitter_s
+        self.probability = probability
+
+    def after(self, url: str, response: Any) -> Any:
+        delay = self.response_delay_s
+        if self.jitter_s > 0:
+            delay += random.uniform(0.0, self.jitter_s)
+        if delay > 0:
+            time.sleep(delay)
+
+        payload = {
+            "error": {
+                "message": "You do not have permission to perform this action — injected by chaos-jungle",
+                "type": "permission_denied",
+                "code": "forbidden",
+            }
+        }
+        return _mock_response(403, payload, response)
+
+    def __repr__(self) -> str:
+        return "Forbidden()"
+
+
+class AuthExpiry(Behavior):
+    """
+    Simulate a token that expires mid-session.
+
+    The first ``valid_calls`` requests succeed normally; all subsequent
+    requests return HTTP 401.
+
+    Parameters
+    ----------
+    valid_calls : int
+        Number of successful calls before the token expires. Default ``5``.
+    response_delay_s : float
+        Fixed delay on 401 responses. Default ``0.1`` s.
+    jitter_s : float
+        Additional random jitter. Default ``0.05`` s.
+    probability : float
+        Fraction of matching requests this behavior fires on. Default ``1.0``.
+
+    Examples
+    --------
+    ::
+
+        with inject(AuthExpiry(valid_calls=5)):
+            for _ in range(10):
+                client.chat.completions.create(...)   # calls 6-10 get 401
+    """
+
+    def __init__(
+        self,
+        valid_calls: int = 5,
+        response_delay_s: float = 0.1,
+        jitter_s: float = 0.05,
+        probability: float = 1.0,
+    ) -> None:
+        self.valid_calls = valid_calls
+        self.response_delay_s = response_delay_s
+        self.jitter_s = jitter_s
+        self.probability = probability
+        self._count = 0
+        self._lock = threading.Lock()
+
+    def after(self, url: str, response: Any) -> Any:
+        with self._lock:
+            self._count += 1
+            expired = self._count > self.valid_calls
+
+        if not expired:
+            return response
+
+        delay = self.response_delay_s
+        if self.jitter_s > 0:
+            delay += random.uniform(0.0, self.jitter_s)
+        if delay > 0:
+            time.sleep(delay)
+
+        payload = {
+            "error": {
+                "message": "Token expired — injected by chaos-jungle",
+                "type": "invalid_api_key",
+                "code": "token_expired",
+            }
+        }
+        return _mock_response(401, payload, response)
+
+    def __repr__(self) -> str:
+        return f"AuthExpiry(valid_calls={self.valid_calls})"
+
+
 __all__ = [
     "inject",
     "door",
@@ -1325,4 +1518,7 @@ __all__ = [
     "Unavailable",
     "Timeout",
     "CorruptResponse",
+    "Unauthorized",
+    "Forbidden",
+    "AuthExpiry",
 ]

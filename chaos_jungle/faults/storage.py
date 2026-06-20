@@ -163,3 +163,139 @@ class StorageCorrupt(Fault):
             "interval": self.interval,
             "recursive": self.recursive,
         }
+
+
+class StorageCorruptImmediate(Fault):
+    """Corrupt a file immediately by overwriting bytes at a specific offset.
+
+    Uses ``dd`` to write random bytes from ``/dev/urandom`` directly into
+    the file at ``offset``.  The original bytes are backed up before
+    overwriting so ``revert()`` can restore them exactly.
+
+    Unlike :class:`StorageCorrupt` (which runs on a crontab schedule),
+    this fault fires instantly at ``start()`` time — useful for injecting
+    corruption at a precise moment during a test.
+
+    Requires ``sudo`` on the target (raw block write via ``dd``).
+
+    Parameters
+    ----------
+    file_path : str
+        Absolute path to the file to corrupt.
+    offset : int
+        Byte offset at which to start writing random bytes. Default ``0``.
+    byte_count : int
+        Number of bytes to overwrite with random data. Default ``16``.
+
+    Examples
+    --------
+    >>> fault = StorageCorruptImmediate("/data/model.bin", offset=1024, byte_count=32)
+    """
+
+    danger_level: int          = 2
+    default_metrics: list[str] = ["read_errors", "parse_errors", "checksum_errors", "corrupted_files"]
+
+    def __init__(self, file_path: str, offset: int = 0, byte_count: int = 16) -> None:
+        if not file_path or not file_path.startswith("/"):
+            raise ValueError(
+                "StorageCorruptImmediate 'file_path' must be an absolute path."
+            )
+        if offset < 0:
+            raise ValueError(f"StorageCorruptImmediate 'offset' must be >= 0, got {offset}.")
+        if byte_count < 1:
+            raise ValueError(f"StorageCorruptImmediate 'byte_count' must be >= 1, got {byte_count}.")
+        self.file_path  = file_path
+        self.offset     = offset
+        self.byte_count = byte_count
+        self._backup_path = file_path + ".cj_backup"
+
+    def start(self, target: "Target") -> None:
+        # Back up the original file
+        target.run(f"cp '{self.file_path}' '{self._backup_path}'")
+        # Overwrite byte_count bytes at offset with random data
+        target.sudo(
+            f"dd if=/dev/urandom of='{self.file_path}' "
+            f"bs=1 count={self.byte_count} seek={self.offset} conv=notrunc 2>/dev/null"
+        )
+
+    def stop(self, target: "Target") -> None:
+        pass  # revert() restores the file
+
+    def revert(self, target: "Target") -> None:
+        _, exists, _ = target.run(f"test -f '{self._backup_path}' && echo yes || echo no")
+        if exists.strip() == "yes":
+            target.run(f"mv '{self._backup_path}' '{self.file_path}'")
+
+    def _parameters(self) -> dict:
+        return {
+            "file_path":  self.file_path,
+            "offset":     self.offset,
+            "byte_count": self.byte_count,
+        }
+
+
+class SQLiteCorrupt(Fault):
+    """Corrupt a page in a SQLite database file using ``dd``.
+
+    Overwrites one full page of the SQLite database with random bytes.
+    SQLite will detect the checksum mismatch and raise
+    ``sqlite3.DatabaseError: database disk image is malformed`` on the
+    next read.
+
+    The original file is backed up so ``revert()`` can restore it.
+
+    Requires ``sudo`` on the target.
+
+    Parameters
+    ----------
+    db_path : str
+        Absolute path to the SQLite ``.db`` file.
+    page : int
+        Zero-based page index to corrupt. Page 0 is the header/root page
+        (most disruptive); higher pages target specific B-tree nodes.
+        Default ``1`` (first data page — avoids the file header).
+    page_size : int
+        SQLite page size in bytes. Default ``4096`` (SQLite default).
+
+    Examples
+    --------
+    >>> fault = SQLiteCorrupt("/var/agent/state.db")
+    >>> fault = SQLiteCorrupt("/var/agent/state.db", page=2, page_size=4096)
+    """
+
+    danger_level: int          = 2
+    default_metrics: list[str] = ["read_errors", "parse_errors", "query_errors", "corrupted_files"]
+
+    def __init__(self, db_path: str, page: int = 1, page_size: int = 4096) -> None:
+        if not db_path or not db_path.startswith("/"):
+            raise ValueError("SQLiteCorrupt 'db_path' must be an absolute path.")
+        if page < 0:
+            raise ValueError(f"SQLiteCorrupt 'page' must be >= 0, got {page}.")
+        if page_size < 512:
+            raise ValueError(f"SQLiteCorrupt 'page_size' must be >= 512, got {page_size}.")
+        self.db_path   = db_path
+        self.page      = page
+        self.page_size = page_size
+        self._backup_path = db_path + ".cj_backup"
+
+    def start(self, target: "Target") -> None:
+        target.run(f"cp '{self.db_path}' '{self._backup_path}'")
+        target.sudo(
+            f"dd if=/dev/urandom of='{self.db_path}' "
+            f"bs={self.page_size} count=1 seek={self.page} conv=notrunc 2>/dev/null"
+        )
+
+    def stop(self, target: "Target") -> None:
+        pass
+
+    def revert(self, target: "Target") -> None:
+        _, exists, _ = target.run(f"test -f '{self._backup_path}' && echo yes || echo no")
+        if exists.strip() == "yes":
+            target.run(f"mv '{self._backup_path}' '{self.db_path}'")
+
+    def _parameters(self) -> dict:
+        return {
+            "db_path":   self.db_path,
+            "page":      self.page,
+            "page_size": self.page_size,
+        }

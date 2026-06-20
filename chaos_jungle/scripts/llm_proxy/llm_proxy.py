@@ -159,6 +159,18 @@ _STATIC = {
         402,
         b'{"error":{"message":"Token budget exceeded (chaos-jungle)","type":"chaos_budget_exceeded","code":"budget_exceeded"}}',
     ),
+    "unauthorized": (
+        401,
+        b'{"error":{"message":"Invalid API key or token expired (chaos-jungle)","type":"invalid_api_key","code":"unauthorized"}}',
+    ),
+    "forbidden": (
+        403,
+        b'{"error":{"message":"You do not have permission to perform this action (chaos-jungle)","type":"permission_denied","code":"forbidden"}}',
+    ),
+    "context_length": (
+        400,
+        b'{"error":{"message":"This model\'s maximum context length has been exceeded (chaos-jungle)","type":"invalid_request_error","code":"context_length_exceeded"}}',
+    ),
     "timeout": (
         504,
         b'{"error":{"message":"Gateway Timeout (chaos-jungle)","type":"chaos_timeout","code":"gateway_timeout"}}',
@@ -1075,45 +1087,73 @@ def _effective_chain() -> list[dict]:
 
 
 def _check_block(cfg: dict, count: int, req_body: "dict | None") -> "tuple[int, bytes] | None":
-    """Return (status, body) if this fault should block the request, else None."""
+    """Return (status, body) if this fault should block the request, else None.
+
+    If ``response_delay_s`` or ``jitter_s`` are set in *cfg*, the delay is
+    applied before every blocking response to simulate realistic API latency
+    (real API errors arrive after TCP+TLS+processing, typically 50-300 ms).
+    """
+    import random as _random
+
     fault = cfg["fault"]
+    block: "tuple[int, bytes] | None" = None
+
     if fault == "unavailable":
-        return _STATIC["unavailable"]
-    if fault == "mcp_unavailable":
-        return _STATIC["mcp_unavailable"]
-    if fault == "rate_limit" and count > cfg.get("n", 5):
-        return _STATIC["rate_limit"]
-    if fault == "budget_exceeded":
+        block = _STATIC["unavailable"]
+    elif fault == "mcp_unavailable":
+        block = _STATIC["mcp_unavailable"]
+    elif fault == "rate_limit" and count > cfg.get("n", 5):
+        block = _STATIC["rate_limit"]
+    elif fault == "budget_exceeded":
         with _cost_lock:
             current_cost = _cost_usd
         if current_cost >= cfg.get("budget_max_cost_usd", 0.10):
-            return _STATIC["budget_exceeded"]
-    if fault in ("timeout", "mcp_timeout"):
+            block = _STATIC["budget_exceeded"]
+    elif fault == "unauthorized":
+        after_n = cfg.get("after_n", 0)
+        if count > after_n:
+            block = _STATIC["unauthorized"]
+    elif fault == "forbidden":
+        block = _STATIC["forbidden"]
+    elif fault == "context_length":
+        block = _STATIC["context_length"]
+    elif fault in ("timeout", "mcp_timeout"):
         time.sleep(cfg.get("timeout_s", 30.0))
         return _STATIC[fault]
-    if fault == "tool_fault" and _is_tool_request(req_body):
+    elif fault == "tool_fault" and _is_tool_request(req_body):
         tool_name = cfg.get("tool_name", "")
         if not tool_name or any(
             m.get("name") == tool_name
             for m in (req_body.get("messages", []) if req_body else [])
             if m.get("role") == "tool"
         ):
-            return (400, _tool_error_response(req_body))
-    if fault == "skill_unavailable" and _is_tool_request(req_body):
+            block = (400, _tool_error_response(req_body))
+    elif fault == "skill_unavailable" and _is_tool_request(req_body):
         if _skill_name_matches(req_body, cfg.get("skill_name", "")):
-            return _STATIC["skill_unavailable"]
-    if fault == "skill_permission_denied" and _is_tool_request(req_body):
+            block = _STATIC["skill_unavailable"]
+    elif fault == "skill_permission_denied" and _is_tool_request(req_body):
         if _skill_name_matches(req_body, cfg.get("skill_name", "")):
-            return _STATIC["skill_permission_denied"]
-    if fault == "skill_dependency_missing" and _is_tool_request(req_body):
+            block = _STATIC["skill_permission_denied"]
+    elif fault == "skill_dependency_missing" and _is_tool_request(req_body):
         if _skill_name_matches(req_body, cfg.get("skill_name", "")):
-            return _STATIC["skill_dependency_missing"]
-    if fault == "skill_timeout" and _is_tool_request(req_body):
+            block = _STATIC["skill_dependency_missing"]
+    elif fault == "skill_timeout" and _is_tool_request(req_body):
         if _skill_name_matches(req_body, cfg.get("skill_name", "")):
             time.sleep(cfg.get("skill_timeout_s", 30.0))
             return _STATIC["skill_timeout"]
-    if fault == "mcp_tool_error" and _is_mcp_request(req_body):
+    elif fault == "mcp_tool_error" and _is_mcp_request(req_body):
         return (200, _mcp_tool_error_response(req_body))
+
+    if block is not None:
+        # Apply realistic response delay before returning the error
+        delay = cfg.get("response_delay_s", 0.0)
+        jitter = cfg.get("jitter_s", 0.0)
+        if jitter > 0:
+            delay += _random.uniform(0.0, jitter)
+        if delay > 0:
+            time.sleep(delay)
+        return block
+
     return None
 
 
@@ -1217,6 +1257,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0) or 0)
         raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+
+        # ── Health endpoint: GET /_cj/health ──────────────────────
+        if self.path == "/_cj/health":
+            self._reply(200, b'{"ok":true}')
+            return
 
         # ── Control endpoint: POST /_cj/session ───────────────────
         if self.path == "/_cj/session":
@@ -1403,6 +1448,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 _ALL_FAULTS = [
     "passthrough",
     "latency", "rate_limit", "budget_exceeded", "timeout", "corrupt", "unavailable",
+    "unauthorized", "forbidden", "context_length",
     "tool_fault", "hallucinate", "stream_interrupt", "token_starve",
     "mcp_tool_error", "mcp_unavailable", "mcp_timeout",
     "semantic_corrupt",
@@ -1461,6 +1507,12 @@ def main() -> None:
                    help="Price per 1 000 input tokens in USD (from model pricing table)")
     p.add_argument("--budget-output-price", type=float, default=0.0,
                    help="Price per 1 000 output tokens in USD (from model pricing table)")
+    p.add_argument("--auth-after-n", type=int, default=0,
+                   help="For unauthorized: let first N requests through before returning 401")
+    p.add_argument("--response-delay-s", type=float, default=0.0,
+                   help="Extra delay (s) before every blocking error response for realism")
+    p.add_argument("--jitter-s", type=float, default=0.0,
+                   help="Random jitter (0–N s) added on top of --response-delay-s")
     p.add_argument("--semantic-mode", default="entity_swap",
                    choices=["entity_swap", "context_truncate", "inject_distractor", "rag_poison"],
                    help="Semantic mutation mode for semantic_corrupt fault")
@@ -1519,6 +1571,9 @@ def main() -> None:
         "budget_max_cost_usd":   args.budget_max_cost_usd,
         "budget_input_price":    args.budget_input_price,
         "budget_output_price":   args.budget_output_price,
+        "after_n":               args.auth_after_n,
+        "response_delay_s":      args.response_delay_s,
+        "jitter_s":              args.jitter_s,
         "semantic_mode":         args.semantic_mode,
         "distractor":            args.semantic_distractor,
         "rag_poison":            args.semantic_rag_poison,

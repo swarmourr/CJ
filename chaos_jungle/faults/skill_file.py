@@ -348,6 +348,7 @@ class _LocalSkillFault(Fault):
         self.skill_path = Path(skill_path)
         self._backup: bytes | None = None
         self._original_mode: int | None = None
+        self._sidecar: Path | None = None
 
     # ------------------------------------------------------------------
     # Fault lifecycle
@@ -741,21 +742,121 @@ class SkillFilePermissionDenied(_LocalSkillFault):
     def start(self, target) -> None:  # type: ignore[override]
         self._backup = self.skill_path.read_bytes()
         self._original_mode = self.skill_path.stat().st_mode
+        # Persist original mode to a sidecar so it can be recovered if the
+        # process crashes before stop() runs (SKILL-2 fix).
+        self._sidecar = self.skill_path.with_suffix(self.skill_path.suffix + ".cj_mode")
+        self._sidecar.write_text(str(self._original_mode))
         os.chmod(self.skill_path, 0o000)
 
     def stop(self, target) -> None:  # type: ignore[override]
-        if self._original_mode is not None:
-            os.chmod(self.skill_path, self._original_mode)
+        # Restore mode — fall back to sidecar if in-memory state was lost
+        mode = self._original_mode
+        if mode is None and self._sidecar is not None and self._sidecar.exists():
+            try:
+                mode = int(self._sidecar.read_text().strip())
+            except (ValueError, OSError):
+                mode = 0o644
+        if mode is not None:
+            os.chmod(self.skill_path, mode)
+        if self._sidecar is not None and self._sidecar.exists():
+            self._sidecar.unlink(missing_ok=True)
         if self._backup is not None:
             self.skill_path.write_bytes(self._backup)
             self._backup = None
             self._original_mode = None
+            self._sidecar = None
 
     def _corrupt(self, content: str) -> str:
         return content  # not used — start() is overridden
 
     def _parameters(self) -> dict:
         return {"skill_path": str(self.skill_path), "mode": "chmod_000"}
+
+
+# ---------------------------------------------------------------------------
+# JSON tool-definition faults
+# ---------------------------------------------------------------------------
+
+class SkillJSONCorrupt(Fault):
+    """Corrupt a field inside a JSON tool-definition file (OpenAI function format).
+
+    Reads the JSON file, navigates to the target field using dot notation,
+    replaces its value with a corrupted version, and writes the file back.
+    ``stop()`` / ``revert()`` restore the original content exactly.
+
+    Unlike :class:`SkillFileInstructionCorrupt` (which targets Markdown/YAML),
+    this fault handles plain JSON skill definitions — the format used by
+    OpenAI function-calling schemas and many agent frameworks.
+
+    Parameters
+    ----------
+    skill_path : str
+        Path to the JSON skill file.
+    field : str
+        Dot-separated path to the field to corrupt, e.g.
+        ``"parameters.properties"`` or ``"description"``.
+        Missing intermediate keys are silently ignored.
+    corrupt_value : object, optional
+        The replacement value. Defaults to ``None`` (nullify the field).
+
+    Examples
+    --------
+    >>> fault = SkillJSONCorrupt("skills/search_web.json", field="description")
+    >>> fault = SkillJSONCorrupt(
+    ...     "skills/search_web.json",
+    ...     field="parameters.properties",
+    ...     corrupt_value={},
+    ... )
+    """
+
+    danger_level: int          = 1
+    default_metrics: list[str] = ["read_errors", "error_rate", "completion_rate"]
+
+    def __init__(
+        self,
+        skill_path: str,
+        field: str = "description",
+        corrupt_value: object = None,
+    ) -> None:
+        if not skill_path:
+            raise ValueError("SkillJSONCorrupt 'skill_path' must not be empty.")
+        if not field:
+            raise ValueError("SkillJSONCorrupt 'field' must not be empty.")
+        self.skill_path = Path(skill_path)
+        self.field = field
+        self.corrupt_value = corrupt_value
+        self._backup: bytes | None = None
+
+    def _set_nested(self, obj: dict, keys: list[str], value: object) -> None:
+        """Set a nested key in a dict, creating intermediate dicts as needed."""
+        for key in keys[:-1]:
+            if not isinstance(obj.get(key), dict):
+                obj[key] = {}
+            obj = obj[key]
+        obj[keys[-1]] = value
+
+    def start(self, target) -> None:  # type: ignore[override]
+        self._backup = self.skill_path.read_bytes()
+        data = json.loads(self._backup)
+        self._set_nested(data, self.field.split("."), self.corrupt_value)
+        self.skill_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def stop(self, target) -> None:  # type: ignore[override]
+        if self._backup is not None:
+            self.skill_path.write_bytes(self._backup)
+            self._backup = None
+
+    def revert(self, target) -> None:  # type: ignore[override]
+        self.stop(target)
+
+    def _parameters(self) -> dict:
+        return {
+            "skill_path": str(self.skill_path),
+            "field": self.field,
+            "corrupt_value": self.corrupt_value,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -772,4 +873,5 @@ __all__ = [
     "SkillFileMemoryStale",
     "SkillFileConflict",
     "SkillFilePermissionDenied",
+    "SkillJSONCorrupt",
 ]

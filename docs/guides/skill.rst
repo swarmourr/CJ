@@ -394,6 +394,8 @@ Fault reference
      - Appends a contradictory override block at the end of the file
    * - :class:`~chaos_jungle.faults.skill_file.SkillFilePermissionDenied`
      - Sets file permissions to 000 — agent cannot read it (danger_level=2)
+   * - :class:`~chaos_jungle.faults.skill_file.SkillJSONCorrupt`
+     - Corrupt a field inside a JSON tool-definition file (OpenAI function format)
 
 Default metrics per fault
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -418,6 +420,20 @@ Default metrics per fault
      - ``parse_errors``, ``error_rate``, ``response_length``, ``completion_rate``
    * - ``SkillFilePermissionDenied``
      - ``read_errors``, ``error_rate``, ``file_size_bytes``, ``completion_rate``
+   * - ``SkillJSONCorrupt``
+     - ``read_errors``, ``error_rate``, ``completion_rate``
+
+.. note::
+
+   ``SkillFilePermissionDenied`` saves the original file mode to a ``.cj_mode``
+   sidecar file before running ``chmod 000``.  If the process crashes before
+   ``stop()`` runs, you can restore the file manually::
+
+      python3 -c "
+      import os
+      mode = int(open('skills/send_email.md.cj_mode').read().strip())
+      os.chmod('skills/send_email.md', mode)
+      "
 
 Quick examples
 ~~~~~~~~~~~~~~
@@ -463,6 +479,11 @@ Quick examples
 
    # 8. Make the file unreadable
    fault = SkillFilePermissionDenied("skills/send_email.md")
+
+   # 9. Corrupt a JSON tool definition (OpenAI function format)
+   from chaos_jungle.faults.skill_file import SkillJSONCorrupt
+   fault = SkillJSONCorrupt("skills/search_web.json", field="description")
+   fault = SkillJSONCorrupt("skills/search_web.json", field="parameters.properties", corrupt_value={})
 
 Using with ChaosRunner
 ~~~~~~~~~~~~~~~~~~~~~~

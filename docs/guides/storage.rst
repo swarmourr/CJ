@@ -22,7 +22,11 @@ Available faults
    * - Fault
      - Description
    * - ``StorageCorrupt``
-     - Periodically flip random bytes in files matching a glob pattern
+     - Periodically flip random bytes in files matching a glob pattern (crontab-scheduled)
+   * - ``StorageCorruptImmediate``
+     - Corrupt a specific file instantly at ``start()`` time — no crontab needed
+   * - ``SQLiteCorrupt``
+     - Overwrite one page of a SQLite database file to trigger ``database disk image is malformed``
 
 
 How StorageCorrupt works
@@ -183,6 +187,105 @@ Revert behaviour
 If you call ``runner.stop()`` without ``runner.revert()``, corrupted files
 remain on disk.  Always call ``revert()`` after a storage experiment unless
 you intentionally want to leave the corruption in place.
+
+
+StorageCorruptImmediate
+-----------------------
+
+Corrupts a specific file at a specific byte offset instantly at ``start()``
+time, without deploying scripts or setting up a crontab.  Useful for
+injecting corruption at a precise moment during a test — for example, just
+before an agent reads a model checkpoint.
+
+The original file is backed up before modification; ``revert()`` restores
+it exactly.  Requires ``sudo`` on the target (raw block write via ``dd``).
+
+.. code-block:: python
+
+   from chaos_jungle.faults.storage import StorageCorruptImmediate
+   from chaos_jungle.targets import SSHTarget
+
+   target = SSHTarget("10.0.0.5", user="ubuntu")
+
+   fault = StorageCorruptImmediate("/data/model.bin", offset=1024, byte_count=32)
+   runner = ChaosRunner(Scenario("corrupt-model", [fault]), target)
+
+   runner.start()
+   # model checkpoint is now corrupt at byte 1024–1056
+   agent.load_model("/data/model.bin")
+   runner.revert()   # file restored
+
+Parameters:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``file_path``
+     - required
+     - Absolute path to the file to corrupt
+   * - ``offset``
+     - ``0``
+     - Byte offset at which to start writing random bytes
+   * - ``byte_count``
+     - ``16``
+     - Number of bytes to overwrite with random data
+
+**Default metrics:** ``read_errors``, ``parse_errors``, ``checksum_errors``, ``corrupted_files``
+
+
+SQLiteCorrupt
+-------------
+
+Overwrites one full page of a SQLite database with random bytes using
+``dd``.  SQLite detects the checksum mismatch on the next read and raises::
+
+   sqlite3.DatabaseError: database disk image is malformed
+
+Common targets: LangChain SQLite checkpointer, agent state databases,
+local caches.
+
+The file is backed up before modification; ``revert()`` restores it.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.storage import SQLiteCorrupt
+   from chaos_jungle.targets import SSHTarget
+
+   target = SSHTarget("10.0.0.5", user="ubuntu")
+
+   fault = SQLiteCorrupt("/var/agent/state.db")
+   fault = SQLiteCorrupt("/var/agent/state.db", page=2, page_size=4096)
+
+Parameters:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``db_path``
+     - required
+     - Absolute path to the SQLite ``.db`` file
+   * - ``page``
+     - ``1``
+     - Zero-based page index to corrupt (page 0 = header; page 1 = first data page)
+   * - ``page_size``
+     - ``4096``
+     - SQLite page size in bytes (must match the database's ``page_size`` pragma)
+
+**What to observe:**
+
+* Does the agent catch ``DatabaseError`` and fall back to rebuilding state?
+* Does a LangGraph / LangChain checkpointer silently return stale data?
+* Is there an automatic recovery path (delete + re-create the DB)?
+
+**Default metrics:** ``read_errors``, ``parse_errors``, ``query_errors``, ``corrupted_files``
 
 
 Combined scenario — degraded worker node

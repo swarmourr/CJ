@@ -183,6 +183,81 @@ Always returns HTTP 503.
 
 **Default metrics:** ``error_rate``, ``http_503_count``, ``downtime_s``, ``completion_rate``
 
+LLMUnauthorized
+~~~~~~~~~~~~~~~
+
+Returns HTTP 401 to simulate an expired or revoked API key.  Optionally
+lets the first ``after_n`` requests succeed before switching to 401.
+
+All blocking faults add a realistic delay before the error response
+(``response_delay_s`` + random ``jitter_s``) so agent retry-timing
+behaviour matches production.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMUnauthorized
+
+   fault = LLMUnauthorized()              # block immediately
+   fault = LLMUnauthorized(after_n=3)     # first 3 succeed, then 401
+
+**Tests:** auth error handling, token-refresh flows, graceful session
+termination on credential expiry.
+
+**Default metrics:** ``error_rate``, ``retry_count``, ``duration_s``
+
+LLMForbidden
+~~~~~~~~~~~~
+
+Returns HTTP 403 to simulate a permission boundary or policy violation
+(e.g. an endpoint the API key does not have access to, or a content
+policy block).
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMForbidden
+
+   fault = LLMForbidden()
+
+**Tests:** permission error surfacing, fallback to a less capable model
+or a cached response.
+
+**Default metrics:** ``error_rate``, ``retry_count``, ``duration_s``
+
+LLMAuthExpiry
+~~~~~~~~~~~~~
+
+Convenience wrapper around ``LLMUnauthorized`` that names the intent
+explicitly: the first ``valid_calls`` requests succeed, then every
+subsequent call receives HTTP 401.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMAuthExpiry
+
+   fault = LLMAuthExpiry(valid_calls=5)
+
+**Tests:** mid-session token expiry, whether the agent detects and
+handles the transition from working → broken credentials.
+
+**Default metrics:** ``error_rate``, ``retry_count``, ``duration_s``
+
+LLMContextLengthExceeded
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Returns HTTP 400 with ``context_length_exceeded`` to test whether the
+agent chunkes, summarises, or truncates its context before retrying.
+
+.. code-block:: python
+
+   from chaos_jungle.faults.llm import LLMContextLengthExceeded
+
+   fault = LLMContextLengthExceeded()
+
+**Tests:** chunking / summarisation fallbacks, ``max_tokens`` budget
+handling, graceful error messages when context is too large.
+
+**Default metrics:** ``error_rate``, ``retry_count``, ``duration_s``
+
 Tool call faults
 ----------------
 
@@ -424,6 +499,18 @@ Fault reference
    * - ``MCPFault``
      - MCP server failure
      - Tool server resilience, agent-to-agent calls
+   * - ``LLMUnauthorized``
+     - Invalid / expired API key (401)
+     - Auth error handling, token refresh flows
+   * - ``LLMForbidden``
+     - Permission boundary (403)
+     - Permission error surfacing, fallback model
+   * - ``LLMAuthExpiry``
+     - Token expires after N calls (401)
+     - Mid-session credential expiry handling
+   * - ``LLMContextLengthExceeded``
+     - Context too long (400)
+     - Chunking / summarisation fallbacks
 
 Measurement reference
 ---------------------

@@ -72,6 +72,15 @@ Available behaviors
    * - ``CorruptResponse()``
      - —
      - Return HTTP 200 with a garbled JSON body
+   * - ``Unauthorized(after_n, response_delay_s, jitter_s)``
+     - ``after_n=0, response_delay_s=0.1, jitter_s=0.05``
+     - Return HTTP 401 (with realistic delay) after the first N requests
+   * - ``Forbidden(response_delay_s, jitter_s)``
+     - ``response_delay_s=0.1, jitter_s=0.05``
+     - Return HTTP 403 (with realistic delay) for every matching request
+   * - ``AuthExpiry(valid_calls, response_delay_s, jitter_s)``
+     - ``valid_calls=5, response_delay_s=0.1, jitter_s=0.05``
+     - Simulate token expiry: first N calls succeed, then 401
    * - ``ToolMutate(tool_name, mode)``
      - ``tool_name="", mode="garble"``
      - Silently corrupt tool-call results before the LLM sees them
@@ -339,6 +348,41 @@ Targets:
      - System prompt message (if present)
    * - ``"all"``
      - Every message in the conversation
+
+----
+
+Auth error behaviors
+---------------------
+
+``Unauthorized``, ``Forbidden``, and ``AuthExpiry`` return HTTP 401 / 403
+responses with realistic network delays, so agent retry-timing behaviour
+matches production (real API auth errors arrive after 50–200 ms of TCP
+overhead, not microseconds).
+
+.. code-block:: python
+
+   from chaos_jungle.intercept import inject, Unauthorized, Forbidden, AuthExpiry
+
+   # All requests blocked with 401 immediately
+   with inject(Unauthorized()):
+       client.chat.completions.create(...)
+
+   # First 3 succeed; from the 4th onward → 401
+   with inject(Unauthorized(after_n=3)):
+       for _ in range(6):
+           client.chat.completions.create(...)
+
+   # Token expires mid-session after 5 successful calls
+   with inject(AuthExpiry(valid_calls=5)):
+       for _ in range(10):
+           client.chat.completions.create(...)
+
+   # Simulate a permissions error
+   with inject(Forbidden()):
+       client.chat.completions.create(...)
+
+All three accept ``response_delay_s`` (default 0.1 s) and ``jitter_s``
+(default 0.05 s) to tune realistic timing.
 
 ----
 

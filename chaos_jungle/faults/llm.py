@@ -137,8 +137,15 @@ class _LLMProxyFault(Fault):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        # Give the proxy a moment to bind its port
-        time.sleep(0.4)
+        # Poll the health endpoint until the proxy is ready (up to 5 s)
+        import urllib.request as _ur
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            try:
+                _ur.urlopen(f"http://127.0.0.1:{self.port}/_cj/health", timeout=0.3)
+                break
+            except Exception:
+                time.sleep(0.05)
         if self._proc.poll() is not None:
             out = self._proc.stdout.read().decode(errors="replace") if self._proc.stdout else ""
             raise RuntimeError(
@@ -1004,3 +1011,210 @@ class SemanticCorrupt(_LLMProxyFault):
 
     def _parameters(self) -> dict:
         return {**super()._parameters(), "mode": self.mode}
+
+
+class LLMUnauthorized(_LLMProxyFault):
+    """Return HTTP 401 to simulate an invalid or expired API key.
+
+    Parameters
+    ----------
+    after_n : int
+        Number of successful requests before switching to 401. Default ``0``
+        (block from the first request).
+    response_delay_s : float
+        Simulated network delay before sending the error. Default ``0.1`` s.
+    jitter_s : float
+        Additional random jitter added to the delay. Default ``0.05`` s.
+
+    Examples
+    --------
+    >>> fault = LLMUnauthorized()
+    >>> fault = LLMUnauthorized(after_n=3)  # first 3 succeed, then 401
+    """
+
+    _fault_name = "unauthorized"
+    default_metrics: list[str] = ["error_rate", "retry_count", "duration_s"]
+
+    def __init__(
+        self,
+        after_n: int = 0,
+        response_delay_s: float = 0.1,
+        jitter_s: float = 0.05,
+        port: int = _DEFAULT_PORT,
+        upstream: str = _DEFAULT_UPSTREAM,
+        base_url_env: str = _DEFAULT_ENV,
+    ) -> None:
+        if after_n < 0:
+            raise ValueError(f"LLMUnauthorized 'after_n' must be >= 0, got {after_n}.")
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        self.after_n = after_n
+        self.response_delay_s = response_delay_s
+        self.jitter_s = jitter_s
+        self._extra_args = [
+            "--auth-after-n", str(after_n),
+            "--response-delay-s", str(response_delay_s),
+            "--jitter-s", str(jitter_s),
+        ]
+        self._chain_args = {
+            "after_n": after_n,
+            "response_delay_s": response_delay_s,
+            "jitter_s": jitter_s,
+        }
+
+    def _parameters(self) -> dict:
+        return {
+            **super()._parameters(),
+            "after_n": self.after_n,
+            "response_delay_s": self.response_delay_s,
+            "jitter_s": self.jitter_s,
+        }
+
+
+class LLMForbidden(_LLMProxyFault):
+    """Return HTTP 403 to simulate a permission boundary or policy violation.
+
+    Parameters
+    ----------
+    response_delay_s : float
+        Simulated network delay before sending the error. Default ``0.1`` s.
+    jitter_s : float
+        Additional random jitter added to the delay. Default ``0.05`` s.
+
+    Examples
+    --------
+    >>> fault = LLMForbidden()
+    """
+
+    _fault_name = "forbidden"
+    default_metrics: list[str] = ["error_rate", "retry_count", "duration_s"]
+
+    def __init__(
+        self,
+        response_delay_s: float = 0.1,
+        jitter_s: float = 0.05,
+        port: int = _DEFAULT_PORT,
+        upstream: str = _DEFAULT_UPSTREAM,
+        base_url_env: str = _DEFAULT_ENV,
+    ) -> None:
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        self.response_delay_s = response_delay_s
+        self.jitter_s = jitter_s
+        self._extra_args = [
+            "--response-delay-s", str(response_delay_s),
+            "--jitter-s", str(jitter_s),
+        ]
+        self._chain_args = {
+            "response_delay_s": response_delay_s,
+            "jitter_s": jitter_s,
+        }
+
+    def _parameters(self) -> dict:
+        return {
+            **super()._parameters(),
+            "response_delay_s": self.response_delay_s,
+            "jitter_s": self.jitter_s,
+        }
+
+
+class LLMAuthExpiry(_LLMProxyFault):
+    """Simulate a token that expires mid-session.
+
+    First ``valid_calls`` requests succeed normally; all subsequent requests
+    return HTTP 401.
+
+    Parameters
+    ----------
+    valid_calls : int
+        Number of successful calls before the token expires. Default ``5``.
+    response_delay_s : float
+        Simulated network delay on the 401 response. Default ``0.1`` s.
+    jitter_s : float
+        Additional random jitter. Default ``0.05`` s.
+
+    Examples
+    --------
+    >>> fault = LLMAuthExpiry(valid_calls=5)
+    """
+
+    _fault_name = "unauthorized"
+    default_metrics: list[str] = ["error_rate", "retry_count", "duration_s"]
+
+    def __init__(
+        self,
+        valid_calls: int = 5,
+        response_delay_s: float = 0.1,
+        jitter_s: float = 0.05,
+        port: int = _DEFAULT_PORT,
+        upstream: str = _DEFAULT_UPSTREAM,
+        base_url_env: str = _DEFAULT_ENV,
+    ) -> None:
+        if valid_calls < 0:
+            raise ValueError(f"LLMAuthExpiry 'valid_calls' must be >= 0, got {valid_calls}.")
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        self.valid_calls = valid_calls
+        self.response_delay_s = response_delay_s
+        self.jitter_s = jitter_s
+        self._extra_args = [
+            "--auth-after-n", str(valid_calls),
+            "--response-delay-s", str(response_delay_s),
+            "--jitter-s", str(jitter_s),
+        ]
+        self._chain_args = {
+            "after_n": valid_calls,
+            "response_delay_s": response_delay_s,
+            "jitter_s": jitter_s,
+        }
+
+    def _parameters(self) -> dict:
+        return {
+            **super()._parameters(),
+            "valid_calls": self.valid_calls,
+            "response_delay_s": self.response_delay_s,
+            "jitter_s": self.jitter_s,
+        }
+
+
+class LLMContextLengthExceeded(_LLMProxyFault):
+    """Return HTTP 400 ``context_length_exceeded`` to test chunking fallbacks.
+
+    Parameters
+    ----------
+    response_delay_s : float
+        Simulated network delay before sending the error. Default ``0.15`` s.
+    jitter_s : float
+        Additional random jitter. Default ``0.05`` s.
+
+    Examples
+    --------
+    >>> fault = LLMContextLengthExceeded()
+    """
+
+    _fault_name = "context_length"
+    default_metrics: list[str] = ["error_rate", "retry_count", "duration_s"]
+
+    def __init__(
+        self,
+        response_delay_s: float = 0.15,
+        jitter_s: float = 0.05,
+        port: int = _DEFAULT_PORT,
+        upstream: str = _DEFAULT_UPSTREAM,
+        base_url_env: str = _DEFAULT_ENV,
+    ) -> None:
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        self.response_delay_s = response_delay_s
+        self.jitter_s = jitter_s
+        self._extra_args = [
+            "--response-delay-s", str(response_delay_s),
+            "--jitter-s", str(jitter_s),
+        ]
+        self._chain_args = {
+            "response_delay_s": response_delay_s,
+            "jitter_s": jitter_s,
+        }
+
+    def _parameters(self) -> dict:
+        return {
+            **super()._parameters(),
+            "response_delay_s": self.response_delay_s,
+            "jitter_s": self.jitter_s,
+        }

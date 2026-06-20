@@ -47,9 +47,27 @@ mechanisms are available:
    * - ``NetworkDuplicate``
      - Duplicate N % of packets
      - tc netem duplicate
+   * - ``NetworkBandwidthLimit``
+     - Cap interface throughput to a maximum rate
+     - tc netem rate
+   * - ``NetworkReorder``
+     - Deliver a percentage of packets out of order
+     - tc netem reorder
+   * - ``NetworkReset``
+     - Inject TCP RST to abruptly terminate connections
+     - iptables REJECT --reject-with tcp-reset
+   * - ``NetworkPartition``
+     - Drop all traffic to/from a specific IP
+     - iptables DROP
    * - ``SilentNetworkCorrupt``
      - Flip bits silently — TCP checksum still valid
      - BPF / XDP hook
+
+.. note::
+
+   All ``tc netem`` faults use ``tc qdisc replace`` (idempotent) rather than
+   ``tc qdisc add``, so running ``start()`` on a machine that already has a
+   qdisc configured does not silently no-op.
 
 
 Prerequisites
@@ -261,6 +279,180 @@ Parameters:
 
    ``SilentNetworkCorrupt`` requires kernel BPF support (Linux 4.15+) and
    either clang/LLVM for XDP or the ``tc`` BPF subsystem.
+
+
+NetworkBandwidthLimit
+---------------------
+
+Caps the outgoing throughput of the interface using ``tc netem rate``.
+Use this to simulate constrained WAN links or bandwidth-throttled cloud
+egress.
+
+.. code-block:: python
+
+   from chaos_jungle import NetworkBandwidthLimit
+
+   fault = NetworkBandwidthLimit("1mbit")          # 1 Mbit/s cap
+   fault = NetworkBandwidthLimit("500kbit", iface="eth0")
+
+Parameters:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``rate``
+     - required
+     - Bandwidth ceiling: ``"1mbit"``, ``"500kbit"``, ``"10mbit"``
+   * - ``iface``
+     - auto-detect
+     - Network interface: ``"eth0"``, ``"ens3"``
+
+**What to observe:**
+
+* Does the agent respect an overall token budget when streaming slows down?
+* Does throughput-dependent inference (large context windows) time out correctly?
+
+**Default metrics:** ``throughput_bps``, ``duration_s``, ``error_rate``, ``timeout_rate``
+
+
+NetworkReorder
+--------------
+
+Delivers a percentage of packets out of order using ``tc netem reorder``.
+A base ``delay`` is required — ``tc netem`` cannot reorder without first
+introducing some queue depth.
+
+.. code-block:: python
+
+   from chaos_jungle import NetworkReorder
+
+   fault = NetworkReorder("25%")                   # 25 % of packets reordered
+   fault = NetworkReorder("50%", delay="100ms")    # with custom queue delay
+
+Parameters:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``rate``
+     - required
+     - Percentage of packets to reorder: ``"25%"``, ``"50%"``
+   * - ``delay``
+     - ``"50ms"``
+     - Queue depth delay required to enable reordering
+   * - ``iface``
+     - auto-detect
+     - Network interface
+
+**What to observe:**
+
+* Does TCP reassembly recover silently (at the cost of latency)?
+* Do application-layer sequence numbers or streaming SSE events arrive in order?
+
+**Default metrics:** ``duration_s``, ``error_rate``, ``rtt_ms``, ``packet_reorder_rate``
+
+
+NetworkReset
+------------
+
+Injects TCP RST packets via ``iptables REJECT --reject-with tcp-reset``.
+Affected connections are immediately terminated as if the remote host
+crashed mid-session.
+
+Each fault instance creates a uniquely tagged ``iptables`` rule so
+multiple concurrent experiments do not interfere with each other.
+``stop()`` removes exactly the rule created by this instance.
+
+.. code-block:: python
+
+   from chaos_jungle import NetworkReset
+
+   fault = NetworkReset()                   # RST all outgoing TCP
+   fault = NetworkReset(dport=443)          # RST outgoing HTTPS only
+   fault = NetworkReset(direction="INPUT")  # RST incoming connections
+
+Parameters:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``dport``
+     - ``0`` (all ports)
+     - Destination TCP port to target
+   * - ``sport``
+     - ``0`` (all ports)
+     - Source TCP port to target
+   * - ``direction``
+     - ``"OUTPUT"``
+     - iptables chain: ``"OUTPUT"``, ``"INPUT"``, ``"FORWARD"``
+
+**What to observe:**
+
+* Does the SDK raise ``ConnectionResetError`` / ``httpx.RemoteProtocolError``?
+* Does the agent retry after a RST or propagate the error to the caller?
+
+**Default metrics:** ``error_rate``, ``connection_errors``, ``retry_count``, ``duration_s``
+
+.. warning::
+
+   ``NetworkReset`` requires ``iptables`` and ``sudo`` on the target machine.
+
+
+NetworkPartition
+----------------
+
+Drops all traffic to (and optionally from) a specific IP address using
+``iptables DROP``.  Simulates a network partition between two services.
+
+Like ``NetworkReset``, each instance uses a unique rule comment so
+``stop()`` removes only its own rule.
+
+.. code-block:: python
+
+   from chaos_jungle import NetworkPartition
+
+   fault = NetworkPartition("10.0.0.2")                        # block one node
+   fault = NetworkPartition("10.0.0.2", block_input=False)     # outbound only
+
+Parameters:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``dest_ip``
+     - required
+     - IP address to block
+   * - ``block_input``
+     - ``True``
+     - Also block inbound traffic from ``dest_ip``
+
+**What to observe:**
+
+* Does the distributed system detect the split-brain within its expected timeout?
+* Does the application fall back to a replica or return a degraded response?
+* Is there any asymmetric behaviour when only ``block_input=False``?
+
+**Default metrics:** ``error_rate``, ``connection_errors``, ``duration_s``, ``timeout_rate``
+
+.. warning::
+
+   ``NetworkPartition`` requires ``iptables`` and ``sudo`` on the target machine.
 
 
 Combined network scenarios
