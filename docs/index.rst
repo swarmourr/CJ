@@ -88,6 +88,10 @@ What can you break?
      - Entity swap, RAG poison, context truncation, distractor injection
    * - Agent state (:ref:`guide-state`)
      - Redis key mutation, JSON checkpoint corruption, Postgres column update
+   * - AI gateway faults (:ref:`guide-gateway`)
+     - Route misconfig, fallback broken, policy block/bypass, cache stale,
+       cache poison, tenant leak, header strip, tool schema drop,
+       response rewrite, budget desync, retry storm
    * - Skill / tool faults (:ref:`guide-skill`)
      - Skill unavailable, bad output, version skew, permission denied,
        conflicting results, instruction corruption
@@ -250,6 +254,7 @@ Where to go next
 
    guides/llm
    guides/intercept
+   guides/gateway
    guides/semantic
    guides/state
    guides/skill

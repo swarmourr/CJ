@@ -236,7 +236,7 @@ Faults are grouped by the layer they target:
      - Mutate the *meaning* of the LLM request without breaking JSON
      - HTTP proxy
 
-  Modes: ``entity_swap``, ``context_truncate``, ``inject_distractor``, ``rag_poison``
+Modes: ``entity_swap``, ``context_truncate``, ``inject_distractor``, ``rag_poison``
 
 **LLM / AI — State Faults** (:ref:`guide-state`)
 
@@ -257,7 +257,53 @@ Faults are grouped by the layer they target:
      - Run a parameterised UPDATE on a Postgres column
      - psql
 
-  Mutation modes: ``nullify``, ``delete``, ``negate``, ``type_mismatch``, ``inject``
+Mutation modes: ``nullify``, ``delete``, ``negate``, ``type_mismatch``, ``inject``
+
+**LLM / AI — Gateway Faults** (:ref:`guide-gateway`)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 45 25
+
+   * - Class
+     - Effect
+     - Mechanism
+   * - ``GatewayRouteMisconfig``
+     - Rewrite ``model`` to a different provider/model
+     - Transport patch
+   * - ``GatewayFallbackBroken``
+     - Both primary and fallback routes fail
+     - Transport patch
+   * - ``GatewayPolicyBlock``
+     - False-positive content filter blocks a safe request
+     - Transport patch
+   * - ``GatewayPolicyBypass``
+     - Safety filter disabled — unsafe request passes through
+     - Transport patch
+   * - ``GatewayCacheStale``
+     - Outdated cached answer returned
+     - Transport patch
+   * - ``GatewayCachePoison``
+     - Wrong cached response reused from a different query
+     - Transport patch
+   * - ``GatewayTenantLeak``
+     - Another tenant's data injected into the response
+     - Transport patch
+   * - ``GatewayHeaderStrip``
+     - Auth/org/routing headers removed before forwarding
+     - Transport patch
+   * - ``GatewayToolSchemaDrop``
+     - ``tools`` array removed — agent cannot call tools
+     - Transport patch
+   * - ``GatewayResponseRewrite``
+     - Specific response fields overwritten by gateway
+     - Transport patch
+   * - ``GatewayBudgetDesync``
+     - Gateway returns 402 due to stale budget state
+     - Transport patch
+   * - ``GatewayRetryStorm``
+     - Repeated 429s provoke aggressive SDK retry behaviour
+     - Transport patch
 
 **LLM / AI — Skill File Faults** (:ref:`guide-skill`)
 

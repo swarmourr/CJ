@@ -81,6 +81,20 @@ from chaos_jungle.faults.skill_file import (
     SkillFilePermissionDenied,
     SkillJSONCorrupt,
 )
+from chaos_jungle.faults.gateway import (
+    GatewayRouteMisconfig,
+    GatewayFallbackBroken,
+    GatewayPolicyBlock,
+    GatewayPolicyBypass,
+    GatewayCacheStale,
+    GatewayCachePoison,
+    GatewayTenantLeak,
+    GatewayHeaderStrip,
+    GatewayToolSchemaDrop,
+    GatewayResponseRewrite,
+    GatewayBudgetDesync,
+    GatewayRetryStorm,
+)
 
 __all__ = [
     "Fault",
@@ -156,4 +170,17 @@ __all__ = [
     "SkillFileConflict",
     "SkillFilePermissionDenied",
     "SkillJSONCorrupt",
+    # AI Gateway faults
+    "GatewayRouteMisconfig",
+    "GatewayFallbackBroken",
+    "GatewayPolicyBlock",
+    "GatewayPolicyBypass",
+    "GatewayCacheStale",
+    "GatewayCachePoison",
+    "GatewayTenantLeak",
+    "GatewayHeaderStrip",
+    "GatewayToolSchemaDrop",
+    "GatewayResponseRewrite",
+    "GatewayBudgetDesync",
+    "GatewayRetryStorm",
 ]
