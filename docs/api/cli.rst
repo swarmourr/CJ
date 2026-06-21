@@ -228,9 +228,9 @@ These never start or stop anything — they only report status.
 
 Examples::
 
-   cj scenarios list
-   cj scenarios list --status running
-   cj scenarios list --type ssh --json
+   chaos-jungle scenarios list
+   chaos-jungle scenarios list --status running
+   chaos-jungle scenarios list --type ssh --json
 
 **scenarios status**
 
@@ -244,10 +244,10 @@ Examples::
 
 Examples::
 
-   cj scenarios status a3f7c2d1-4eee-4a3f-9b47-1807c5fc0eaf
-   cj scenarios status a3f7c2d1 --json
-   cj scenarios status a3f7c2d1 --target ssh://ubuntu@worker1
-   cj scenarios status a3f7c2d1 --target http://worker1:7777 --json
+   chaos-jungle scenarios status a3f7c2d1-4eee-4a3f-9b47-1807c5fc0eaf
+   chaos-jungle scenarios status a3f7c2d1 --json
+   chaos-jungle scenarios status a3f7c2d1 --target ssh://ubuntu@worker1
+   chaos-jungle scenarios status a3f7c2d1 --target http://worker1:7777 --json
 
 Example JSON output::
 
@@ -270,19 +270,19 @@ Polls until all specified scenarios reach ``done`` or ``failed``.
 Examples::
 
    # watch a local scenario
-   cj scenarios watch a3f7c2d1
+   chaos-jungle scenarios watch a3f7c2d1
 
    # watch multiple scenarios
-   cj scenarios watch a3f7c2d1 b8e1f3a2
+   chaos-jungle scenarios watch a3f7c2d1 b8e1f3a2
 
    # watch a remote scenario via SSH
-   cj scenarios watch a3f7c2d1 --target ssh://ubuntu@worker1
+   chaos-jungle scenarios watch a3f7c2d1 --target ssh://ubuntu@worker1
 
    # watch a remote scenario via HTTP daemon
-   cj scenarios watch a3f7c2d1 --target http://worker1:7777
+   chaos-jungle scenarios watch a3f7c2d1 --target http://worker1:7777
 
    # custom poll interval and timeout
-   cj scenarios watch a3f7c2d1 --interval 10 --timeout 1200
+   chaos-jungle scenarios watch a3f7c2d1 --interval 10 --timeout 1200
 
 Sample output::
 

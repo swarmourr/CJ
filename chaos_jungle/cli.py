@@ -601,9 +601,9 @@ def scenarios_watch(scenario_ids, target, interval, timeout):
 
     \b
     Examples:
-      cj scenarios watch abc123
-      cj scenarios watch abc123 def456
-      cj scenarios watch abc123 --target ssh://ubuntu@10.0.0.5
+      chaos-jungle scenarios watch abc123
+      chaos-jungle scenarios watch abc123 def456
+      chaos-jungle scenarios watch abc123 --target ssh://ubuntu@10.0.0.5
     """
     import time
     from chaos_jungle.registry import ScenarioRegistry
