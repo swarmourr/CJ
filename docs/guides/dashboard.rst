@@ -68,6 +68,41 @@ only running, reverted, or failed sessions.
 
 Click any row to open the **session detail drawer**.
 
+Scenarios Registry
+~~~~~~~~~~~~~~~~~~
+
+Lists every scenario that has been registered in the local
+:ref:`guide-registry`.  Open it with the **◎ Scenario Registry** button in
+the sidebar (between Skill and System Tools).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Column
+     - Description
+   * - UUID
+     - First 8 characters of the scenario UUID (hover for the full ID)
+   * - Name
+     - Human-readable scenario name
+   * - Type
+     - **local** (green) / **ssh** (blue) / **http** (orange)
+   * - Target
+     - Remote host/IP for SSH and HTTP scenarios; empty for local
+   * - Status
+     - **pending** (grey) / **running** (animated accent dot) /
+       **done** (green) / **failed** (red)
+   * - Session
+     - Linked session ID once the scenario has completed
+   * - Updated
+     - Timestamp of the last status change
+
+Use the **Status** and **Type** dropdowns to filter the list.  Click
+**Refresh** to reload the registry without a full page reload.
+
+The KPI bar shows scenario counts by state — useful for watching a batch of
+parallel remote experiments in progress.
+
 System tools
 ~~~~~~~~~~~~
 
@@ -234,6 +269,7 @@ chaos-jungle.
 See also
 ---------
 
+* :ref:`guide-registry` — ScenarioRegistry and remote orchestration
 * :ref:`guide-data` — SQLite schema, Python API, and CSV export
 * :ref:`guide-measurement` — ``runner.measure()`` and quality gates
 * :ref:`guide-metrics` — infrastructure and AI quality metrics

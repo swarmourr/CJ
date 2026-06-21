@@ -1,6 +1,7 @@
 """Scenario — a named group of faults."""
 
 from __future__ import annotations
+import uuid
 from chaos_jungle.faults.base import Fault
 
 
@@ -43,8 +44,47 @@ class Scenario:
                     f"Scenario 'faults[{i}]' must be a Fault instance, got {type(f).__name__}.\n"
                     "  Example: faults=[NetworkDelay('100ms'), NetworkLoss('5%')]"
                 )
+        self.id = str(uuid.uuid4())
         self.name = str(name).strip()
         self.faults = list(faults)
+
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-compatible dict (used by ScenarioRegistry)."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "faults": [
+                {"kind": f.__class__.__name__, "params": f._parameters()}
+                for f in self.faults
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Scenario":
+        """Reconstruct a Scenario from a serialized dict.
+
+        Requires chaos-jungle to be installed on the machine calling this
+        (uses the fault class registry to reconstruct fault objects).
+        """
+        import chaos_jungle.faults as _faults_mod
+
+        faults = []
+        for entry in data.get("faults", []):
+            kind = entry["kind"]
+            params = entry.get("params", {})
+            fault_cls = getattr(_faults_mod, kind, None)
+            if fault_cls is None:
+                raise ValueError(
+                    f"Unknown fault class {kind!r}. "
+                    "Make sure the same version of chaos-jungle is installed on both machines."
+                )
+            faults.append(fault_cls(**params))
+
+        scenario = cls.__new__(cls)
+        scenario.id = data["id"]
+        scenario.name = data["name"]
+        scenario.faults = faults
+        return scenario
 
     def __repr__(self) -> str:
         fault_names = [f.__class__.__name__ for f in self.faults]

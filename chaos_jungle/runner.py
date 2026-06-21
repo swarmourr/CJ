@@ -486,6 +486,16 @@ class ChaosRunner:
         self._resource_stop: threading.Event = threading.Event()
         self._fault_start_ts: float | None = None
         self._shared_llm_proc = None
+
+        # Auto-register scenario in registry (type=local; remote targets
+        # register their own copy via push_scenario)
+        try:
+            from chaos_jungle.registry import ScenarioRegistry
+            _reg = ScenarioRegistry(db=self.db)
+            if _reg.get(scenario.id) is None:
+                _reg.register(scenario, type="local")
+        except Exception:
+            pass
         self._shared_llm_env_var: str | None = None
         self._shared_llm_saved_env: str | None = None
 
@@ -578,6 +588,11 @@ class ChaosRunner:
                 self.scenario.name, target_type=_ttype, target_addr=_taddr
             )
             self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
+            try:
+                from chaos_jungle.registry import ScenarioRegistry
+                ScenarioRegistry(db=self.db).set_running(self.scenario.id)
+            except Exception:
+                pass
 
         # wrap target so every command is logged to the session DB
         logged = LoggingTarget(self.target, self.db, self._session_id)
@@ -754,6 +769,13 @@ class ChaosRunner:
 
         self.db.close_session(self._session_id, status="reverted")
         self.db.add_event(self._session_id, "Session closed")
+        try:
+            from chaos_jungle.registry import ScenarioRegistry
+            ScenarioRegistry(db=self.db).set_done(
+                self.scenario.id, session_id=self._session_id
+            )
+        except Exception:
+            pass
         self.target.disconnect()
         print(f"[chaos-jungle] Chaos OFF — session {self._session_id} reverted.")
 

@@ -340,6 +340,9 @@ td.mono{font-family:var(--mono);font-size:11px}
   <button class="sb-btn" id="sb-skill"    onclick="setView('skill')"    title="Skill faults"    style="--btn-color:#818cf8;--btn-bg:rgba(79,70,229,.18)">
     <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 00-1.4 0l-6.4 6.4a1 1 0 000 1.4l3 3a1 1 0 001.4 0l6.4-6.4a1 1 0 000-1.4z"/><path d="M5 17L3 21l4-2"/><line x1="14" y1="7" x2="17" y2="10"/></svg>
   </button>
+  <button class="sb-btn" id="sb-scenarios" onclick="setView('scenarios')" title="Scenario Registry" style="--btn-color:#34d399;--btn-bg:rgba(52,211,153,.18)">
+    <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><line x1="1.05" y1="12" x2="7" y2="12"/><line x1="17.01" y1="12" x2="22.96" y2="12"/></svg>
+  </button>
   <div class="sb-sep"></div>
   <button class="sb-btn" id="sb-system"   onclick="setView('system')"   title="System tools">
     <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
@@ -492,6 +495,35 @@ td.mono{font-family:var(--mono);font-size:11px}
       <th>Key param</th><th>Target</th><th>Duration</th><th>Started</th>
     </tr></thead><tbody id="skill-tbody"></tbody></table>
     <div class="empty-state" id="skill-empty" style="display:none"><div class="empty-icon">🛠️</div><div class="empty-text">No skill fault runs</div></div>
+    </div>
+  </div>
+
+  <!-- Scenario Registry -->
+  <div class="view-panel" id="view-scenarios">
+    <div class="filter-bar">
+      <span class="view-title" style="color:#34d399">Scenarios</span>
+      <span class="view-sub">registry</span>
+      <select class="filter-select" id="sc-reg-status" onchange="filterScenarios()">
+        <option value="">All status</option>
+        <option value="pending">Pending</option>
+        <option value="running">Running</option>
+        <option value="done">Done</option>
+        <option value="failed">Failed</option>
+      </select>
+      <select class="filter-select" id="sc-reg-type" onchange="filterScenarios()">
+        <option value="">All types</option>
+        <option value="local">Local</option>
+        <option value="ssh">SSH</option>
+        <option value="http">HTTP</option>
+      </select>
+      <button onclick="loadScenarios()" style="background:transparent;border:1px solid var(--border);border-radius:var(--radius);color:var(--text3);padding:5px 10px;cursor:pointer;font-size:11px;font-family:var(--font)">Refresh</button>
+      <span class="ml-auto count-badge" id="sc-reg-count">—</span>
+    </div>
+    <div class="kpi-bar" id="sc-reg-kpi"></div>
+    <div class="table-wrap"><table><thead><tr>
+      <th>UUID</th><th>Name</th><th>Type</th><th>Target</th><th>Status</th><th>Session</th><th>Updated</th>
+    </tr></thead><tbody id="sc-reg-tbody"></tbody></table>
+    <div class="empty-state" id="sc-reg-empty" style="display:none"><div class="empty-icon">◎</div><div class="empty-text">No scenarios registered</div></div>
     </div>
   </div>
 
@@ -660,6 +692,7 @@ function fmtMetric(name, value) {
   if (k === 'tokens_per_second') return n.toFixed(1)+' tok/s';
   return n.toLocaleString(undefined,{maximumFractionDigits:4});
 }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function flattenObj(obj, prefix, out) {
   out = out||{};
   if (!obj||typeof obj !== 'object') return out;
@@ -723,6 +756,7 @@ function setView(v) {
   if (vp) vp.classList.add('active');
   // If switching to a cat view, re-filter
   if (CATS[v]) filterCat(v);
+  if (v === 'scenarios') loadScenarios();
 }
 
 // ── Experiments (left panel) ───────────────────────────────────────────────
@@ -2484,6 +2518,75 @@ function buildDPToolCalls(calls, session) {
   return html;
 }
 
+// ── Scenarios Registry ──────────────────────────────────────────────────────
+let _scenarios = [];
+
+async function loadScenarios() {
+  try {
+    const res = await fetch('/api/scenarios');
+    _scenarios = await res.json();
+    renderScenarios();
+  } catch(e) {
+    document.getElementById('sc-reg-tbody').innerHTML =
+      '<tr><td colspan="7" style="color:var(--red);padding:14px 18px">Failed to load scenarios: ' + esc(String(e)) + '</td></tr>';
+  }
+}
+
+function filterScenarios() {
+  const st = document.getElementById('sc-reg-status').value;
+  const tp = document.getElementById('sc-reg-type').value;
+  const list = _scenarios.filter(s =>
+    (!st || s.status === st) && (!tp || s.type === tp)
+  );
+  renderScenarioRows(list);
+  document.getElementById('sc-reg-count').textContent =
+    list.length + ' scenario' + (list.length !== 1 ? 's' : '');
+}
+
+function renderScenarios() {
+  const total   = _scenarios.length;
+  const running = _scenarios.filter(s => s.status === 'running').length;
+  const done    = _scenarios.filter(s => s.status === 'done').length;
+  const failed  = _scenarios.filter(s => s.status === 'failed').length;
+  const kpi = document.getElementById('sc-reg-kpi');
+  kpi.innerHTML =
+    `<div class="kpi-card"><div class="kpi-label">Total</div><div class="kpi-value">${total}</div></div>` +
+    `<div class="kpi-card"><div class="kpi-label">Running</div><div class="kpi-value" style="color:var(--accent)">${running}</div></div>` +
+    `<div class="kpi-card"><div class="kpi-label">Done</div><div class="kpi-value" style="color:var(--green)">${done}</div></div>` +
+    `<div class="kpi-card"><div class="kpi-label">Failed</div><div class="kpi-value" style="color:${failed>0?'var(--red)':'var(--text3)'}">${failed}</div></div>`;
+  filterScenarios();
+}
+
+function renderScenarioRows(list) {
+  const tbody = document.getElementById('sc-reg-tbody');
+  const empty = document.getElementById('sc-reg-empty');
+  if (!list.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'flex';
+    return;
+  }
+  empty.style.display = 'none';
+  const typeColor = { local:['#22c55e','rgba(34,197,94,.12)'], ssh:['#60a5fa','rgba(37,99,235,.15)'], http:['#fb923c','rgba(234,88,12,.15)'] };
+  const stColor   = { pending:['var(--text3)','var(--surface)'], running:['var(--accent)','var(--accent-dim)'], done:['var(--green)','rgba(34,197,94,.12)'], failed:['var(--red)','rgba(239,68,68,.12)'] };
+  tbody.innerHTML = list.map(s => {
+    const uuid = s.id ? s.id.slice(0,8)+'…' : '—';
+    const [tc, tb] = typeColor[s.type]  || ['#64748b','rgba(100,116,139,.12)'];
+    const [sc, sb] = stColor[s.status]  || ['var(--text3)','var(--surface)'];
+    const dot  = s.status === 'running' ? '<span class="sdot running"></span>' : '';
+    const targ = s.target_ip ? `<span class="target-badge">${esc(s.target_ip)}</span>` : '<span style="color:var(--text3)">—</span>';
+    const sess = s.session_id ? `<span style="font-family:var(--mono);font-size:11px;color:var(--text2)">${s.session_id}</span>` : '<span style="color:var(--text3)">—</span>';
+    return `<tr title="${esc(s.id||'')}">
+      <td class="mono" style="font-size:11px">${esc(uuid)}</td>
+      <td class="cell-primary">${esc(s.name||'—')}</td>
+      <td><span class="chip" style="color:${tc};background:${tb}">${esc(s.type||'—')}</span></td>
+      <td>${targ}</td>
+      <td><span class="chip" style="color:${sc};background:${sb}">${dot}${esc(s.status||'—')}</span></td>
+      <td>${sess}</td>
+      <td style="color:var(--text3);font-size:11px">${fmtDate(s.updated_at)}</td>
+    </tr>`;
+  }).join('');
+}
+
 boot();
 </script>
 </body>
@@ -2780,6 +2883,20 @@ async def api_cj_records():
         return JSONResponse({"records": [dict(r) for r in rows]})
     except Exception as e:
         return JSONResponse({"records": [], "error": str(e)})
+
+
+@app.get("/api/scenarios")
+async def api_scenarios(status: str = "", type: str = ""):
+    """All scenario registry entries, optionally filtered by status/type."""
+    db = SessionDB()
+    try:
+        rows = db.list_scenarios(
+            status=status or None,
+            type=type or None,
+        )
+        return JSONResponse(rows)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────

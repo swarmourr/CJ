@@ -146,6 +146,58 @@ Use a reverse proxy (nginx, Caddy) in front of the daemon for HTTPS:
 
 ----
 
+Remote scenario orchestration
+-----------------------------
+
+When chaos-jungle is installed on both machines, you can push a complete
+scenario to the daemon and poll its status over HTTP — no open connection
+held for the full experiment duration.
+
+.. code-block:: python
+
+   from chaos_jungle import Scenario, NetworkDelay, ScenarioRegistry
+   from chaos_jungle.targets import HTTPTarget
+
+   scenario = Scenario("wan-test", [NetworkDelay("200ms", jitter="20ms")])
+   target   = HTTPTarget("http://worker1:7777", token="mysecret")
+
+   target.push_scenario(scenario)      # POST /scenarios — registers on both sides
+   target.run_scenario(scenario.id)    # POST /scenarios/{id}/run — 202 immediately
+
+   # watch — polls GET /scenarios/{id}/status every 5 s
+   entry = ScenarioRegistry().watch(scenario.id, target=target, poll_interval=5)
+   print("session_id:", entry["session_id"])
+
+**Daemon endpoints used:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Endpoint
+     - Method
+     - Action
+   * - ``/scenarios``
+     - POST
+     - Register a scenario by UUID
+   * - ``/scenarios/{id}/run``
+     - POST
+     - Start scenario in background (202 Accepted)
+   * - ``/scenarios/{id}/status``
+     - GET
+     - Return registry entry as JSON
+
+**Monitor from the CLI:**
+
+.. code-block:: bash
+
+   cj scenarios watch <uuid> --target http://worker1:7777
+   cj scenarios status <uuid> --target http://worker1:7777 --json
+
+See :ref:`guide-registry` for the full ScenarioRegistry reference.
+
+----
+
 SSHTarget vs HTTPTarget
 ------------------------
 
@@ -174,6 +226,12 @@ SSHTarget vs HTTPTarget
    * - File transfer (put/get)
      - Yes (SFTP)
      - Not supported
+   * - Remote scenario push
+     - ``push_scenario()`` via SSH
+     - ``push_scenario()`` via HTTP
+   * - Remote scenario watch
+     - ``watch()`` polls via SSH
+     - ``watch()`` polls via HTTP
 
 See also
 ---------
@@ -181,3 +239,4 @@ See also
 * :ref:`guide-ssh` — SSHTarget setup and authentication
 * :ref:`guide-local` — LocalTarget for same-machine testing
 * :ref:`guide-separate-mode` — start and stop chaos from different processes
+* :ref:`guide-registry` — ScenarioRegistry and remote orchestration

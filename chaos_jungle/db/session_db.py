@@ -219,6 +219,22 @@ class SessionDB:
 
             CREATE INDEX IF NOT EXISTS idx_fault_impact_session
                 ON fault_impact(session_id);
+
+            CREATE TABLE IF NOT EXISTS scenarios (
+                id          TEXT PRIMARY KEY,
+                name        TEXT    NOT NULL,
+                type        TEXT    NOT NULL DEFAULT 'local',
+                target_ip   TEXT    NOT NULL DEFAULT '',
+                source_ip   TEXT    NOT NULL DEFAULT '',
+                status      TEXT    NOT NULL DEFAULT 'pending',
+                session_id  INTEGER,
+                faults_json TEXT    NOT NULL DEFAULT '[]',
+                created_at  TEXT    NOT NULL,
+                updated_at  TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scenarios_status
+                ON scenarios(status);
         """)
         # Migrate existing llm_calls tables that are missing the new columns
         _new_cols = [
@@ -995,6 +1011,86 @@ class SessionDB:
                 (session_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Scenario Registry ─────────────────────────────────────────
+
+    def register_scenario(
+        self,
+        scenario_id: str,
+        name: str,
+        faults_json: str,
+        type: str = "local",
+        target_ip: str = "",
+        source_ip: str = "",
+    ) -> str:
+        """Insert or replace a scenario registry entry. Returns scenario_id."""
+        now = _now()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO scenarios "
+            "(id, name, type, target_ip, source_ip, status, faults_json, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,'pending',?,?,?)",
+            (scenario_id, name, type, target_ip, source_ip, faults_json, now, now),
+        )
+        self._conn.commit()
+        return scenario_id
+
+    def update_scenario_status(
+        self,
+        scenario_id: str,
+        status: str,
+        session_id: int | None = None,
+    ) -> None:
+        """Update status (and optionally session_id) of a scenario."""
+        if session_id is not None:
+            self._conn.execute(
+                "UPDATE scenarios SET status=?, session_id=?, updated_at=? WHERE id=?",
+                (status, session_id, _now(), scenario_id),
+            )
+        else:
+            self._conn.execute(
+                "UPDATE scenarios SET status=?, updated_at=? WHERE id=?",
+                (status, _now(), scenario_id),
+            )
+        self._conn.commit()
+
+    def get_scenario(self, scenario_id: str) -> dict | None:
+        """Fetch a scenario registry entry by UUID."""
+        row = self._conn.execute(
+            "SELECT * FROM scenarios WHERE id=?", (scenario_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        try:
+            d["faults_json"] = json.loads(d["faults_json"])
+        except (TypeError, ValueError):
+            pass
+        return d
+
+    def list_scenarios(
+        self,
+        status: str | None = None,
+        type: str | None = None,
+    ) -> list[dict]:
+        """Return scenario registry entries, optionally filtered."""
+        clauses, params = [], []
+        if status:
+            clauses.append("status=?"); params.append(status)
+        if type:
+            clauses.append("type=?"); params.append(type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT * FROM scenarios {where} ORDER BY created_at DESC", params
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["faults_json"] = json.loads(d["faults_json"])
+            except (TypeError, ValueError):
+                pass
+            out.append(d)
+        return out
 
     def close(self) -> None:
         self._conn.close()

@@ -525,6 +525,121 @@ def suite(config, parallel, max_workers):
         import sys; sys.exit(1)
 
 
+# ── scenarios ─────────────────────────────────────────────────────
+
+@main.group("scenarios")
+def scenarios_group():
+    """Inspect and watch scenario registry entries."""
+
+
+@scenarios_group.command("list")
+@click.option("--status", "-s", default="", help="Filter by status: pending|running|done|failed")
+@click.option("--type", "-t", "type_", default="", help="Filter by type: local|ssh|http")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Output as JSON")
+def scenarios_list(status, type_, as_json):
+    """List all scenarios in the local registry."""
+    from chaos_jungle.registry import ScenarioRegistry
+
+    entries = ScenarioRegistry().list(
+        status=status or None,
+        type=type_ or None,
+    )
+    if as_json:
+        click.echo(json.dumps(entries, indent=2))
+        return
+    if not entries:
+        click.echo("No scenarios found.")
+        return
+    click.echo(f"{'ID':>36}  {'NAME':<25}  {'TYPE':<6}  {'TARGET':<18}  STATUS")
+    click.echo("-" * 100)
+    for e in entries:
+        click.echo(
+            f"{e['id']:>36}  {e['name']:<25}  {e['type']:<6}  "
+            f"{(e.get('target_ip') or '-'):<18}  {e['status']}"
+        )
+
+
+@scenarios_group.command("status")
+@click.argument("scenario_id")
+@click.option("--target", "-t", default="", help="Remote target: ssh://user@host  http://host:port")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Output as JSON")
+def scenarios_status(scenario_id, target, as_json):
+    """Check status of a scenario (local or remote)."""
+    from chaos_jungle.registry import ScenarioRegistry
+
+    if target:
+        tgt = _make_target(target)
+        entry = tgt.scenario_status(scenario_id)
+    else:
+        entry = ScenarioRegistry().get(scenario_id)
+
+    if entry is None:
+        click.echo(f"Scenario {scenario_id!r} not found.", err=True)
+        sys.exit(1)
+
+    if as_json:
+        click.echo(json.dumps(entry))
+        return
+
+    click.echo(f"ID      : {entry['id']}")
+    click.echo(f"Name    : {entry['name']}")
+    click.echo(f"Type    : {entry['type']}")
+    click.echo(f"Status  : {entry['status']}")
+    if entry.get("target_ip"):
+        click.echo(f"Target  : {entry['target_ip']}")
+    if entry.get("session_id"):
+        click.echo(f"Session : {entry['session_id']}")
+
+
+@scenarios_group.command("watch")
+@click.argument("scenario_ids", nargs=-1, required=True)
+@click.option("--target", "-t", default="", help="Remote target: ssh://user@host  http://host:port")
+@click.option("--interval", default=5.0, type=float, help="Poll interval in seconds. Default: 5")
+@click.option("--timeout", default=600.0, type=float, help="Max wait in seconds. Default: 600")
+def scenarios_watch(scenario_ids, target, interval, timeout):
+    """Watch one or more scenarios until they finish.
+
+    \b
+    Examples:
+      cj scenarios watch abc123
+      cj scenarios watch abc123 def456
+      cj scenarios watch abc123 --target ssh://ubuntu@10.0.0.5
+    """
+    import time
+    from chaos_jungle.registry import ScenarioRegistry
+
+    tgt = _make_target(target) if target else None
+    registry = ScenarioRegistry()
+    pending = set(scenario_ids)
+    deadline = time.monotonic() + timeout
+
+    while pending:
+        for sid in list(pending):
+            if tgt is not None:
+                entry = tgt.scenario_status(sid)
+            else:
+                entry = registry.get(sid)
+
+            if entry is None:
+                click.echo(f"[{sid[:8]}] not found in registry", err=True)
+                pending.discard(sid)
+                continue
+
+            ts = time.strftime("%H:%M:%S")
+            click.echo(f"[{ts}] {sid[:8]}  {entry['name']}  → {entry['status']}")
+
+            if entry["status"] in ("done", "failed"):
+                pending.discard(sid)
+
+        if pending:
+            if time.monotonic() > deadline:
+                click.echo(f"Timed out after {timeout}s. Still pending: {pending}", err=True)
+                sys.exit(1)
+            time.sleep(interval)
+
+    click.echo("all done")
+
+
 # ── dashboard ─────────────────────────────────────────────────────
 
 @main.command()

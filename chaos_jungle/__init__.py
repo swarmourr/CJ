@@ -44,6 +44,7 @@ Measure style (auto-records return dict as results)::
 """
 
 from chaos_jungle.scenario import Scenario
+from chaos_jungle.registry import ScenarioRegistry
 from chaos_jungle.runner import ChaosRunner, MeasurementResult
 from chaos_jungle.suite import ExperimentSuite
 from chaos_jungle.decorators import chaos, chaos_session, chaos_measure
@@ -140,6 +141,7 @@ __version__ = "0.1.0"
 __all__ = [
     # Core
     "Scenario",
+    "ScenarioRegistry",
     "ChaosRunner",
     "MeasurementResult",
     "ExperimentSuite",

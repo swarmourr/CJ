@@ -378,6 +378,7 @@ Scenario
 --------
 
 A **scenario** is a named list of faults — pure data, no logic.
+Every scenario receives a **UUID** automatically at creation time.
 
 .. code-block:: python
 
@@ -387,9 +388,83 @@ A **scenario** is a named list of faults — pure data, no logic.
        NetworkDelay("200ms", jitter="20ms"),
        NetworkLoss("2%"),
    ])
+   print(scenario.id)   # "a3f7c2d1-..." — auto-generated, unique across machines
 
 Multiple faults in a scenario are injected in order and removed in reverse
 order on ``stop()``.
+
+Scenarios are **serializable** — they can be pushed to a remote machine and
+reconstructed there:
+
+.. code-block:: python
+
+   d = scenario.to_dict()          # JSON-compatible dict
+   s2 = Scenario.from_dict(d)      # reconstruct on any machine with chaos-jungle
+
+----
+
+ScenarioRegistry
+----------------
+
+The **ScenarioRegistry** tracks scenario lifecycle across local and remote
+machines using the scenario UUID as the shared key.
+
+Each machine holds its own registry table (inside the existing SQLite session
+database at ``~/.chaos-jungle/chaos_jungle.db``).  The UUID links entries on
+both sides — no shared database, no extra infrastructure.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 25 60
+
+   * - Status
+     - Set by
+     - Meaning
+   * - ``pending``
+     - ``register()``
+     - Scenario registered, not yet started
+   * - ``running``
+     - ``ChaosRunner.start()``
+     - Faults are currently active
+   * - ``done``
+     - ``ChaosRunner.stop()``
+     - Faults removed, results stored
+   * - ``failed``
+     - ``ChaosRunner`` on error
+     - Run did not complete cleanly
+
+**Local scenario** (auto-registered by ``ChaosRunner``):
+
+.. code-block:: python
+
+   from chaos_jungle import Scenario, ChaosRunner, LocalTarget, NetworkDelay
+   from chaos_jungle import ScenarioRegistry
+
+   scenario = Scenario("local-test", [NetworkDelay("100ms")])
+   # scenario.id set, auto-registered as type=local on ChaosRunner init
+
+   runner = ChaosRunner(scenario, LocalTarget())
+   runner.start()   # status → running
+   runner.stop()    # status → done
+
+   print(ScenarioRegistry().status(scenario.id))   # "done"
+
+**Remote scenario** (SSH or HTTP):
+
+.. code-block:: python
+
+   from chaos_jungle import Scenario, NetworkDelay, ScenarioRegistry
+
+   scenario = Scenario("wan-test", [NetworkDelay("200ms")])
+
+   ssh_target.push_scenario(scenario)   # registers on both local + remote
+   ssh_target.run_scenario(scenario.id) # fires in background, SSH closes
+
+   registry = ScenarioRegistry()
+   entry = registry.watch(scenario.id, target=ssh_target)  # polls until done
+   print(entry["session_id"])   # linked session on the remote machine
+
+See :ref:`guide-registry` for the full reference.
 
 ----
 

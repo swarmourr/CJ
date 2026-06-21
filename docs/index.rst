@@ -237,6 +237,7 @@ Where to go next
    guides/ssh
    guides/http
    guides/separate-mode
+   guides/registry
 
 .. toctree::
    :maxdepth: 2

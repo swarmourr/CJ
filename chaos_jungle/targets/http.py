@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 import os
+from typing import TYPE_CHECKING
 
 import requests
 
 from chaos_jungle.targets.base import Target
+
+if TYPE_CHECKING:
+    from chaos_jungle.scenario import Scenario
 
 
 class HTTPTarget(Target):
@@ -111,3 +115,82 @@ class HTTPTarget(Target):
         os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
         with open(local_path, "wb") as f:
             f.write(resp.content)
+
+    # ── Scenario Registry ────────────────────────────────────────
+
+    def push_scenario(self, scenario: "Scenario") -> str:
+        """Register a scenario on the remote daemon.
+
+        POSTs the serialized scenario to ``POST /scenarios`` on the daemon
+        and registers it locally as type ``"http"``.
+
+        Parameters
+        ----------
+        scenario : Scenario
+
+        Returns
+        -------
+        str
+            The scenario UUID.
+        """
+        from chaos_jungle.registry import ScenarioRegistry
+        from urllib.parse import urlparse
+
+        if self._session is None:
+            self.connect()
+
+        # Register locally as type=http
+        host = urlparse(self.url).hostname or self.url
+        local_registry = ScenarioRegistry()
+        local_registry.register(scenario, type="http", target_ip=host)
+
+        # Push to daemon
+        resp = self._session.post(
+            f"{self.url}/scenarios",
+            json=scenario.to_dict(),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return scenario.id
+
+    def run_scenario(self, scenario_id: str) -> None:
+        """Tell the daemon to run a previously pushed scenario (non-blocking).
+
+        The daemon starts the run in the background and returns immediately
+        with HTTP 202.  Use :meth:`scenario_status` to poll for completion.
+
+        Parameters
+        ----------
+        scenario_id : str
+            UUID of a scenario registered via :meth:`push_scenario`.
+        """
+        if self._session is None:
+            self.connect()
+        resp = self._session.post(
+            f"{self.url}/scenarios/{scenario_id}/run",
+            timeout=10,
+        )
+        resp.raise_for_status()
+
+    def scenario_status(self, scenario_id: str) -> dict | None:
+        """Query the daemon for a scenario's current status.
+
+        Parameters
+        ----------
+        scenario_id : str
+
+        Returns
+        -------
+        dict or None
+            Registry entry with ``status``, ``session_id``, etc.
+        """
+        if self._session is None:
+            self.connect()
+        resp = self._session.get(
+            f"{self.url}/scenarios/{scenario_id}/status",
+            timeout=10,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()

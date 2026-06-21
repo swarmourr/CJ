@@ -14,6 +14,7 @@ CLI
      list       List all sessions
      export     Export session(s) to a portable JSON or CSV file
      fetch      Fetch result files from a remote SSH host
+     scenarios  Inspect and watch scenario registry entries
      dashboard  Open the experiment tracking dashboard
      suite      Run an ExperimentSuite from a YAML config file
      daemon     Start the chaos daemon on this machine (for HTTP target mode)
@@ -194,6 +195,101 @@ Examples::
 
    # fetch without auto CSV
    chaos-jungle fetch --target ssh://ubuntu@10.0.0.5 --no-export-csv
+
+----
+
+scenarios
+---------
+
+Read-only commands for inspecting the :ref:`guide-registry`.
+These never start or stop anything — they only report status.
+
+.. code-block:: text
+
+   Usage: chaos-jungle scenarios [OPTIONS] COMMAND [ARGS]...
+
+     Inspect and watch scenario registry entries.
+
+   Commands:
+     list    List all scenarios in the local registry.
+     status  Check status of a scenario (local or remote).
+     watch   Watch one or more scenarios until they finish.
+
+**scenarios list**
+
+.. code-block:: text
+
+   Usage: chaos-jungle scenarios list [OPTIONS]
+
+   Options:
+     -s, --status TEXT   Filter: pending|running|done|failed
+     -t, --type TEXT     Filter: local|ssh|http
+     --json              Output as JSON array
+
+Examples::
+
+   cj scenarios list
+   cj scenarios list --status running
+   cj scenarios list --type ssh --json
+
+**scenarios status**
+
+.. code-block:: text
+
+   Usage: chaos-jungle scenarios status [OPTIONS] SCENARIO_ID
+
+   Options:
+     -t, --target TEXT   Remote target: ssh://user@host  http://host:port
+     --json              Output as JSON
+
+Examples::
+
+   cj scenarios status a3f7c2d1-4eee-4a3f-9b47-1807c5fc0eaf
+   cj scenarios status a3f7c2d1 --json
+   cj scenarios status a3f7c2d1 --target ssh://ubuntu@worker1
+   cj scenarios status a3f7c2d1 --target http://worker1:7777 --json
+
+Example JSON output::
+
+   {"id": "a3f7c2d1-...", "name": "wan-test", "type": "ssh",
+    "target_ip": "192.168.1.100", "status": "done", "session_id": 42, ...}
+
+**scenarios watch**
+
+Polls until all specified scenarios reach ``done`` or ``failed``.
+
+.. code-block:: text
+
+   Usage: chaos-jungle scenarios watch [OPTIONS] SCENARIO_IDS...
+
+   Options:
+     -t, --target TEXT     Remote target (applied to all IDs)
+     --interval FLOAT      Poll interval in seconds. Default: 5
+     --timeout FLOAT       Max wait in seconds. Default: 600
+
+Examples::
+
+   # watch a local scenario
+   cj scenarios watch a3f7c2d1
+
+   # watch multiple scenarios
+   cj scenarios watch a3f7c2d1 b8e1f3a2
+
+   # watch a remote scenario via SSH
+   cj scenarios watch a3f7c2d1 --target ssh://ubuntu@worker1
+
+   # watch a remote scenario via HTTP daemon
+   cj scenarios watch a3f7c2d1 --target http://worker1:7777
+
+   # custom poll interval and timeout
+   cj scenarios watch a3f7c2d1 --interval 10 --timeout 1200
+
+Sample output::
+
+   [14:23:01] a3f7c2d1  wan-test    → running
+   [14:23:06] a3f7c2d1  wan-test    → running
+   [14:23:11] a3f7c2d1  wan-test    → done
+   all done
 
 ----
 
