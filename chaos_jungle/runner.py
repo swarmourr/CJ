@@ -487,13 +487,14 @@ class ChaosRunner:
         self._fault_start_ts: float | None = None
         self._shared_llm_proc = None
 
-        # Auto-register scenario in registry (type=local; remote targets
-        # register their own copy via push_scenario)
+        # Auto-register scenario in registry with the correct type/target_ip
+        # so the local DB always reflects where the scenario will run.
         try:
             from chaos_jungle.registry import ScenarioRegistry
             _reg = ScenarioRegistry(db=self.db)
             if _reg.get(scenario.id) is None:
-                _reg.register(scenario, type="local")
+                _ttype, _taddr = _target_info(self.target)
+                _reg.register(scenario, type=_ttype, target_ip=_taddr)
         except Exception:
             pass
         self._shared_llm_env_var: str | None = None

@@ -190,72 +190,32 @@ File transfer API
 
 ----
 
-Remote scenario orchestration
-------------------------------
+Scenario Registry
+-----------------
 
-When chaos-jungle is installed on both machines, you can push a complete
-scenario to the remote machine and watch its status without keeping an SSH
-connection open for the full experiment duration.
-
-**How it works:**
-
-1. ``push_scenario(s)`` — serializes the scenario and registers it on the
-   remote machine under the same UUID.  Two brief SSH connections: one to
-   register, one returns.
-2. ``run_scenario(id)`` — starts the scenario in the background.  SSH exec
-   returns immediately.
-3. ``registry.watch(id, target=t)`` — polls the remote registry every few
-   seconds via brief SSH connections until status reaches ``done`` or
-   ``failed``.
+``ChaosRunner`` automatically registers every scenario in the local registry
+with ``type=ssh`` and the remote host.  No extra calls needed — the API is
+identical to local:
 
 .. code-block:: python
 
-   from chaos_jungle import Scenario, NetworkDelay, ScenarioRegistry
-   from chaos_jungle.targets import SSHTarget
+   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay, SSHTarget
 
-   scenario = Scenario("wan-test", [NetworkDelay("200ms", jitter="20ms")])
    target   = SSHTarget("worker1", user="ubuntu")
+   scenario = Scenario("wan-test", [NetworkDelay("200ms", jitter="20ms")])
+   runner   = ChaosRunner(scenario, target)   # registered: type=ssh
 
-   target.push_scenario(scenario)      # register on both machines
-   target.run_scenario(scenario.id)    # fire and forget
+   runner.start()
+   run_my_pipeline()
+   runner.stop()                              # registry updated: done
 
-   # watch from local — no open SSH connection held
-   entry = ScenarioRegistry().watch(scenario.id, target=target, poll_interval=5)
-   print("session_id:", entry["session_id"])
-
-   # fetch results when done
-   target.get("~/.chaos-jungle/chaos_jungle.db", "./worker1_results.db")
-
-**What each machine registers:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 20 20 20 20
-
-   * - Machine
-     - ``type``
-     - ``target_ip``
-     - ``source_ip``
-     - ``status``
-   * - Local
-     - ``ssh``
-     - ``192.168.1.100``
-     - *(empty)*
-     - tracks remote progress
-   * - Remote
-     - ``local``
-     - *(empty)*
-     - local IP
-     - updated by ChaosRunner
-
-**Monitor from the CLI:**
+Check status from the CLI at any time (read-only, never starts or stops
+anything):
 
 .. code-block:: bash
 
-   # watch until done
-   cj scenarios watch <uuid> --target ssh://ubuntu@worker1
+   cj scenarios list
+   cj scenarios status <uuid>
 
-   # check status once (returns JSON)
-   cj scenarios status <uuid> --target ssh://ubuntu@worker1 --json
-
-See :ref:`guide-registry` for the full ScenarioRegistry reference.
+See :ref:`guide-registry` for the full ScenarioRegistry reference and the
+advanced fire-and-forget pattern.

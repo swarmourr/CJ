@@ -78,34 +78,45 @@ Scenario lifecycle
 
 ----
 
-Local scenarios
----------------
+Normal usage — ChaosRunner handles everything
+---------------------------------------------
 
-``ChaosRunner`` auto-registers every scenario on init.  No extra code needed.
+``ChaosRunner`` automatically registers every scenario on init and updates
+its status through the lifecycle.  The API is identical regardless of target:
 
 .. code-block:: python
 
-   from chaos_jungle import Scenario, ChaosRunner, LocalTarget, NetworkDelay, ScenarioRegistry
+   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay
+   from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 
-   scenario = Scenario("local-test", [NetworkDelay("100ms")])
-   runner   = ChaosRunner(scenario, LocalTarget())
-   # scenario already registered as type=local, status=pending
+   scenario = Scenario("wan-test", [NetworkDelay("200ms")])
 
-   runner.start()   # status → running
-   # ... workload ...
-   runner.stop()    # status → done
+   # local — registered as type=local
+   runner = ChaosRunner(scenario, LocalTarget())
 
+   # SSH — registered as type=ssh, target_ip=worker1
+   runner = ChaosRunner(scenario, SSHTarget("worker1", user="ubuntu"))
+
+   # HTTP — registered as type=http, target_ip=worker1:7777
+   runner = ChaosRunner(scenario, HTTPTarget("http://worker1:7777", token="secret"))
+
+   # Same in all three cases:
+   runner.start()      # status → running
+   run_my_workload()
+   runner.stop()       # status → done
+
+   from chaos_jungle import ScenarioRegistry
    reg = ScenarioRegistry()
    print(reg.status(scenario.id))   # "done"
-   print(reg.get(scenario.id))      # full entry dict
 
 ----
 
-Remote scenarios — SSH
-----------------------
+Advanced: fire-and-forget (autonomous remote run)
+--------------------------------------------------
 
-Use ``SSHTarget.push_scenario()`` to register the scenario on the remote
-machine with the same UUID, then ``run_scenario()`` to fire it.
+For cases where you want the **entire experiment** (fault injection + workload)
+to run on the remote machine autonomously — with no open connection held from
+your local machine — you can use the lower-level push/run/watch API:
 
 .. code-block:: python
 
@@ -117,46 +128,27 @@ machine with the same UUID, then ``run_scenario()`` to fire it.
 
    # 1. Register on both sides (same UUID)
    target.push_scenario(scenario)
-   #    local DB:  id=abc  type=ssh   target=192.168.1.100  status=pending
-   #    remote DB: id=abc  type=local source=local_ip        status=pending
 
-   # 2. Fire in background — SSH exec returns immediately
+   # 2. Fire in background on remote — SSH exec returns immediately
    target.run_scenario(scenario.id)
 
    # 3. Watch — polls remote registry via brief SSH connections
-   registry = ScenarioRegistry()
-   entry = registry.watch(scenario.id, target=target, poll_interval=5)
+   entry = ScenarioRegistry().watch(scenario.id, target=target, poll_interval=5)
    print("Done. Session ID:", entry["session_id"])
 
-   # 4. Fetch results (optional)
+   # 4. Fetch results
    target.get("~/.chaos-jungle/chaos_jungle.db", "./remote.db")
 
-----
-
-Remote scenarios — HTTP
------------------------
-
-Use ``HTTPTarget.push_scenario()`` and ``run_scenario()`` against the
-cj-daemon running on the remote machine.
+The same pattern works with ``HTTPTarget``:
 
 .. code-block:: python
 
-   from chaos_jungle import Scenario, NetworkDelay, ScenarioRegistry
    from chaos_jungle.targets import HTTPTarget
 
-   scenario = Scenario("wan-test", [NetworkDelay("200ms")])
-   target   = HTTPTarget("http://10.0.0.5:7777", token="mysecret")
-
-   # 1. Register — POST /scenarios
-   target.push_scenario(scenario)
-
-   # 2. Run — POST /scenarios/{id}/run  (202 Accepted immediately)
-   target.run_scenario(scenario.id)
-
-   # 3. Watch — polls GET /scenarios/{id}/status
-   registry = ScenarioRegistry()
-   entry = registry.watch(scenario.id, target=target)
-   print("Done. Session ID:", entry["session_id"])
+   target = HTTPTarget("http://10.0.0.5:7777", token="mysecret")
+   target.push_scenario(scenario)          # POST /scenarios
+   target.run_scenario(scenario.id)        # POST /scenarios/{id}/run
+   entry = ScenarioRegistry().watch(scenario.id, target=target)
 
 ----
 

@@ -146,55 +146,33 @@ Use a reverse proxy (nginx, Caddy) in front of the daemon for HTTPS:
 
 ----
 
-Remote scenario orchestration
------------------------------
+Scenario Registry
+-----------------
 
-When chaos-jungle is installed on both machines, you can push a complete
-scenario to the daemon and poll its status over HTTP — no open connection
-held for the full experiment duration.
+``ChaosRunner`` automatically registers every scenario in the local registry
+with ``type=http`` and the daemon URL.  The API is identical to local:
 
 .. code-block:: python
 
-   from chaos_jungle import Scenario, NetworkDelay, ScenarioRegistry
-   from chaos_jungle.targets import HTTPTarget
+   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay, HTTPTarget
 
-   scenario = Scenario("wan-test", [NetworkDelay("200ms", jitter="20ms")])
    target   = HTTPTarget("http://worker1:7777", token="mysecret")
+   scenario = Scenario("wan-test", [NetworkDelay("200ms", jitter="20ms")])
+   runner   = ChaosRunner(scenario, target)   # registered: type=http
 
-   target.push_scenario(scenario)      # POST /scenarios — registers on both sides
-   target.run_scenario(scenario.id)    # POST /scenarios/{id}/run — 202 immediately
+   runner.start()
+   run_my_pipeline()
+   runner.stop()                              # registry updated: done
 
-   # watch — polls GET /scenarios/{id}/status every 5 s
-   entry = ScenarioRegistry().watch(scenario.id, target=target, poll_interval=5)
-   print("session_id:", entry["session_id"])
-
-**Daemon endpoints used:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 20 50
-
-   * - Endpoint
-     - Method
-     - Action
-   * - ``/scenarios``
-     - POST
-     - Register a scenario by UUID
-   * - ``/scenarios/{id}/run``
-     - POST
-     - Start scenario in background (202 Accepted)
-   * - ``/scenarios/{id}/status``
-     - GET
-     - Return registry entry as JSON
-
-**Monitor from the CLI:**
+Check status from the CLI at any time:
 
 .. code-block:: bash
 
-   cj scenarios watch <uuid> --target http://worker1:7777
-   cj scenarios status <uuid> --target http://worker1:7777 --json
+   cj scenarios list
+   cj scenarios status <uuid>
 
-See :ref:`guide-registry` for the full ScenarioRegistry reference.
+See :ref:`guide-registry` for the full ScenarioRegistry reference and the
+advanced fire-and-forget pattern.
 
 ----
 
