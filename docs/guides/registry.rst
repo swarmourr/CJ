@@ -17,15 +17,27 @@ service, no open ports.
 How it works
 ------------
 
-.. code-block:: text
+.. mermaid::
 
-   Local machine                        Remote machine
-   ─────────────                        ──────────────
-   Scenario created → id = uuid4()
-   push_scenario(s)  ────────────────►  registered with same UUID (type=local)
-   run_scenario(id)  ────────────────►  ChaosRunner fires in background
-   registry.watch(id, target) ───────►  polls: cj scenarios status <id>
-                             ◄────────  {status: "done", session_id: 42}
+   sequenceDiagram
+       participant L as Local machine
+       participant R as Remote machine
+
+       L->>L: Scenario("wan-test", [...]) → id = uuid4()
+       L->>L: registry.register(s, type="ssh", target_ip="worker1")<br/>local DB: id=abc  status=pending
+       L->>R: push_scenario(s) — serialize + SSH/HTTP
+       R->>R: registry.register(s, type="local", source_ip="local")<br/>remote DB: id=abc  status=pending
+       L->>R: run_scenario(id) — nohup / POST /run
+       R->>R: ChaosRunner.start() → status=running
+       R->>R: workload executes under fault
+       R->>R: ChaosRunner.stop() → status=done  session_id=42
+       loop every poll_interval (default 5 s)
+           L->>R: scenario_status(id) — SSH exec / GET /status
+           R-->>L: {"status": "running", ...}
+       end
+       L->>R: scenario_status(id)
+       R-->>L: {"status": "done", "session_id": 42}
+       L->>L: registry.set_done(id, session_id=42)<br/>local DB synced
 
 ----
 
@@ -48,6 +60,21 @@ The UUID is stable across serialization:
 
    d  = s.to_dict()           # {"id": "a3f7c2d1-...", "name": ..., "faults": [...]}
    s2 = Scenario.from_dict(d) # reconstructs the exact same scenario + UUID
+
+----
+
+Scenario lifecycle
+------------------
+
+.. mermaid::
+
+   stateDiagram-v2
+       [*] --> pending : Scenario created<br/>(ChaosRunner init / push_scenario)
+       pending --> running : runner.start() / run_scenario()
+       running --> done : runner.stop() — fault reverted, session closed
+       running --> failed : unhandled exception during workload
+       done --> [*]
+       failed --> [*]
 
 ----
 
