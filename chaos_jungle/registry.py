@@ -124,7 +124,7 @@ class ScenarioRegistry:
         deadline = time.monotonic() + timeout
         while True:
             if target is not None:
-                entry = target.scenario_status(scenario_id)
+                entry = target._scenario_status(scenario_id)
             else:
                 entry = self.db.get_scenario(scenario_id)
 
@@ -184,7 +184,7 @@ class ScenarioRegistry:
             for sid in list(pending):
                 tgt = targets.get(sid)
                 if tgt is not None:
-                    entry = tgt.scenario_status(sid)
+                    entry = tgt._scenario_status(sid)
                 else:
                     entry = self.db.get_scenario(sid)
 

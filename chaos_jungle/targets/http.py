@@ -118,7 +118,7 @@ class HTTPTarget(Target):
 
     # ── Scenario Registry ────────────────────────────────────────
 
-    def push_scenario(self, scenario: "Scenario") -> str:
+    def _push_scenario(self, scenario: "Scenario") -> str:
         """Register a scenario on the remote daemon.
 
         POSTs the serialized scenario to ``POST /scenarios`` on the daemon
@@ -153,7 +153,7 @@ class HTTPTarget(Target):
         resp.raise_for_status()
         return scenario.id
 
-    def run_scenario(self, scenario_id: str) -> None:
+    def _run_scenario(self, scenario_id: str) -> None:
         """Tell the daemon to run a previously pushed scenario (non-blocking).
 
         The daemon starts the run in the background and returns immediately
@@ -172,7 +172,7 @@ class HTTPTarget(Target):
         )
         resp.raise_for_status()
 
-    def scenario_status(self, scenario_id: str) -> dict | None:
+    def _scenario_status(self, scenario_id: str) -> dict | None:
         """Query the daemon for a scenario's current status.
 
         Parameters

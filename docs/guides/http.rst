@@ -146,33 +146,18 @@ Use a reverse proxy (nginx, Caddy) in front of the daemon for HTTPS:
 
 ----
 
-Scenario Registry
+Scenario tracking
 -----------------
 
-``ChaosRunner`` automatically registers every scenario in the local registry
-with ``type=http`` and the daemon URL.  The API is identical to local:
-
-.. code-block:: python
-
-   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay, HTTPTarget
-
-   target   = HTTPTarget("http://worker1:7777", token="mysecret")
-   scenario = Scenario("wan-test", [NetworkDelay("200ms", jitter="20ms")])
-   runner   = ChaosRunner(scenario, target)   # registered: type=http
-
-   runner.start()
-   run_my_pipeline()
-   runner.stop()                              # registry updated: done
-
-Check status from the CLI at any time:
+chaos-jungle tracks every scenario automatically.  Use the CLI to observe
+status — no extra code needed:
 
 .. code-block:: bash
 
    cj scenarios list
-   cj scenarios status <uuid>
+   cj scenarios watch <uuid>
 
-See :ref:`guide-registry` for the full ScenarioRegistry reference and the
-advanced fire-and-forget pattern.
+See :ref:`guide-registry` for details.
 
 ----
 

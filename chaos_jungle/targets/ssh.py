@@ -164,7 +164,7 @@ class SSHTarget(Target):
 
     # ── Scenario Registry ────────────────────────────────────────
 
-    def push_scenario(self, scenario: "Scenario") -> str:
+    def _push_scenario(self, scenario: "Scenario") -> str:
         """Register a scenario on the remote machine via SSH.
 
         Serializes the scenario to JSON and calls
@@ -207,7 +207,7 @@ class SSHTarget(Target):
             )
         return scenario.id
 
-    def run_scenario(self, scenario_id: str) -> None:
+    def _run_scenario(self, scenario_id: str) -> None:
         """Fire a scenario run on the remote machine (non-blocking).
 
         The SSH exec channel returns immediately after the remote process
@@ -230,7 +230,7 @@ class SSHTarget(Target):
                 f"Failed to start scenario {scenario_id} on {self.host}: {err.strip()}"
             )
 
-    def scenario_status(self, scenario_id: str) -> dict | None:
+    def _scenario_status(self, scenario_id: str) -> dict | None:
         """Query the remote registry for a scenario's status.
 
         Issues a brief SSH connection and returns the registry entry as a

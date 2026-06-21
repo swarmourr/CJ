@@ -190,32 +190,15 @@ File transfer API
 
 ----
 
-Scenario Registry
+Scenario tracking
 -----------------
 
-``ChaosRunner`` automatically registers every scenario in the local registry
-with ``type=ssh`` and the remote host.  No extra calls needed — the API is
-identical to local:
-
-.. code-block:: python
-
-   from chaos_jungle import Scenario, ChaosRunner, NetworkDelay, SSHTarget
-
-   target   = SSHTarget("worker1", user="ubuntu")
-   scenario = Scenario("wan-test", [NetworkDelay("200ms", jitter="20ms")])
-   runner   = ChaosRunner(scenario, target)   # registered: type=ssh
-
-   runner.start()
-   run_my_pipeline()
-   runner.stop()                              # registry updated: done
-
-Check status from the CLI at any time (read-only, never starts or stops
-anything):
+chaos-jungle tracks every scenario automatically.  Use the CLI to observe
+status — no extra code needed:
 
 .. code-block:: bash
 
    cj scenarios list
-   cj scenarios status <uuid>
+   cj scenarios watch <uuid>
 
-See :ref:`guide-registry` for the full ScenarioRegistry reference and the
-advanced fire-and-forget pattern.
+See :ref:`guide-registry` for details.
