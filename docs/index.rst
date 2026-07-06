@@ -261,7 +261,6 @@ Where to go next
    guides/skill
    guides/judge
    guides/ollama
-   guides/scenarios
    guides/conversation
    guides/fuzzing
 
@@ -281,6 +280,14 @@ Where to go next
    guides/safety
    guides/oracles
    guides/traces
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Automation & Observability
+
+   guides/hypothesis
+   guides/scheduler
+   guides/exporters
 
 .. toctree::
    :maxdepth: 2

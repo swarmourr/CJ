@@ -117,6 +117,7 @@ from chaos_jungle.faults import (
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
 from chaos_jungle.intercept import (
     inject,
+    InjectResult,
     door,
     Behavior,
     Latency,
@@ -132,8 +133,16 @@ from chaos_jungle.intercept import (
 from chaos_jungle.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
 from chaos_jungle.faults.bpf import iface_for_ip
 from chaos_jungle.judge import LLMJudge, JudgeScore, average_scores, Evaluator
-from chaos_jungle.fuzzing import fuzz_scenarios, summarise_fuzz
+from chaos_jungle.fuzzing import ChaosFuzzer, fuzz_scenarios, summarise_fuzz
 from chaos_jungle.conversation import ConversationScenario, Turn, TurnResult
+from chaos_jungle.hypothesis import Hypothesis, HypothesisResult, AssertionResult
+from chaos_jungle.scheduler import ChaosScheduler
+from chaos_jungle.exporters import (
+    Exporter,
+    PrometheusExporter,
+    DatadogExporter,
+    WebhookExporter,
+)
 
 __version__ = "0.1.0"
 
@@ -248,6 +257,7 @@ __all__ = [
     "Evaluator",
     # HTTP transport intercept (provider-agnostic)
     "inject",
+    "InjectResult",
     "door",
     "Behavior",
     "Latency",
@@ -259,11 +269,23 @@ __all__ = [
     "ToolMutate",
     "PromptInjection",
     "DEFAULT_LLM_HOSTS",
-    # Fault fuzzer
+    # Fault fuzzer / random explorer
+    "ChaosFuzzer",
     "fuzz_scenarios",
     "summarise_fuzz",
     # Multi-turn conversation
     "ConversationScenario",
     "Turn",
     "TurnResult",
+    # Hypothesis
+    "Hypothesis",
+    "HypothesisResult",
+    "AssertionResult",
+    # Scheduler
+    "ChaosScheduler",
+    # Exporters
+    "Exporter",
+    "PrometheusExporter",
+    "DatadogExporter",
+    "WebhookExporter",
 ]

@@ -1,6 +1,161 @@
 Changelog
 =========
 
+1.5.0 (2026-07-06)
+------------------
+
+**New features**
+
+* **``Hypothesis``** (``chaos_jungle.hypothesis``) — declare the expected
+  behaviour of a system under fault *before* running, verify *after*.  Build
+  with chained assertion methods and pass via ``hypothesis=`` to
+  ``runner.measure()``.  The result is available on
+  ``MeasurementResult.hypothesis_result`` and printed automatically.
+
+  Assertion methods: ``.max_delta_pct()``, ``.max_fault_value()``,
+  ``.min_fault_value()``, ``.no_regression()``, ``.max_absolute_delta()``.
+
+  .. code-block:: python
+
+     from chaos_jungle import Hypothesis
+
+     h = (
+         Hypothesis("handles 200ms delay gracefully")
+         .max_delta_pct("duration_s", 50)
+         .max_fault_value("error_rate", 0.05)
+         .no_regression("completion_rate")
+     )
+     result = runner.measure(workload, n_baseline=5, n_fault=5, hypothesis=h)
+     print(result.hypothesis_result.summary())
+
+* **``ChaosScheduler``** (``chaos_jungle.scheduler``) — run a chaos experiment
+  on a recurring schedule in a background thread.  Supports interval-based
+  scheduling (``every("1h")``) and daily cron-style scheduling
+  (``daily_at("02:00")``).  Results are accessible via ``scheduler.results``
+  and callbacks registered with ``on_result()`` / ``on_error()``.
+
+  .. code-block:: python
+
+     from chaos_jungle import ChaosScheduler
+
+     scheduler = (
+         ChaosScheduler(scenario, target, workload=workload)
+         .every("1h")
+         .on_result(lambda r: print(r.summary()))
+     )
+     scheduler.start()
+
+* **Observability exporters** (``chaos_jungle.exporters``) — push
+  :class:`~chaos_jungle.runner.MeasurementResult` metrics to external systems
+  after an experiment completes.
+
+  - :class:`~chaos_jungle.exporters.PrometheusExporter` — push baseline,
+    fault, and delta metrics to a Prometheus Pushgateway
+    (``pip install prometheus-client``).
+  - :class:`~chaos_jungle.exporters.DatadogExporter` — send metrics via
+    DogStatsD to a local Datadog Agent (``pip install datadog``).
+  - :class:`~chaos_jungle.exporters.WebhookExporter` — POST JSON to any HTTP
+    endpoint, no extra dependencies.
+
+  .. code-block:: python
+
+     from chaos_jungle.exporters import PrometheusExporter, WebhookExporter
+
+     result = runner.measure(workload, n_baseline=5, n_fault=5)
+     PrometheusExporter(gateway="http://pushgateway:9091").export(result)
+     WebhookExporter(url="https://hooks.example.com/chaos").export(result)
+
+**Documentation**
+
+* **Hypothesis guide** (:ref:`guide-hypothesis`) — assertion methods, CI gate
+  pattern, ``HypothesisResult`` fields.
+
+* **Scheduler guide** (:ref:`guide-scheduler`) — interval and daily schedules,
+  callbacks, accessing collected results.
+
+* **Exporters guide** (:ref:`guide-exporters`) — PrometheusExporter,
+  DatadogExporter, WebhookExporter, custom exporter pattern.
+
+* **index.rst** — new *Automation & Observability* toctree section.
+
+----
+
+1.4.0 (2026-06-27)
+------------------
+
+**New features**
+
+* **``ChaosFuzzer``** (``chaos_jungle.fuzzing``) — replaces ``fuzz_scenarios()``
+  as the primary fuzzing API.  Follows the same pattern as ``ChaosRunner``:
+  construct with a source and target, call ``.measure()``.  Two modes:
+
+  - **Explicit pool** — user provides fault instances; CJ picks random subsets.
+  - **Category-based** — user names categories (``"system"``, ``"llm"``,
+    ``"application"``); CJ picks faults *and* randomizes their parameters.
+
+  Key improvement: a **single shared baseline** is measured once before all
+  experiments.  Every :class:`~chaos_jungle.runner.MeasurementResult` in the
+  returned list carries the same baseline — comparisons are consistent and
+  no redundant baseline runs are wasted.
+
+  ``fuzz_scenarios()`` and ``summarise_fuzz()`` remain as thin backward-compat
+  wrappers.
+
+* **``inject(measure=)``** — ``inject()`` now accepts an optional ``measure``
+  parameter (``True`` or a list of metric names) that collects lightweight
+  metrics from the ``with`` block without requiring a workload function.
+  Returns an :class:`~chaos_jungle.intercept.InjectResult` via the context
+  variable with: ``duration_s``, ``http_calls``, ``http_errors``,
+  ``memory_mb`` (psutil), ``cpu_percent`` (psutil).
+
+  .. code-block:: python
+
+     with inject(RateLimit(after_n=2), measure=True) as m:
+         agent.run("Book a flight")
+     print(m.duration_s, m.http_calls, m.http_errors)
+
+* **ScenarioRegistry internalized** — CJ now manages the scenario lifecycle
+  automatically.  ``ChaosRunner`` registers, starts, and closes every scenario;
+  users observe status via CLI or dashboard only.  The ``ScenarioRegistry``
+  class is no longer part of the public API, and target methods
+  ``push_scenario`` / ``run_scenario`` / ``scenario_status`` are now private
+  (prefixed ``_``).
+
+* **Dashboard — Scenarios Registry view** — new *Scenarios* sidebar tab shows
+  every experiment's lifecycle status (``pending`` → ``running`` →
+  ``done`` / ``failed``) with filtering by target type and status.  Backed by
+  a new ``GET /api/scenarios`` endpoint.
+
+**Documentation**
+
+* **Fuzzing guide rewritten** (:ref:`guide-fuzzing`) — ``ChaosFuzzer`` is now
+  the primary API; shared baseline, category mode, and backward-compat wrapper
+  all documented.
+
+* **Intercept guide updated** (:ref:`guide-intercept`) — new *Optional
+  measurement* section documents ``inject(measure=True/[...])`` and
+  ``InjectResult``.
+
+* **Concepts guide updated** (:doc:`concepts`) — ChaosRunner section now
+  lists all four usage styles (start/stop, context manager, decorator,
+  measure) with numbered headings.
+
+* **Registry guide rewritten** (:ref:`guide-registry`) — the guide now
+  positions the ScenarioRegistry as an internal lifecycle index managed
+  entirely by CJ.  Only CLI commands (``chaos-jungle scenarios list/status/watch``)
+  are documented; no Python API is exposed.
+
+* **SSH and HTTP target guides simplified** (:ref:`guide-ssh`, :ref:`guide-http`)
+  — scenario tracking sections reduced to a single callout note; the full
+  push / run / watch code examples are removed.
+
+* **LLM Scenario Guide removed** — the standalone scenario cookbook
+  (S01–S11, R01–R10) has been removed from the documentation.  Individual
+  fault patterns are covered by the dedicated fault guides; the runnable
+  scenario files remain in the ``scenarios/`` folder.
+
+----
+
 1.3.0 (2026-06-18) — agent-chaos parity
 -----------------------------------------
 
@@ -246,11 +401,6 @@ Changelog
 
 **Documentation**
 
-* **LLM Scenario Guide** — new full guide at :ref:`guide-scenarios` covering
-  all 21 runnable scenarios (S01–S11 and R01–R10).  Each entry documents
-  *what* the scenario does, *why* it maps to a real production failure, *how*
-  to run it with a copy-paste code snippet, and *what results* to expect with
-  an annotated signal / problem table.
 
 * Guide wired into the Sphinx sidebar under **LLM / AI Faults** — visible on
   every page after a clean full rebuild.

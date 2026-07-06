@@ -406,12 +406,13 @@ reconstructed there:
 ScenarioRegistry
 ----------------
 
-The **ScenarioRegistry** tracks scenario lifecycle across local and remote
-machines using the scenario UUID as the shared key.
+The **ScenarioRegistry** is CJ's internal lifecycle index.  It tracks every
+scenario from creation to completion using the scenario UUID as the shared key
+across machines.
 
-Each machine holds its own registry table (inside the existing SQLite session
-database at ``~/.chaos-jungle/chaos_jungle.db``).  The UUID links entries on
-both sides — no shared database, no extra infrastructure.
+Each machine holds its own registry table inside the existing SQLite database
+at ``~/.chaos-jungle/chaos_jungle.db``.  The UUID links entries on both sides
+— no shared database, no extra infrastructure.
 
 .. list-table::
    :header-rows: 1
@@ -421,7 +422,7 @@ both sides — no shared database, no extra infrastructure.
      - Set by
      - Meaning
    * - ``pending``
-     - ``register()``
+     - ``ChaosRunner.__init__``
      - Scenario registered, not yet started
    * - ``running``
      - ``ChaosRunner.start()``
@@ -433,38 +434,19 @@ both sides — no shared database, no extra infrastructure.
      - ``ChaosRunner`` on error
      - Run did not complete cleanly
 
-**Local scenario** (auto-registered by ``ChaosRunner``):
+.. important::
 
-.. code-block:: python
+   The registry is **managed entirely by** ``ChaosRunner``.  You never
+   register, update, or query it from your own code.  To observe scenario
+   status use the CLI or the dashboard.
 
-   from chaos_jungle import Scenario, ChaosRunner, LocalTarget, NetworkDelay
-   from chaos_jungle import ScenarioRegistry
+.. code-block:: bash
 
-   scenario = Scenario("local-test", [NetworkDelay("100ms")])
-   # scenario.id set, auto-registered as type=local on ChaosRunner init
+   chaos-jungle scenarios list
+   chaos-jungle scenarios status <id>
+   chaos-jungle scenarios watch <id>
 
-   runner = ChaosRunner(scenario, LocalTarget())
-   runner.start()   # status → running
-   runner.stop()    # status → done
-
-   print(ScenarioRegistry().status(scenario.id))   # "done"
-
-**Remote scenario** (SSH or HTTP):
-
-.. code-block:: python
-
-   from chaos_jungle import Scenario, NetworkDelay, ScenarioRegistry
-
-   scenario = Scenario("wan-test", [NetworkDelay("200ms")])
-
-   ssh_target.push_scenario(scenario)   # registers on both local + remote
-   ssh_target.run_scenario(scenario.id) # fires in background, SSH closes
-
-   registry = ScenarioRegistry()
-   entry = registry.watch(scenario.id, target=ssh_target)  # polls until done
-   print(entry["session_id"])   # linked session on the remote machine
-
-See :ref:`guide-registry` for the full reference.
+See :ref:`guide-registry` for the full CLI reference.
 
 ----
 
@@ -480,7 +462,7 @@ The **runner** orchestrates the full fault lifecycle:
 It writes every action to the SQLite session database and provides three
 usage styles:
 
-**Explicit start / stop:**
+**1. Explicit start / stop** — full manual control:
 
 .. code-block:: python
 
@@ -489,7 +471,14 @@ usage styles:
    run_workload()
    runner.stop()
 
-**Decorator:**
+**2. Context manager** — fault active for the duration of the block:
+
+.. code-block:: python
+
+   with chaos_session(NetworkLoss("5%")) as session:
+       run_workload()
+
+**3. Decorator** — wraps an entire function:
 
 .. code-block:: python
 
@@ -497,14 +486,7 @@ usage styles:
    def run_workload():
        ...
 
-**Context manager:**
-
-.. code-block:: python
-
-   with chaos_session(NetworkLoss("5%")) as session:
-       run_workload()
-
-**Measure mode** (records baseline and fault metrics side-by-side):
+**4. Measure mode** — baseline vs fault, delta per metric:
 
 .. code-block:: python
 
@@ -515,6 +497,10 @@ usage styles:
 
    result = runner.measure(workload, n_baseline=5, n_fault=5)
    print(result.summary())
+   # duration_s  baseline=0.12s  fault=0.34s  delta=+183%
+
+Styles 1 / 2 / 3 are equivalent — choose whichever fits your code.
+Style 4 adds statistical measurement on top.
 
 ----
 

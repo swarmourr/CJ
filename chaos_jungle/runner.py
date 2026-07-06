@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     from chaos_jungle.metrics.strategy import CollectStrategy
     from chaos_jungle.metrics.metric_set import MetricSet
     from chaos_jungle.metrics.schema import CollectedMetrics
+    from chaos_jungle.hypothesis import Hypothesis, HypothesisResult
 
 
 @dataclass
@@ -132,6 +133,7 @@ class MeasurementResult:
     oracle_results: "list[OracleResult]" = field(default_factory=list)
     collected_metrics: "CollectedMetrics | None" = field(default=None, repr=False)
     llm_calls: list = field(default_factory=list, repr=False)
+    hypothesis_result: "HypothesisResult | None" = field(default=None, repr=False)
 
     def passed(self, key: str, threshold: float) -> bool:
         """Return True if ``abs(delta[key]) <= threshold``."""
@@ -856,6 +858,7 @@ class ChaosRunner:
         on_session_start: "Callable[[int], None] | None" = None,
         on_fault_start: "Callable[[int], None] | None" = None,
         cooldown_s: float = 0.0,
+        hypothesis: "Hypothesis | None" = None,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -1157,6 +1160,27 @@ class ChaosRunner:
             except Exception:
                 pass
 
+        # ── 5d. Hypothesis check (optional) ───────────────────────
+        hypothesis_result = None
+        if hypothesis is not None:
+            hypothesis_result = hypothesis.check(
+                MeasurementResult(
+                    scenario=self.scenario.name,
+                    session_id=self._session_id or 0,
+                    baseline=baseline,
+                    fault=fault,
+                    delta=delta,
+                    n_baseline=n_baseline,
+                    n_fault=n_fault,
+                )
+            )
+            status = "PASS" if hypothesis_result.passed else "FAIL"
+            print(f"[chaos-jungle] Hypothesis [{status}]: {hypothesis.name}")
+            if not hypothesis_result.passed:
+                for a in hypothesis_result.assertions:
+                    if not a.passed:
+                        print(f"[chaos-jungle]   FAIL {a.metric}: {a.reason}")
+
         result = MeasurementResult(
             scenario=self.scenario.name,
             session_id=self._session_id,
@@ -1173,6 +1197,7 @@ class ChaosRunner:
             oracle_results=oracle_results,
             collected_metrics=collected_metrics,
             llm_calls=_llm_calls,
+            hypothesis_result=hypothesis_result,
         )
 
         # ── 6. Persist to DB ──────────────────────────────────────

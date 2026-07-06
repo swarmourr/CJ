@@ -485,6 +485,63 @@ how ``ToolMutate`` and ``PromptInjection`` work internally:
 
 ----
 
+----
+
+Optional measurement
+--------------------
+
+Pass ``measure=True`` to collect metrics automatically from the ``with``
+block — no workload function needed.  ``inject()`` returns an
+:class:`~chaos_jungle.intercept.InjectResult` via the context variable:
+
+.. code-block:: python
+
+   from chaos_jungle.intercept import inject, RateLimit, Latency
+
+   with inject(RateLimit(after_n=2), measure=True) as m:
+       agent.run("Book a flight")
+
+   print(m.duration_s)    # wall-clock seconds the block ran
+   print(m.http_calls)    # intercepted HTTP requests
+   print(m.http_errors)   # 4xx/5xx responses + connection errors
+
+Metrics collected automatically:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Metric
+     - Description
+   * - ``duration_s``
+     - Wall-clock seconds the ``with`` block ran
+   * - ``http_calls``
+     - Number of intercepted HTTP requests
+   * - ``http_errors``
+     - Requests that returned 4xx/5xx or raised a connection error
+   * - ``memory_mb``
+     - RSS memory delta in MiB (requires ``psutil``; ``None`` if unavailable)
+   * - ``cpu_percent``
+     - CPU usage % sampled at block exit (requires ``psutil``; ``None`` if unavailable)
+
+Pass a list instead of ``True`` to collect only specific metrics:
+
+.. code-block:: python
+
+   with inject(Latency(2.0), measure=["duration_s", "http_calls"]) as m:
+       run_pipeline()
+
+Without ``measure=`` (the default), ``inject()`` yields ``None`` and
+collects nothing — existing code is unchanged.
+
+.. note::
+
+   ``inject(measure=True)`` answers *"how did it behave?"* — it collects
+   metrics but has no baseline and no delta.  For baseline-vs-fault
+   comparison use :class:`~chaos_jungle.runner.ChaosRunner` ``.measure()``.
+
+----
+
 See also
 --------
 
