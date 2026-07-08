@@ -225,13 +225,7 @@ Where to go next
 
 .. toctree::
    :maxdepth: 2
-   :caption: Chaos Strategies
-
-   guides/strategies
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Setup & Targets
+   :caption: Targets
 
    guides/local
    guides/ssh
@@ -259,35 +253,42 @@ Where to go next
    guides/semantic
    guides/state
    guides/skill
-   guides/judge
    guides/ollama
    guides/conversation
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Testing Patterns
+
+   guides/strategies
+   guides/measurement
+   guides/metrics
    guides/fuzzing
 
 .. toctree::
    :maxdepth: 2
-   :caption: Measurement & Results
+   :caption: Unit Testing
 
-   guides/measurement
-   guides/metrics
-   guides/dashboard
-   guides/data
+   guides/pytest
 
 .. toctree::
    :maxdepth: 2
-   :caption: Safety & Assertions
+   :caption: Quality & Assertions
 
-   guides/safety
+   guides/hypothesis
    guides/oracles
+   guides/judge
+   guides/safety
    guides/traces
 
 .. toctree::
    :maxdepth: 2
-   :caption: Automation & Observability
+   :caption: Results & Automation
 
-   guides/hypothesis
-   guides/scheduler
+   guides/dashboard
+   guides/data
    guides/exporters
+   guides/scheduler
 
 .. toctree::
    :maxdepth: 2
