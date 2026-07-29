@@ -216,74 +216,69 @@ Where to go next
 
 .. toctree::
    :maxdepth: 2
-   :caption: Getting Started
+   :caption: Start Here
 
    quickstart
-   architecture
    concepts
+   architecture
+   guides/agent-failure-model
    examples
 
 .. toctree::
    :maxdepth: 2
-   :caption: Targets
+   :caption: LLM Agent Failure Injection
+
+   guides/intercept
+   guides/llm
+   guides/gateway
+   guides/semantic
+   guides/conversation
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Agent State, Memory, and Skills
+
+   guides/state
+   guides/skill
+   guides/traces
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Experiment Design and Evaluation
+
+   guides/strategies
+   guides/measurement
+   guides/hypothesis
+   guides/oracles
+   guides/judge
+   guides/metrics
+   guides/fuzzing
+   guides/pytest
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Runtime and Infrastructure Faults
+
+   guides/network
+   guides/process
+   guides/resources
+   guides/storage
+   guides/gpu
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Targets and Deployment Modes
 
    guides/local
    guides/ssh
    guides/http
    guides/separate-mode
    guides/registry
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Infrastructure Faults
-
-   guides/network
-   guides/storage
-   guides/process
-   guides/resources
-   guides/gpu
-
-.. toctree::
-   :maxdepth: 2
-   :caption: LLM / AI Faults
-
-   guides/llm
-   guides/intercept
-   guides/gateway
-   guides/semantic
-   guides/state
-   guides/skill
    guides/ollama
-   guides/conversation
 
 .. toctree::
    :maxdepth: 2
-   :caption: Testing Patterns
-
-   guides/strategies
-   guides/measurement
-   guides/metrics
-   guides/fuzzing
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Unit Testing
-
-   guides/pytest
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Quality & Assertions
-
-   guides/hypothesis
-   guides/oracles
-   guides/judge
-   guides/safety
-   guides/traces
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Results & Automation
+   :caption: Observability and Results
 
    guides/dashboard
    guides/data
