@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chaos Jungle — Full Architecture</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a1a10;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', sans-serif;
+    padding: 40px;
+  }
+  h1 {
+    text-align: center;
+    font-size: 2rem;
+    color: #7dc829;
+    margin-bottom: 8px;
+    letter-spacing: 2px;
+  }
+  p.sub {
+    text-align: center;
+    color: #5a8a6a;
+    margin-bottom: 40px;
+    font-size: 0.95rem;
+  }
+  .diagram-wrap {
+    background: #0f2318;
+    border-radius: 16px;
+    padding: 40px;
+    border: 1px solid #1a4731;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .mermaid { width: 100%; }
+</style>
+</head>
+<body>
+
+<h1>Chaos Jungle — Full Architecture</h1>
+<p class="sub">Command-based · Proxy-based · Two families, one framework</p>
+
+<div class="diagram-wrap">
+<div class="mermaid">
+flowchart TB
+    %% ── User layer ──────────────────────────────────────────────────────────
+    subgraph USER["👤  User Code"]
+        direction LR
+        WL["workload()"]
+        FC["Fault choice"]
+        TG["Target choice"]
+    end
+
+    %% ── CJ Core ─────────────────────────────────────────────────────────────
+    subgraph CORE["⚙️  CJ Core"]
+        direction LR
+        CR["ChaosRunner\n.start() / .stop()\n.measure()"]
+        CF["ChaosFuzzer\n.measure()"]
+        INJ["inject()\nTransport patch"]
+    end
+
+    %% ── Two families ────────────────────────────────────────────────────────
+    subgraph PROXY["🔀  Proxy-based  (intercepts traffic)"]
+        direction TB
+        HP["HTTP Proxy\n(local Python server)"]
+        TP["Transport patch\n(httpx / requests)"]
+
+        subgraph LLM_F["LLM / AI"]
+            L1["LLMLatency · RateLimit\nTimeout · Corrupt\nHallucination · Budget"]
+        end
+        subgraph SEM_F["Semantic / Gateway"]
+            L2["SemanticCorrupt\nGateway faults"]
+        end
+        subgraph INT_F["inject() behaviors"]
+            L3["Latency · RateLimit\nToolMutate · PromptInjection\nUnauthorized · Forbidden"]
+        end
+
+        HP --> LLM_F
+        HP --> SEM_F
+        TP --> INT_F
+    end
+
+    subgraph CMD["🖥️  Command-based  (modifies the system)"]
+        direction TB
+
+        subgraph NET["Network  (Linux kernel)"]
+            C1["tc / netem\ndelay · loss · corrupt\nduplicate · bandwidth"]
+            C2["iptables\nTCP RST · partition"]
+            C3["BPF / XDP\nsilent corruption"]
+        end
+
+        subgraph RES["Resources"]
+            C4["stress-ng\nCPU · memory · disk I/O"]
+            C5["dd\ndisk full · storage corrupt"]
+        end
+
+        subgraph PROC["Process / Service"]
+            C6["pkill · systemctl · docker\nProcessKill · ServiceFault\nContainerKill"]
+        end
+
+        subgraph STATE["State"]
+            C7["redis-cli\nRedisStateCorrupt"]
+            C8["psql\nPostgresStateCorrupt"]
+            C9["file I/O\nSkillFile · JsonCheckpoint"]
+        end
+    end
+
+    %% ── Target layer ────────────────────────────────────────────────────────
+    subgraph TARGET["📍  Target"]
+        direction LR
+        LT["LocalTarget\nlaptop / macOS"]
+        ST["SSHTarget\nremote Linux"]
+        HT["HTTPTarget\nbehind firewall"]
+    end
+
+    %% ── System under test ───────────────────────────────────────────────────
+    subgraph SUT["🎯  System Under Test"]
+        direction LR
+        SYS1["LLM API\nOpenAI · Anthropic\nOllama · NRP"]
+        SYS2["Infrastructure\nservers · services\ndatabases"]
+        SYS3["AI Agent\npipeline · workload"]
+    end
+
+    %% ── Results ─────────────────────────────────────────────────────────────
+    subgraph RESULTS["📊  Results"]
+        direction LR
+        DB["SQLite DB\n~/.chaos-jungle/\nchaos_jungle.db"]
+        DASH["Dashboard\nFastAPI UI"]
+        CSV["CSV / JSON\nexport"]
+        DB --> DASH
+        DB --> CSV
+    end
+
+    %% ── Connections ─────────────────────────────────────────────────────────
+    USER --> CORE
+    CORE --> PROXY
+    CORE --> CMD
+    PROXY --> TARGET
+    CMD --> TARGET
+    TARGET --> SUT
+    CORE --> RESULTS
+
+    %% ── Styling — matched to CJ logo palette ────────────────────────────────
+    %% Logo: dark forest green #1a4731, lime #7dc829, charcoal #2e3440, white lines
+
+    classDef core    fill:#1a4731,stroke:#7dc829,color:#7dc829
+    classDef proxy   fill:#162e22,stroke:#4a8a5f,color:#a8d890
+    classDef cmd     fill:#2e3440,stroke:#7dc829,color:#c8d8b0
+    classDef target  fill:#0f2a1a,stroke:#5ab07a,color:#90c4a0
+    classDef sut     fill:#1a2e22,stroke:#3a7a55,color:#80b090
+    classDef results fill:#7dc829,stroke:#5aa01f,color:#0f2318
+
+    class CR,CF,INJ core
+    class HP,TP,L1,L2,L3 proxy
+    class C1,C2,C3,C4,C5,C6,C7,C8,C9 cmd
+    class LT,ST,HT target
+    class SYS1,SYS2,SYS3 sut
+    class DB,DASH,CSV results
+</div>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor:       '#1a4731',
+      primaryTextColor:   '#7dc829',
+      primaryBorderColor: '#7dc829',
+      lineColor:          '#7dc829',
+      secondaryColor:     '#2e3440',
+      tertiaryColor:      '#0f2318',
+      background:         '#0a1a10',
+      mainBkg:            '#1a4731',
+      nodeBorder:         '#7dc829',
+      clusterBkg:         '#0f2318',
+      titleColor:         '#7dc829',
+      edgeLabelBackground:'#0f2318',
+    },
+    flowchart: { curve: 'basis', rankSpacing: 60, nodeSpacing: 40 },
+  });
+</script>
+</body>
+</html>
