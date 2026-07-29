@@ -70,11 +70,12 @@ intersphinx_mapping = {
 # ── Theme ─────────────────────────────────────────────────────────
 html_theme = "furo"
 html_title = "chaos-jungle"
-html_logo = "_static/logo.png"
 html_static_path = ["_static"]
 html_css_files = ["cj-theme.css"]
 
 html_theme_options = {
+    "light_logo": "logo.png",
+    "dark_logo":  "logo-dark.png",
     "dark_css_variables": {
         # Brand
         "color-brand-primary":              "#7dc829",
