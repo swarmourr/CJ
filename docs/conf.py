@@ -44,6 +44,10 @@ mermaid.initialize({
 });
 """
 
+# ── Static files ──────────────────────────────────────────────────
+html_static_path = ["_static"]
+html_js_files = ["mermaid-theme.js"]   # CJ logo colors for all Mermaid diagrams
+
 # ── Napoleon (NumPy docstrings) ───────────────────────────────────
 napoleon_numpy_docstring = True
 napoleon_google_docstring = False
