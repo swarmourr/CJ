@@ -8,8 +8,6 @@ network links, storage, services, system resources — so you can measure
 exactly what breaks, by how much, and whether your system recovers
 gracefully.
 
-It works on your laptop today.  No Kubernetes.  No paid chaos platform.
-
 ----
 
 Why chaos-jungle?

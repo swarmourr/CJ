@@ -1,0 +1,60 @@
+/* ── Chaos Jungle — custom theme overrides ─────────────────────── */
+
+/* Navigation active item */
+.sidebar-tree .current-page > .reference {
+  color: #7dc829 !important;
+  font-weight: 600;
+}
+
+/* Code block accent */
+.highlight {
+  border-left: 3px solid #7dc829;
+}
+
+/* Admonition titles */
+.admonition > .admonition-title {
+  background-color: #1a4731;
+  color: #7dc829;
+}
+
+/* Important callout */
+.admonition.important {
+  border-color: #7dc829;
+}
+
+/* Note callout */
+.admonition.note {
+  border-color: #4a8a5f;
+}
+
+/* Table header rows */
+table.docutils th {
+  background-color: #1a4731;
+  color: #7dc829;
+}
+
+/* Inline code */
+code.literal {
+  background-color: #162e22;
+  color: #a8d890;
+  border: 1px solid #2a5a3a;
+  border-radius: 4px;
+}
+
+/* H1 accent underline */
+h1 {
+  border-bottom: 2px solid #7dc829;
+  padding-bottom: 6px;
+}
+
+/* API signature background */
+dt.sig {
+  background-color: #0f2318 !important;
+  border-left: 4px solid #7dc829 !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0a1a10; }
+::-webkit-scrollbar-thumb { background: #1a4731; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #7dc829; }

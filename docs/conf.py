@@ -72,6 +72,56 @@ html_theme = "furo"
 html_title = "chaos-jungle"
 html_logo = "_static/logo.png"
 html_static_path = ["_static"]
+html_css_files = ["cj-theme.css"]
+
+html_theme_options = {
+    "dark_css_variables": {
+        # Brand
+        "color-brand-primary":              "#7dc829",
+        "color-brand-content":              "#7dc829",
+        # Backgrounds
+        "color-background-primary":         "#0a1a10",
+        "color-background-secondary":       "#0f2318",
+        "color-background-hover":           "#1a4731",
+        "color-background-hover--transparent": "#1a473100",
+        "color-background-border":          "#1a4731",
+        # Sidebar
+        "color-sidebar-background":         "#0f2318",
+        "color-sidebar-background-border":  "#1a4731",
+        "color-sidebar-brand-text":         "#7dc829",
+        "color-sidebar-caption-text":       "#5a8a6a",
+        "color-sidebar-link-text":          "#c0d8c0",
+        "color-sidebar-link-text--top-level": "#7dc829",
+        "color-sidebar-item-background--current": "#1a4731",
+        "color-sidebar-item-background--hover":   "#162e22",
+        "color-sidebar-item-expander-background--hover": "#1a4731",
+        # Foreground / text
+        "color-foreground-primary":         "#e0eed8",
+        "color-foreground-secondary":       "#90b890",
+        "color-foreground-muted":           "#5a8a6a",
+        "color-foreground-border":          "#2a5a3a",
+        # Headings
+        "color-api-name":                   "#7dc829",
+        "color-api-pre-name":               "#5aa01f",
+        # Code blocks
+        "color-code-background":            "#0f2318",
+        "color-code-foreground":            "#c8e8b0",
+        # Highlight / admonitions
+        "color-highlight-on-target":        "#1a4731",
+        "color-admonition-background":      "#0f2318",
+        # Announced / inline code
+        "color-inline-code-background":     "#162e22",
+    },
+    "light_css_variables": {
+        "color-brand-primary":              "#1a4731",
+        "color-brand-content":              "#1a4731",
+        "color-sidebar-brand-text":         "#1a4731",
+        "color-sidebar-link-text--top-level": "#1a4731",
+        "color-sidebar-item-background--current": "#d8f0c0",
+        "color-api-name":                   "#1a4731",
+        "color-inline-code-background":     "#eaf5e0",
+    },
+}
 
 # ── sphinx-click ─────────────────────────────────────────────────
 sphinx_click_mock_imports = []
