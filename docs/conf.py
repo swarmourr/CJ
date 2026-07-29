@@ -96,16 +96,16 @@ html_theme_options = {
         "color-sidebar-item-background--hover":   "#162e22",
         "color-sidebar-item-expander-background--hover": "#1a4731",
         # Foreground / text
-        "color-foreground-primary":         "#e0eed8",
-        "color-foreground-secondary":       "#90b890",
-        "color-foreground-muted":           "#5a8a6a",
+        "color-foreground-primary":         "#ffffff",
+        "color-foreground-secondary":       "#cccccc",
+        "color-foreground-muted":           "#999999",
         "color-foreground-border":          "#2a5a3a",
         # Headings
         "color-api-name":                   "#7dc829",
         "color-api-pre-name":               "#5aa01f",
         # Code blocks
         "color-code-background":            "#0f2318",
-        "color-code-foreground":            "#c8e8b0",
+        "color-code-foreground":            "#ffffff",
         # Highlight / admonitions
         "color-highlight-on-target":        "#1a4731",
         "color-admonition-background":      "#0f2318",
