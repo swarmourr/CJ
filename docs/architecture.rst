@@ -8,6 +8,7 @@ observe, and evaluate faults across any layer of a modern system.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        CP["CONTROL PLANE\nScenario ── ChaosRunner ── ExperimentSuite\n@chaos · @chaos_measure · inject() · door()"]
        TP["TRANSPORT PLANE\nHTTP proxy\nhttpx patch\nOS / BPF"]
@@ -58,6 +59,7 @@ Lifecycle of a single experiment:
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart LR
        PRE["PREFLIGHT\ncheck tools"]
        START["START\ninject faults"]
@@ -83,6 +85,7 @@ target and ``sudo``.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        APP["YOUR APPLICATION"]
        KERNEL["LINUX KERNEL LAYER"]
@@ -105,6 +108,7 @@ forwarding.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        SDK["LLM SDK (any provider)"]
        PROXY["CJ PROXY\n① match request URL against fault rules\n② apply fault: latency · 429 · 503 · corrupt\n   hallucinate · truncate · timeout\n③ forward or short-circuit"]
@@ -134,6 +138,7 @@ uses them is affected automatically — no proxy port, no SDK reconfiguration.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        SDK2["LLM SDK — OpenAI · Anthropic · LiteLLM · LangChain\nuses httpx or requests internally"]
        PATCH["CJ TRANSPORT PATCH\n① Behavior.before(url) — latency · jitter · timeout\n② real send() — actual HTTP/HTTPS request\n③ Behavior.after(url) — corrupt · 429 · 503\nprobability roll: each behavior fires independently"]
@@ -158,6 +163,7 @@ target handles the transport.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        RUNNER["ChaosRunner"]
        LOCAL["LocalTarget\nsubprocess.run"]
@@ -177,6 +183,7 @@ firewall or inside a CI runner.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart LR
        subgraph TEST["TEST RUNNER HOST"]
            CR["ChaosRunner + HTTPTarget"]
@@ -198,6 +205,7 @@ whether they execute.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        MEAS["runner.measure(workload, n_baseline=5, n_fault=5, evaluator=judge)"]
        P1["PHASE 1 — BASELINE\nrun workload × n_baseline\n→ baseline metrics"]
@@ -221,6 +229,7 @@ Every experiment writes structured data to a local SQLite database.
 
 .. mermaid::
 
+   %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        DB["~/.chaos-jungle/chaos_jungle.db\nsessions · faults · events · results · commands"]
        DASH["Dashboard :8080\nchaos-jungle dashboard"]
