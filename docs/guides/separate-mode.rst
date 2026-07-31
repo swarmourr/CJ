@@ -1,3 +1,8 @@
+.. |any-os|        replace:: :bdg-success:`Any OS`
+.. |no-sudo|       replace:: :bdg-success:`No sudo`
+.. |linux-only|    replace:: :bdg-info:`Linux`
+.. |sudo-required| replace:: :bdg-warning:`sudo`
+
 .. _guide-separate-mode:
 
 Separate Mode
@@ -45,7 +50,7 @@ CLI — quick start
 CLI — all fault types
 ----------------------
 
-**Network faults (Linux, requires sudo):**
+**Network faults** |linux-only| |sudo-required|
 
 .. code-block:: bash
 
@@ -61,7 +66,7 @@ CLI — all fault types
 
    chaos-jungle stop --target ssh://ubuntu@worker1
 
-**LLM faults (macOS, no sudo):**
+**LLM faults** |any-os| |no-sudo|
 
 .. code-block:: bash
 

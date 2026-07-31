@@ -11,7 +11,7 @@ LLM API Faults
      you need streaming interrupts, per-session cost tracking (``LLMBudgetExceeded``),
      or network-level protocol realism.
    * Use :ref:`guide-intercept` (``inject(Latency(3.0))``) when you want
-     zero-setup testing that works on macOS and CI with no port configuration.
+     zero-setup testing that works on any OS and in CI with no port configuration.
 
    Both inject the same logical faults — the proxy runs a real TCP server while
    ``inject()`` patches Python's HTTP transport layer.

@@ -11,7 +11,7 @@ Two paths — pick yours
    * - **Testing an AI agent?**
      - **Testing infrastructure?**
    * - Inject faults into LLM API calls, tool results, RAG context, agent
-       state, or skill definitions.  Works on **macOS or Linux**.  No ``sudo``
+       state, or skill definitions.  Works on **any OS**.  No ``sudo``
        or Linux kernel required for most faults.
      - Inject network delay/loss, storage corruption, process crashes, CPU /
        memory / disk exhaustion on a Linux machine via SSH.  Requires a Linux
@@ -77,7 +77,7 @@ Requirements
 ~~~~~~~~~~~~
 
 * Python 3.9+
-* **macOS or Linux** — LLM / AI faults work on both
+* Any OS
 * **Linux only** — network, storage, process, and resource faults
 * ``sudo`` on the target machine for privileged commands
 
@@ -94,10 +94,10 @@ Choose your starting point
      - Linux required?
    * - LLM API (latency, rate-limit, corrupt response)
      - ``LocalTarget``
-     - No — works on macOS
+     - No
    * - Semantic fault (RAG poison, entity swap)
      - ``LocalTarget``
-     - No — works on macOS
+     - No
    * - Network delay / loss
      - ``SSHTarget``
      - Yes
@@ -109,7 +109,7 @@ Choose your starting point
      - Yes
 
 
-Example 1 — LLM latency (macOS, no setup)
+Example 1 — LLM latency
 ------------------------------------------
 
 Inject a 3-second delay into every call to a local Ollama model and verify
@@ -144,7 +144,7 @@ your application's timeout logic fires correctly.
    # fault_mean("duration_s") should be ≈ baseline + 3 s
 
 
-Example 2 — semantic quality measurement (macOS, no setup)
+Example 2 — semantic quality measurement
 -----------------------------------------------------------
 
 Inject entity swaps into LLM context and measure the quality drop using a

@@ -8,7 +8,7 @@ changes are needed — install the package and the ``@pytest.mark.chaos``
 marker, the ``inject()`` context manager, and the assertion helpers are all
 available immediately.
 
-All patterns on this page work on **macOS, Linux, and CI** without a Linux
+All patterns on this page work on **any OS and in CI** without a Linux
 target or ``sudo``.
 
 ----

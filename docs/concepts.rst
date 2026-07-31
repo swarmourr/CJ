@@ -356,7 +356,7 @@ and execute privileged operations (``sudo``).
      - Typical use
    * - ``LocalTarget``
      - subprocess on local machine
-     - LLM / AI faults on macOS; quick local tests
+     - LLM / AI faults; quick local tests
    * - ``SSHTarget``
      - Paramiko SSH to a remote machine
      - Infrastructure faults on Linux servers
@@ -367,7 +367,7 @@ and execute privileged operations (``sudo``).
 .. note::
 
    **LLM / AI faults** (proxy-based) work on **any OS** with ``LocalTarget``
-   — no Linux or sudo required.
+   
 
    **Infrastructure faults** (network, storage, process, resources) require
    a **Linux target** and ``sudo`` for privileged commands.

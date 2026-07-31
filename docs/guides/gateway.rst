@@ -17,7 +17,7 @@ provider failure:
 
 chaos-jungle's gateway faults inject these failures at the HTTP transport
 layer using the same zero-setup intercept mechanism as :ref:`guide-intercept`.
-No subprocess, no proxy port, no Linux required.
+No subprocess, no proxy port required.
 
 ----
 

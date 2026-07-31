@@ -12,10 +12,10 @@ Linux and ``sudo``.
 
 ----
 
-LLM fault — macOS, no setup
+LLM fault
 -----------------------------
 
-The most common use case on macOS.  Inject faults into a local Ollama model
+Inject faults into a local Ollama model
 without any Linux machine:
 
 .. code-block:: python
@@ -104,7 +104,7 @@ Choosing a target
    * - ``LocalTarget()``
      - same machine
      - same machine
-     - LLM faults on macOS; Linux CI containers
+     - LLM faults; CI containers
    * - ``SSHTarget("worker1")``
      - remote machine (SSH)
      - your machine

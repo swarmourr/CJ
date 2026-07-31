@@ -300,7 +300,7 @@ Every fault implements ``revert()`` to undo persistent side-effects.
 removes the padding file on stop.
 
 **Zero infrastructure for LLM tests.**
-``inject()`` works on any OS — macOS, Windows, Linux — with no ``sudo``, no
+``inject()`` works on any OS with no ``sudo``, no
 port forwarding, and no proxy process.  Just ``pip install chaos-jungle`` and
 wrap your code.
 

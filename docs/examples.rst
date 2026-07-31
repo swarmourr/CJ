@@ -2,11 +2,11 @@ Examples
 ========
 
 Copy-paste-ready examples for every fault layer.  Start with the layer that
-matches your stack — LLM faults work on macOS with no Linux machine needed.
+matches your stack — 
 
 ----
 
-LLM / AI Faults (macOS, no sudo)
+LLM / AI Faults
 ----------------------------------
 
 These examples use a local `Ollama <https://ollama.com>`_ model.  Replace
@@ -149,7 +149,7 @@ Token starvation
 
 ----
 
-Semantic Faults (macOS, no sudo)
+Semantic Faults
 ----------------------------------
 
 Entity swap

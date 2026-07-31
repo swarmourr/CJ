@@ -6,8 +6,8 @@ SDK Intercept
 .. tip::
 
    **New to chaos-jungle?  Start here.**  ``inject()`` is the fastest way to
-   test an AI agent — no subprocess, no port configuration, no Linux required.
-   It works on macOS and in CI out of the box.
+   test an AI agent — no subprocess, no port configuration required.
+   It works on any OS and in CI out of the box.
 
    If you need streaming fault injection, per-session cost tracking, or
    network-level protocol realism, use the :ref:`proxy faults <guide-llm>`
@@ -27,8 +27,8 @@ Intercept vs proxy — which to use
      - **None** — just import and wrap
      - Port + upstream URL config per fault
    * - OS support
-     - Any OS (macOS, Linux, Windows)
-     - Linux + macOS
+     - Any OS
+     - Linux
    * - Affects all SDKs
      - Yes — all httpx / requests clients
      - Only clients pointing to the proxy
