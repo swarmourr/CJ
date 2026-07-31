@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>chaos-jungle — All Components</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+  padding: 40px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 800;
+  color: #58a6ff;
+  margin-bottom: 8px;
+  letter-spacing: -1px;
+}
+.subtitle { color: #8b949e; font-size: 14px; margin-bottom: 40px; }
+
+/* ── Grid layout ── */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  grid-template-rows: auto auto auto auto auto;
+  gap: 16px;
+}
+
+/* ── Base card ── */
+.card {
+  background: #161b22;
+  border-radius: 10px;
+  padding: 18px 20px;
+  border: 1px solid #30363d;
+}
+
+.card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #21262d;
+}
+
+/* ── Accent colors ── */
+.accent-blue  { border-top: 3px solid #58a6ff; }
+.accent-green { border-top: 3px solid #3fb950; }
+.accent-orange{ border-top: 3px solid #d29922; }
+.accent-red   { border-top: 3px solid #f85149; }
+.accent-purple{ border-top: 3px solid #bc8cff; }
+.accent-teal  { border-top: 3px solid #39d353; }
+.accent-pink  { border-top: 3px solid #f78166; }
+.accent-grey  { border-top: 3px solid #8b949e; }
+
+.blue   { color: #58a6ff; }
+.green  { color: #3fb950; }
+.orange { color: #d29922; }
+.red    { color: #f85149; }
+.purple { color: #bc8cff; }
+.teal   { color: #39d353; }
+.pink   { color: #f78166; }
+.grey   { color: #8b949e; }
+
+/* ── Component items ── */
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: #21262d;
+}
+.item:last-child { margin-bottom: 0; }
+
+.item-icon {
+  font-size: 16px;
+  min-width: 22px;
+  text-align: center;
+  margin-top: 1px;
+}
+
+.item-body { flex: 1; }
+
+.item-name {
+  font-size: 13px;
+  font-weight: 600;
+  font-family: "SF Mono", "Cascadia Code", monospace;
+}
+
+.item-desc {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-top: 4px;
+  font-weight: 600;
+}
+.badge-safe   { background: #0d419d; color: #79c0ff; }
+.badge-mod    { background: #5a1e02; color: #ffa657; }
+.badge-dest   { background: #490202; color: #ff7b72; }
+
+/* ── Arrow between cards ── */
+.arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #30363d;
+  font-size: 28px;
+  font-weight: 100;
+}
+
+/* ── Flow connector row ── */
+.flow-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.flow-arrow {
+  flex: 1;
+  height: 2px;
+  background: linear-gradient(90deg, #21262d, #30363d, #21262d);
+  position: relative;
+}
+.flow-arrow::after {
+  content: '▶';
+  position: absolute;
+  right: -6px;
+  top: -8px;
+  color: #30363d;
+  font-size: 14px;
+}
+.flow-label {
+  font-size: 11px;
+  color: #484f58;
+  white-space: nowrap;
+}
+
+/* ── Span helpers ── */
+.span2 { grid-column: span 2; }
+.span3 { grid-column: span 3; }
+.span4 { grid-column: span 4; }
+
+/* ── Section label ── */
+.section-label {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #484f58;
+  padding: 8px 0 2px;
+  border-top: 1px solid #21262d;
+  margin-top: 4px;
+}
+
+/* ── Flow diagram ── */
+.flow {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 16px 0;
+}
+.flow-box {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}
+.flow-box small {
+  display: block;
+  font-size: 10px;
+  color: #8b949e;
+  font-weight: 400;
+  margin-top: 2px;
+}
+.flow-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.step-num {
+  font-size: 10px;
+  color: #484f58;
+}
+.flow-conn {
+  font-size: 16px;
+  color: #30363d;
+  padding: 0 6px;
+  margin-top: -10px;
+}
+
+/* ── Legend ── */
+.legend {
+  display: flex;
+  gap: 20px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #8b949e;
+}
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+</style>
+</head>
+<body>
+
+<h1>chaos-jungle</h1>
+<p class="subtitle">All components — how they fit together</p>
+
+<div class="grid">
+
+  <!-- ════════════════════════════════ SECTION: INPUT ════════════════════════════════ -->
+  <div class="section-label">INPUT — what you write</div>
+
+  <!-- Scenario -->
+  <div class="card accent-blue">
+    <div class="card-title blue">Scenario</div>
+    <div class="item">
+      <div class="item-icon">📋</div>
+      <div class="item-body">
+        <div class="item-name">Scenario</div>
+        <div class="item-desc">Named list of Faults. Pure data — no logic, no execution.</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">🔗</div>
+      <div class="item-body">
+        <div class="item-name">ExperimentSuite</div>
+        <div class="item-desc">Run multiple Scenarios in sequence or parallel.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Faults -->
+  <div class="card accent-orange span3">
+    <div class="card-title orange">Faults — what gets broken</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name green">NetworkDelay</div>
+          <div class="item-desc">add latency via tc netem</div>
+          <span class="badge badge-safe">danger 0</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name green">NetworkLoss</div>
+          <div class="item-desc">drop % of packets</div>
+          <span class="badge badge-safe">danger 0</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name green">LLMLatency</div>
+          <div class="item-desc">slow LLM API responses</div>
+          <span class="badge badge-safe">danger 0</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name orange">CPUStress</div>
+          <div class="item-desc">saturate N CPU cores</div>
+          <span class="badge badge-mod">danger 1</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name orange">MemoryStress</div>
+          <div class="item-desc">allocate N MiB RAM</div>
+          <span class="badge badge-mod">danger 1</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name orange">IOStress</div>
+          <div class="item-desc">hammer disk I/O</div>
+          <span class="badge badge-mod">danger 1</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name red">ProcessKill</div>
+          <div class="item-desc">kill OS processes</div>
+          <span class="badge badge-dest">danger 2</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name red">ServiceFault</div>
+          <div class="item-desc">stop/mask systemd service</div>
+          <span class="badge badge-dest">danger 2</span>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name red">StorageCorrupt</div>
+          <div class="item-desc">flip bytes in files</div>
+          <span class="badge badge-dest">danger 2</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════ SECTION: ORCHESTRATION ════════════════════════════════ -->
+  <div class="section-label">ORCHESTRATION — ChaosRunner controls everything</div>
+
+  <!-- ChaosRunner -->
+  <div class="card accent-blue span2">
+    <div class="card-title blue">ChaosRunner</div>
+    <div class="flow" style="justify-content:center;flex-wrap:wrap;gap:4px">
+      <div class="flow-step">
+        <div class="step-num">①</div>
+        <div class="flow-box blue" style="border-color:#58a6ff33">PREFLIGHT<small>check tools</small></div>
+      </div>
+      <div class="flow-conn">→</div>
+      <div class="flow-step">
+        <div class="step-num">②</div>
+        <div class="flow-box green" style="border-color:#3fb95033">BASELINE<small>run workload</small></div>
+      </div>
+      <div class="flow-conn">→</div>
+      <div class="flow-step">
+        <div class="step-num">③</div>
+        <div class="flow-box orange" style="border-color:#d2992233">START<small>inject fault</small></div>
+      </div>
+      <div class="flow-conn">→</div>
+      <div class="flow-step">
+        <div class="step-num">④</div>
+        <div class="flow-box red" style="border-color:#f8514933">FAULT<small>run workload</small></div>
+      </div>
+      <div class="flow-conn">→</div>
+      <div class="flow-step">
+        <div class="step-num">⑤</div>
+        <div class="flow-box orange" style="border-color:#d2992233">STOP<small>remove fault</small></div>
+      </div>
+      <div class="flow-conn">→</div>
+      <div class="flow-step">
+        <div class="step-num">⑥</div>
+        <div class="flow-box purple" style="border-color:#bc8cff33">RECORD<small>write SQLite</small></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Guardrails -->
+  <div class="card accent-orange">
+    <div class="card-title orange">Guardrails</div>
+    <div class="item">
+      <div class="item-icon">⚡</div>
+      <div class="item-body">
+        <div class="item-name">ConflictError</div>
+        <div class="item-desc">Raised when two faults conflict, e.g. two NetworkDelay on same interface</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">🔍</div>
+      <div class="item-body">
+        <div class="item-name">RuntimeValidator</div>
+        <div class="item-desc">Checks live state on target before injection (existing tc rules)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SafetyPolicy -->
+  <div class="card accent-red">
+    <div class="card-title red">SafetyPolicy</div>
+    <div class="item">
+      <div class="item-icon">🛡</div>
+      <div class="item-body">
+        <div class="item-name">max_danger</div>
+        <div class="item-desc">Block faults above danger level 0/1/2</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">🌵</div>
+      <div class="item-body">
+        <div class="item-name">dry_run</div>
+        <div class="item-desc">Print what WOULD happen — nothing executed</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">📍</div>
+      <div class="item-body">
+        <div class="item-name">allowed_targets</div>
+        <div class="item-desc">Allowlist of permitted hostnames</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════ SECTION: TARGET PLANE ════════════════════════════════ -->
+  <div class="section-label">TARGET PLANE — where faults land</div>
+
+  <!-- LoggingTarget -->
+  <div class="card accent-purple span2">
+    <div class="card-title purple">LoggingTarget — transparent proxy</div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="flex:1">
+        <div class="item">
+          <div class="item-icon">🔀</div>
+          <div class="item-body">
+            <div class="item-name">Wraps every Target</div>
+            <div class="item-desc">Faults always talk to LoggingTarget — never the real target directly</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="item-icon">📝</div>
+          <div class="item-body">
+            <div class="item-name">Intercepts run() + sudo()</div>
+            <div class="item-desc">Forwards to real target AND writes to DB simultaneously</div>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:28px;color:#30363d">→</div>
+      <div style="flex:1">
+        <div class="item">
+          <div class="item-icon">💻</div>
+          <div class="item-body">
+            <div class="item-name">LocalTarget</div>
+            <div class="item-desc">subprocess.run() — same machine</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="item-icon">🌐</div>
+          <div class="item-body">
+            <div class="item-name">SSHTarget</div>
+            <div class="item-desc">Paramiko SSH → remote Linux</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="item-icon">📡</div>
+          <div class="item-body">
+            <div class="item-name">HTTPTarget</div>
+            <div class="item-desc">HTTP POST → cj-daemon :8642</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Injection Methods -->
+  <div class="card accent-green span2">
+    <div class="card-title green">3 Injection Depths</div>
+    <div class="item">
+      <div class="item-icon" style="font-size:20px">🐧</div>
+      <div class="item-body">
+        <div class="item-name green">Depth 1 — OS / Kernel</div>
+        <div class="item-desc">tc netem · stress-ng · pkill · systemctl · docker<br>
+        Requires: Linux target + sudo</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon" style="font-size:20px">🔌</div>
+      <div class="item-body">
+        <div class="item-name orange">Depth 2 — HTTP Proxy</div>
+        <div class="item-desc">Local MITM proxy intercepts LLM API calls<br>
+        Point SDK at localhost:&lt;port&gt;</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon" style="font-size:20px">🩹</div>
+      <div class="item-body">
+        <div class="item-name blue">Depth 3 — Transport Patch</div>
+        <div class="item-desc">Monkey-patches httpx.Client.send + requests.Session.send<br>
+        Works on any OS · no port · no sudo</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════ SECTION: EVALUATION ════════════════════════════════ -->
+  <div class="section-label">EVALUATION — measuring the damage</div>
+
+  <!-- measure() -->
+  <div class="card accent-teal span2">
+    <div class="card-title teal">measure() → MeasurementResult</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name teal">baseline</div>
+          <div class="item-desc">avg metrics without fault<br><small style="color:#484f58">{"duration_s": 0.11}</small></div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name red">fault</div>
+          <div class="item-desc">avg metrics with fault<br><small style="color:#484f58">{"duration_s": 0.42}</small></div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name orange">delta</div>
+          <div class="item-desc">fault − baseline<br><small style="color:#484f58">{"duration_s": +0.31}</small></div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name blue">passed(key, threshold)</div>
+          <div class="item-desc">abs(delta) ≤ threshold?</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLMJudge -->
+  <div class="card accent-purple">
+    <div class="card-title purple">LLMJudge</div>
+    <div class="item">
+      <div class="item-icon">🎓</div>
+      <div class="item-body">
+        <div class="item-name">score(question, context, response)</div>
+        <div class="item-desc">Calls a second "judge" LLM to evaluate quality</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">📊</div>
+      <div class="item-body">
+        <div class="item-name">JudgeScore</div>
+        <div class="item-desc">faithfulness · hallucination · coherence · guardrail_violation</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">✅</div>
+      <div class="item-body">
+        <div class="item-name">passed_quality()</div>
+        <div class="item-desc">faithfulness ≥ 0.7 AND hallucination ≤ 0.3</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Oracles -->
+  <div class="card accent-pink">
+    <div class="card-title pink">Oracles</div>
+    <div class="item">
+      <div class="item-body">
+        <div class="item-name">NoPIILeakage</div>
+        <div class="item-desc">scan response for PII patterns</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-body">
+        <div class="item-name">MaxCost</div>
+        <div class="item-desc">token cost ≤ max_usd per run</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-body">
+        <div class="item-name">CorrectSkillSelected</div>
+        <div class="item-desc">agent used the expected skill</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-body">
+        <div class="item-name">passed_oracles()</div>
+        <div class="item-desc">all assertions passed?</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════ SECTION: DATA ════════════════════════════════ -->
+  <div class="section-label">DATA PLANE — everything stored in SQLite</div>
+
+  <!-- SessionDB -->
+  <div class="card accent-grey span2">
+    <div class="card-title grey">SessionDB — ~/.chaos-jungle/chaos_jungle.db</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name">sessions</div>
+          <div class="item-desc">name · started_at · stopped_at · status</div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name">faults</div>
+          <div class="item-desc">kind · parameters · session_id</div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name">events</div>
+          <div class="item-desc">timestamped log of everything</div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name">commands</div>
+          <div class="item-desc">every shell cmd · stdout · stderr · exit_code</div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name">results</div>
+          <div class="item-desc">baseline · fault · delta · judge scores</div>
+        </div>
+      </div>
+      <div class="item">
+        <div class="item-body">
+          <div class="item-name">traces</div>
+          <div class="item-desc">oracle results · trace events</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Outputs -->
+  <div class="card accent-teal span2">
+    <div class="card-title teal">Outputs</div>
+    <div class="item">
+      <div class="item-icon">🖥</div>
+      <div class="item-body">
+        <div class="item-name">Dashboard :8080</div>
+        <div class="item-desc">chaos-jungle dashboard — web UI, session viewer, event log</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">📁</div>
+      <div class="item-body">
+        <div class="item-name">export_db_to_csv()</div>
+        <div class="item-desc">CSV files for external analysis</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">⌨️</div>
+      <div class="item-body">
+        <div class="item-name">chaos-jungle list</div>
+        <div class="item-desc">CLI summary of all past sessions</div>
+      </div>
+    </div>
+    <div class="item">
+      <div class="item-icon">🔗</div>
+      <div class="item-body">
+        <div class="item-name">ChaosRunner.attach()</div>
+        <div class="item-desc">Stop a running fault from a different process</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════ LEGEND ════════════════════════════════ -->
+  <div class="section-label">DANGER LEVELS</div>
+  <div class="card span4" style="background:#0d1117;border:none;padding:12px 0">
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#58a6ff"></div> safe (0) — fully reversible, no side effects</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#d29922"></div> moderate (1) — resource consumption, may affect other workloads</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div> destructive (2) — may cause data loss, requires revert()</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>chaos-jungle — Presentation</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #f1f5f9;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: hidden;
+  color: #0f172a;
+}
+
+.deck { width: 100vw; height: 100vh; position: relative; }
+
+.slide {
+  display: none; width: 100%; height: 100%;
+  position: absolute; top: 0; left: 0;
+  background: #ffffff;
+  flex-direction: column;
+}
+.slide.active { display: flex; }
+
+/* ── Slide header ── */
+.slide-bar {
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 18px 56px;
+  display: flex; align-items: center; gap: 12px;
+  flex-shrink: 0;
+}
+.slide-num  { font-size: 11px; color: #94a3b8; font-weight: 600; min-width: 28px; }
+.slide-title { font-size: 19px; font-weight: 700; color: #0f172a; }
+.slide-tag  { margin-left: auto; font-size: 11px; background: #f1f5f9; border: 1px solid #e2e8f0; color: #64748b; padding: 2px 10px; border-radius: 12px; }
+
+/* ── Slide body ── */
+.slide-body { flex: 1; padding: 28px 56px 60px; overflow: hidden; }
+
+/* ── Title slide ── */
+.title-slide {
+  display: none; flex-direction: column;
+  align-items: center; justify-content: center;
+  height: 100vh; background: #ffffff; gap: 18px; text-align: center;
+}
+.title-slide.active { display: flex; }
+.title-logo {
+  font-size: 68px; font-weight: 800; letter-spacing: -3px;
+  background: linear-gradient(135deg, #2563eb, #16a34a);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.title-sub { font-size: 19px; color: #64748b; font-weight: 400; }
+.title-pills { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; justify-content: center; }
+.pill { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 20px; padding: 5px 16px; font-size: 13px; color: #2563eb; font-weight: 500; }
+
+/* ── Cards ── */
+.card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; }
+.card-title { font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 5px; }
+.card-desc  { font-size: 11px; color: #64748b; line-height: 1.6; }
+
+.ac-blue   { border-left: 3px solid #2563eb; }
+.ac-green  { border-left: 3px solid #16a34a; }
+.ac-orange { border-left: 3px solid #d97706; }
+.ac-red    { border-left: 3px solid #dc2626; }
+.ac-purple { border-left: 3px solid #7c3aed; }
+.ac-teal   { border-left: 3px solid #0d9488; }
+
+.t-blue   { color: #2563eb; }
+.t-green  { color: #16a34a; }
+.t-orange { color: #d97706; }
+.t-red    { color: #dc2626; }
+.t-purple { color: #7c3aed; }
+.t-teal   { color: #0d9488; }
+
+/* ── Chips ── */
+.chip { display: inline-block; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin: 2px 2px 0 0; }
+.chip-blue   { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+.chip-green  { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.chip-orange { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+.chip-red    { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.chip-purple { background: #faf5ff; color: #6d28d9; border: 1px solid #ddd6fe; }
+.chip-teal   { background: #f0fdfa; color: #0f766e; border: 1px solid #99f6e4; }
+.chip-grey   { background: #f8fafc; color: #475569; border: 1px solid #e2e8f0; }
+
+/* ── Layout ── */
+.row  { display: flex; gap: 12px; }
+.col  { display: flex; flex-direction: column; gap: 10px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.f1 { flex: 1; } .f2 { flex: 2; }
+
+/* ── Fault rows ── */
+.fr { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; margin-bottom: 6px; }
+.fr-name { font-family: "SF Mono", Consolas, monospace; font-size: 11px; font-weight: 700; width: 168px; flex-shrink: 0; }
+.fr-desc { font-size: 10px; color: #64748b; flex: 1; }
+
+/* ── Section label ── */
+.sec { font-size: 9px; font-weight: 700; letter-spacing: 2px; color: #94a3b8; margin-bottom: 8px; }
+
+/* ── Divider ── */
+.vdiv { width: 1px; background: #e2e8f0; margin: 0 6px; flex-shrink: 0; }
+.arr  { color: #cbd5e1; font-size: 15px; padding: 0 4px; align-self: center; flex-shrink: 0; }
+
+/* ── Nav ── */
+.nav {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 10px; align-items: center;
+  background: #fff; border: 1px solid #e2e8f0; border-radius: 24px;
+  padding: 7px 18px; box-shadow: 0 4px 16px #0000001a; z-index: 100;
+}
+.nav button { background: none; border: 1px solid #e2e8f0; color: #0f172a; padding: 5px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.nav button:hover { background: #f8fafc; }
+.nav button:disabled { opacity: 0.3; cursor: default; }
+.nav .counter { font-size: 12px; color: #94a3b8; min-width: 56px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="deck">
+
+<!-- ══════════════════════════════════════
+     SLIDE 0 — TITLE
+══════════════════════════════════════ -->
+<div class="title-slide active" id="slide-0">
+  <div style="width:56px;height:4px;background:linear-gradient(135deg,#2563eb,#16a34a);border-radius:2px;margin-bottom:4px"></div>
+  <div class="title-logo">chaos-jungle</div>
+  <div class="title-sub">A Fault Injection Framework for Distributed Systems</div>
+  <div class="title-pills">
+    <span class="pill">Infrastructure Faults</span>
+    <span class="pill">LLM / AI Faults</span>
+    <span class="pill">Measurement & Results</span>
+    <span class="pill">Safety & Assertions</span>
+  </div>
+  <div style="margin-top:16px;font-size:12px;color:#cbd5e1">Based on RENCI-NRIG chaos-jungle · Extended Framework</div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 1 — THE PROBLEM
+══════════════════════════════════════ -->
+<div class="slide" id="slide-1">
+  <div class="slide-bar">
+    <span class="slide-num">01</span>
+    <span class="slide-title">The Problem — Original chaos-jungle (RENCI)</span>
+    <span class="slide-tag">motivation</span>
+  </div>
+  <div class="slide-body">
+    <div class="row" style="height:100%">
+
+      <div class="col f1">
+        <div class="sec">WHAT EXISTED</div>
+        <div class="card ac-green">
+          <div class="card-title t-green">BPF / XDP</div>
+          <div class="card-desc">Silent TCP/UDP payload corruption — swaps two byte positions in kernel, recomputes checksum</div>
+        </div>
+        <div class="card ac-orange">
+          <div class="card-title t-orange">TC / netem</div>
+          <div class="card-desc">Delay · loss · duplication · reordering<br>
+            <span style="color:#dc2626;font-size:10px;font-weight:600">Documentation only — no code, no automation</span>
+          </div>
+        </div>
+        <div class="card ac-blue">
+          <div class="card-title t-blue">Storage Corruption</div>
+          <div class="card-desc">Bit-flip files matching a glob pattern via dd + crontab scheduling</div>
+        </div>
+      </div>
+
+      <div class="vdiv"></div>
+
+      <div class="col f2">
+        <div class="sec">WHAT WAS MISSING</div>
+        <div class="grid2">
+          <div class="card ac-red"><div class="card-title t-red">No Python API</div><div class="card-desc">Manual scripts — cannot import or integrate into code</div></div>
+          <div class="card ac-red"><div class="card-title t-red">No Revert</div><div class="card-desc">TC/BPF rules stay loaded on crash — manual cleanup</div></div>
+          <div class="card ac-red"><div class="card-title t-red">No Composition</div><div class="card-desc">Cannot combine faults — each tool is independent</div></div>
+          <div class="card ac-red"><div class="card-title t-red">No Measurement</div><div class="card-desc">No baseline vs fault comparison — manual interpretation</div></div>
+          <div class="card ac-red"><div class="card-title t-red">No Remote Control</div><div class="card-desc">Must run on target machine — no SSH, no daemon</div></div>
+          <div class="card ac-red"><div class="card-title t-red">No Safety</div><div class="card-desc">Everything needs sudo — no dry-run, no danger levels</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 2 — THE NEW VERSION
+══════════════════════════════════════ -->
+<div class="slide" id="slide-2">
+  <div class="slide-bar">
+    <span class="slide-num">02</span>
+    <span class="slide-title">chaos-jungle — The New Version</span>
+    <span class="slide-tag">overview</span>
+  </div>
+  <div class="slide-body">
+    <div class="col">
+      <div style="font-size:17px;font-weight:400;color:#334155;line-height:1.8;max-width:740px;margin-bottom:8px">
+        A tool that lets you <strong style="color:#0f172a">deliberately break your system in a controlled way</strong> —
+        before your users do it for you.
+      </div>
+      <div class="grid2">
+        <div class="card ac-blue">
+          <div class="card-title t-blue">Simulates real-world failures</div>
+          <div class="card-desc">Slow networks · crashed services · corrupted files · unresponsive LLM APIs — on demand, reproducibly</div>
+        </div>
+        <div class="card ac-green">
+          <div class="card-title t-green">Runs safely</div>
+          <div class="card-desc">Everything is automatically cleaned up when done — even on crash or exception, via finally block</div>
+        </div>
+        <div class="card ac-orange">
+          <div class="card-title t-orange">Measures the impact</div>
+          <div class="card-desc">Compares how your system behaves normally vs under failure — quantitative deltas and quality gates</div>
+        </div>
+        <div class="card ac-purple">
+          <div class="card-title t-purple">Works anywhere</div>
+          <div class="card-desc">Your laptop · remote server · machine behind a firewall — any OS for LLM/transport faults</div>
+        </div>
+        <div class="card ac-teal">
+          <div class="card-title t-teal">Full observability</div>
+          <div class="card-desc">Every action logged to SQLite — web dashboard, CSV export, CLI — complete audit trail</div>
+        </div>
+        <div class="card" style="border-left:3px solid #0f172a">
+          <div class="card-title">Built for research</div>
+          <div class="card-desc">HPC workflows · LLM agent resilience · distributed systems · scientific pipelines</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 3 — ARCHITECTURE
+══════════════════════════════════════ -->
+<div class="slide" id="slide-3">
+  <div class="slide-bar">
+    <span class="slide-num">03</span>
+    <span class="slide-title">How It Works</span>
+    <span class="slide-tag">architecture</span>
+  </div>
+  <div class="slide-body" style="padding-top:20px">
+
+    <!-- Row 1: Entry → Scenario → ChaosRunner + lifecycle -->
+    <div class="row" style="margin-bottom:10px;align-items:center">
+      <div class="card ac-grey" style="border-left-color:#64748b;width:130px;flex-shrink:0;padding:10px 12px;text-align:center">
+        <div style="font-size:11px;font-weight:700;color:#475569">Your Code</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:3px">decorator · API · CLI</div>
+      </div>
+      <div class="arr">→</div>
+      <div class="card ac-orange" style="width:130px;flex-shrink:0;padding:10px 12px;text-align:center">
+        <div style="font-size:11px;font-weight:700;color:#d97706">Scenario</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:3px">named fault list</div>
+      </div>
+      <div class="arr">→</div>
+      <div class="card ac-green" style="flex:1;padding:10px 14px">
+        <div style="font-size:11px;font-weight:700;color:#16a34a;margin-bottom:7px">ChaosRunner — Experiment Lifecycle</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <span class="chip chip-grey">Preflight</span><span style="color:#e2e8f0">→</span>
+          <span class="chip chip-grey">Baseline</span><span style="color:#e2e8f0">→</span>
+          <span class="chip chip-orange">Inject</span><span style="color:#e2e8f0">→</span>
+          <span class="chip chip-red">Fault</span><span style="color:#e2e8f0">→</span>
+          <span class="chip chip-green">Revert</span><span style="color:#e2e8f0">→</span>
+          <span class="chip chip-blue">Record</span>
+        </div>
+      </div>
+      <div class="arr">+</div>
+      <div class="card ac-red" style="width:190px;flex-shrink:0;padding:10px 12px">
+        <div style="font-size:10px;font-weight:700;color:#dc2626">SafetyPolicy · Guardrails</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:3px">danger levels · conflict detection · dry-run</div>
+      </div>
+    </div>
+
+    <!-- Row 2: LoggingTarget → Targets → Fault layers -->
+    <div class="row" style="margin-bottom:10px">
+      <div class="card ac-teal" style="width:168px;flex-shrink:0">
+        <div style="font-size:11px;font-weight:700;color:#0d9488">LoggingTarget</div>
+        <div style="font-size:9px;color:#64748b;margin-top:5px;line-height:1.8">
+          Transparent proxy<br>
+          ① forward to target<br>
+          ② write to SessionDB<br>
+          <span style="color:#94a3b8">Faults have zero<br>knowledge of DB</span>
+        </div>
+      </div>
+      <div class="arr">→</div>
+      <div class="col f1">
+        <div class="card" style="padding:8px 12px;border-color:#16a34a44">
+          <div style="font-size:11px;font-weight:700;color:#16a34a">LocalTarget</div>
+          <div style="font-size:9px;color:#94a3b8">subprocess.run() — same machine</div>
+        </div>
+        <div class="card" style="padding:8px 12px;border-color:#2563eb44">
+          <div style="font-size:11px;font-weight:700;color:#2563eb">SSHTarget</div>
+          <div style="font-size:9px;color:#94a3b8">Paramiko SSH — remote Linux · host · user · port</div>
+        </div>
+        <div class="card" style="padding:8px 12px;border-color:#7c3aed44">
+          <div style="font-size:11px;font-weight:700;color:#7c3aed">HTTPTarget</div>
+          <div style="font-size:9px;color:#94a3b8">cj-daemon REST :8642 — behind firewall</div>
+        </div>
+      </div>
+      <div class="arr">→</div>
+      <div class="col f1">
+        <div class="card" style="padding:8px 12px;border-color:#d9770655">
+          <div style="font-size:10px;font-weight:700;color:#d97706">OS / Kernel</div>
+          <div style="font-size:9px;color:#94a3b8">tc netem · stress-ng · pkill · BPF/XDP</div>
+        </div>
+        <div class="card" style="padding:8px 12px;border-color:#7c3aed55">
+          <div style="font-size:10px;font-weight:700;color:#7c3aed">HTTP Proxy</div>
+          <div style="font-size:9px;color:#94a3b8">LLM latency · rate limit · hallucination · timeout</div>
+        </div>
+        <div class="card" style="padding:8px 12px;border-color:#2563eb55">
+          <div style="font-size:10px;font-weight:700;color:#2563eb">Transport Intercept</div>
+          <div style="font-size:9px;color:#94a3b8">httpx + requests patch · any OS · no sudo needed</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 3: Data + Evaluation -->
+    <div class="row">
+      <div class="card ac-blue f1" style="padding:10px 14px">
+        <div style="font-size:10px;font-weight:700;color:#2563eb">SessionDB · SQLite</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:3px">sessions · faults · events · commands · results · traces</div>
+      </div>
+      <div class="arr">→</div>
+      <div class="card ac-green f1" style="padding:10px 14px">
+        <div style="font-size:10px;font-weight:700;color:#16a34a">MeasurementResult</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:3px">baseline · fault · delta · judge scores · oracles</div>
+      </div>
+      <div class="arr">→</div>
+      <div class="card ac-purple f1" style="padding:10px 14px">
+        <div style="font-size:10px;font-weight:700;color:#7c3aed">LLMJudge</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:3px">faithfulness · hallucination · coherence</div>
+      </div>
+      <div class="arr">→</div>
+      <div class="card f1" style="padding:10px 14px">
+        <div style="font-size:10px;font-weight:700;color:#475569">Outputs</div>
+        <div style="font-size:9px;color:#94a3b8;margin-top:3px">Dashboard :8080 · CSV · CLI · pandas DataFrame</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 4 — FEATURES OVERVIEW
+══════════════════════════════════════ -->
+<div class="slide" id="slide-4">
+  <div class="slide-bar">
+    <span class="slide-num">04</span>
+    <span class="slide-title">What chaos-jungle Can Do</span>
+    <span class="slide-tag">features</span>
+  </div>
+  <div class="slide-body">
+    <div class="grid2" style="height:88%">
+
+      <div class="card" style="border-color:#d9770644;background:#fffbeb;padding:28px;display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div class="sec" style="color:#d97706">INFRASTRUCTURE FAULTS</div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:6px">Breaking the system at the OS level</div>
+          <div style="font-size:12px;color:#64748b">tc netem · stress-ng · BPF/XDP · pkill · systemctl · dd</div>
+        </div>
+        <div>
+          <span class="chip chip-orange">Network</span>
+          <span class="chip chip-orange">Storage</span>
+          <span class="chip chip-orange">Process & Service</span>
+          <span class="chip chip-orange">Resource</span>
+          <span class="chip chip-orange">GPU</span>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:#7c3aed44;background:#faf5ff;padding:28px;display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div class="sec" style="color:#7c3aed">LLM / AI FAULTS</div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:6px">Testing resilience of AI applications</div>
+          <div style="font-size:12px;color:#64748b">HTTP proxy · transport intercept · semantic injection · agent state</div>
+        </div>
+        <div>
+          <span class="chip chip-purple">LLM API</span>
+          <span class="chip chip-purple">SDK Intercept</span>
+          <span class="chip chip-purple">Semantic</span>
+          <span class="chip chip-purple">Agent State</span>
+          <span class="chip chip-purple">Skill Chaos</span>
+          <span class="chip chip-purple">LLM Judge</span>
+          <span class="chip chip-purple">Ollama</span>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:#2563eb44;background:#eff6ff;padding:28px;display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div class="sec" style="color:#2563eb">MEASUREMENT & RESULTS</div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:6px">Quantifying the impact of every fault</div>
+          <div style="font-size:12px;color:#64748b">Baseline vs fault delta · quality gates · LLM scoring · SQLite audit trail</div>
+        </div>
+        <div>
+          <span class="chip chip-blue">Measurement</span>
+          <span class="chip chip-blue">Metrics</span>
+          <span class="chip chip-blue">Dashboard</span>
+          <span class="chip chip-blue">Data & Export</span>
+        </div>
+      </div>
+
+      <div class="card" style="border-color:#dc262644;background:#fef2f2;padding:28px;display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div class="sec" style="color:#dc2626">SAFETY & ASSERTIONS</div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:6px">Staying in control of what you break</div>
+          <div style="font-size:12px;color:#64748b">Danger levels · conflict detection · auto-revert · oracles · trace replay</div>
+        </div>
+        <div>
+          <span class="chip chip-red">Safety Policy</span>
+          <span class="chip chip-red">Guardrails</span>
+          <span class="chip chip-red">Oracle Assertions</span>
+          <span class="chip chip-red">Trace Capture & Replay</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 5 — INFRASTRUCTURE FAULTS
+══════════════════════════════════════ -->
+<div class="slide" id="slide-5">
+  <div class="slide-bar">
+    <span class="slide-num">05</span>
+    <span class="slide-title">Infrastructure Faults</span>
+    <span class="slide-tag">OS level</span>
+  </div>
+  <div class="slide-body">
+    <div class="grid2">
+      <div>
+        <div class="sec" style="color:#d97706">NETWORK</div>
+        <div class="fr"><div class="fr-name t-orange">NetworkDelay</div><div class="fr-desc">Artificial latency — delay + jitter via tc netem</div><span class="chip chip-green">danger 0</span></div>
+        <div class="fr"><div class="fr-name t-orange">NetworkLoss</div><div class="fr-desc">Drop a percentage of outgoing packets</div><span class="chip chip-green">danger 0</span></div>
+        <div class="fr"><div class="fr-name t-orange">NetworkCorrupt</div><div class="fr-desc">Corrupt packets — breaks checksum, kernel drops</div><span class="chip chip-green">danger 0</span></div>
+        <div class="fr"><div class="fr-name t-orange">NetworkDuplicate</div><div class="fr-desc">Duplicate a percentage of packets</div><span class="chip chip-green">danger 0</span></div>
+        <div class="fr"><div class="fr-name t-orange">SilentNetworkCorrupt</div><div class="fr-desc">BPF/XDP — corrupt payload, preserve checksum (silent)</div><span class="chip chip-green">danger 0</span></div>
+
+        <div class="sec" style="color:#d97706;margin-top:14px">STORAGE</div>
+        <div class="fr"><div class="fr-name t-orange">StorageCorrupt</div><div class="fr-desc">Bit-flip files matching glob pattern — dd + crontab</div><span class="chip chip-red">danger 2</span></div>
+      </div>
+
+      <div>
+        <div class="sec" style="color:#d97706">PROCESS & SERVICE</div>
+        <div class="fr"><div class="fr-name t-orange">ProcessKill</div><div class="fr-desc">Kill processes matching a pattern via pkill</div><span class="chip chip-red">danger 2</span></div>
+        <div class="fr"><div class="fr-name t-orange">ServiceFault</div><div class="fr-desc">Stop / restart a systemd service</div><span class="chip chip-red">danger 2</span></div>
+        <div class="fr"><div class="fr-name t-orange">ContainerKill</div><div class="fr-desc">Kill a Docker container by name</div><span class="chip chip-red">danger 2</span></div>
+
+        <div class="sec" style="color:#d97706;margin-top:14px">RESOURCE</div>
+        <div class="fr"><div class="fr-name t-orange">CPUStress</div><div class="fr-desc">Saturate CPU cores via stress-ng</div><span class="chip chip-orange">danger 1</span></div>
+        <div class="fr"><div class="fr-name t-orange">MemoryStress</div><div class="fr-desc">Consume RAM — configurable size and duration</div><span class="chip chip-orange">danger 1</span></div>
+        <div class="fr"><div class="fr-name t-orange">IOStress</div><div class="fr-desc">Saturate disk I/O via stress-ng</div><span class="chip chip-orange">danger 1</span></div>
+        <div class="fr"><div class="fr-name t-orange">DiskFull</div><div class="fr-desc">Fill disk with a padding file until threshold</div><span class="chip chip-orange">danger 1</span></div>
+
+        <div class="sec" style="color:#d97706;margin-top:14px">GPU</div>
+        <div class="fr"><div class="fr-name t-orange">GPUMemoryStress</div><div class="fr-desc">Allocate GPU memory — NVIDIA (CUDA) and AMD (ROCm)</div><span class="chip chip-orange">danger 1</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 6 — LLM / AI FAULTS
+══════════════════════════════════════ -->
+<div class="slide" id="slide-6">
+  <div class="slide-bar">
+    <span class="slide-num">06</span>
+    <span class="slide-title">LLM / AI Faults</span>
+    <span class="slide-tag">testing AI applications</span>
+  </div>
+  <div class="slide-body">
+    <div class="grid2">
+      <div>
+        <div class="sec" style="color:#7c3aed">LLM API FAULTS — HTTP Proxy</div>
+        <div class="fr"><div class="fr-name t-purple">LLMLatency</div><div class="fr-desc">Add artificial delay to every API call</div></div>
+        <div class="fr"><div class="fr-name t-purple">LLMRateLimit</div><div class="fr-desc">Return HTTP 429 after N successful requests</div></div>
+        <div class="fr"><div class="fr-name t-purple">LLMTimeout</div><div class="fr-desc">Hang connection for N seconds then return 504</div></div>
+        <div class="fr"><div class="fr-name t-purple">LLMUnavailable</div><div class="fr-desc">Always return HTTP 503 — simulate endpoint down</div></div>
+        <div class="fr"><div class="fr-name t-purple">LLMResponseCorrupt</div><div class="fr-desc">Mangle response — truncate · empty · invalid JSON</div></div>
+        <div class="fr"><div class="fr-name t-purple">LLMHallucination</div><div class="fr-desc">Replace response content with injected wrong text</div></div>
+        <div class="fr"><div class="fr-name t-purple">LLMStreamInterrupt</div><div class="fr-desc">Cut SSE streaming response after N chunks</div></div>
+        <div class="fr"><div class="fr-name t-purple">LLMTokenStarvation</div><div class="fr-desc">Rewrite max_tokens to a tiny value — forced truncation</div></div>
+        <div class="fr"><div class="fr-name t-purple">ToolFault</div><div class="fr-desc">Inject errors into tool-call messages (role: tool)</div></div>
+        <div class="fr"><div class="fr-name t-purple">MCPFault</div><div class="fr-desc">Fail MCP server calls — error · unavailable · timeout</div></div>
+      </div>
+      <div class="col">
+        <div>
+          <div class="sec" style="color:#7c3aed">SDK INTERCEPT — Transport Patch</div>
+          <div class="fr"><div class="fr-name t-purple">Latency · Jitter</div><div class="fr-desc">Patches httpx + requests at class level — any SDK automatically</div></div>
+          <div class="fr"><div class="fr-name t-purple">RateLimit · Timeout</div><div class="fr-desc">Works on macOS · Windows · Linux — no sudo, no port</div></div>
+          <div class="fr"><div class="fr-name t-purple">CorruptResponse</div><div class="fr-desc">Probability-based — each behavior fires independently</div></div>
+        </div>
+        <div>
+          <div class="sec" style="color:#7c3aed">SEMANTIC & STATE</div>
+          <div class="fr"><div class="fr-name t-purple">SemanticCorrupt</div><div class="fr-desc">Inject semantically plausible but wrong information</div></div>
+          <div class="fr"><div class="fr-name t-purple">RedisStateCorrupt</div><div class="fr-desc">Corrupt agent state stored in Redis</div></div>
+          <div class="fr"><div class="fr-name t-purple">JsonStateCorrupt</div><div class="fr-desc">Corrupt JSON state files used by the agent</div></div>
+        </div>
+        <div>
+          <div class="sec" style="color:#7c3aed">LLM JUDGE</div>
+          <div class="fr"><div class="fr-name t-purple">LLMJudge</div><div class="fr-desc">Calls a judge model — faithfulness · hallucination · coherence scoring</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 7 — MEASUREMENT & RESULTS
+══════════════════════════════════════ -->
+<div class="slide" id="slide-7">
+  <div class="slide-bar">
+    <span class="slide-num">07</span>
+    <span class="slide-title">Measurement & Results</span>
+    <span class="slide-tag">quantifying impact</span>
+  </div>
+  <div class="slide-body">
+    <div class="row">
+      <div class="col f1">
+        <div class="sec" style="color:#2563eb">MEASUREMENT LIFECYCLE</div>
+        <div class="card ac-blue" style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;color:#2563eb;margin-bottom:8px">runner.measure(workload, n_baseline=5, n_fault=5)</div>
+          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+            <span class="chip chip-grey">① Baseline runs</span><span style="color:#e2e8f0">→</span>
+            <span class="chip chip-orange">② Inject faults</span><span style="color:#e2e8f0">→</span>
+            <span class="chip chip-red">③ Fault runs</span><span style="color:#e2e8f0">→</span>
+            <span class="chip chip-green">④ Stop faults</span><span style="color:#e2e8f0">→</span>
+            <span class="chip chip-blue">⑤ Compute delta</span>
+          </div>
+        </div>
+
+        <div class="sec" style="color:#2563eb">BUILT-IN METRICS</div>
+        <div class="fr"><div class="fr-name t-blue">PingLatency</div><div class="fr-desc">avg / min / max RTT to a host</div></div>
+        <div class="fr"><div class="fr-name t-blue">CommandMetric</div><div class="fr-desc">Any shell command — parse stdout to dict</div></div>
+        <div class="fr"><div class="fr-name t-blue">FileIntegrity</div><div class="fr-desc">File count + md5 diff under fault</div></div>
+        <div class="fr"><div class="fr-name t-blue">ThroughputMetric</div><div class="fr-desc">curl download speed measurement</div></div>
+        <div class="fr"><div class="fr-name t-blue">ScriptMetric</div><div class="fr-desc">Run a local or remote script, parse stdout as metrics</div></div>
+      </div>
+
+      <div class="col f1">
+        <div class="sec" style="color:#2563eb">MEASUREMENT RESULT</div>
+        <div class="card ac-blue" style="margin-bottom:10px">
+          <div style="font-size:10px;font-family:monospace;color:#334155;line-height:2.1">
+            result.baseline          → dict of baseline metrics<br>
+            result.fault             → dict of fault metrics<br>
+            result.delta             → % change per metric key<br>
+            result.passed(key, 0.9)  → True / False<br>
+            result.passed_quality()  → faithfulness gate<br>
+            result.passed_oracles()  → oracle assertions<br>
+            result.summary()         → human-readable text
+          </div>
+        </div>
+
+        <div class="sec" style="color:#2563eb">DASHBOARD & EXPORT</div>
+        <div class="fr"><div class="fr-name t-blue">Dashboard :8080</div><div class="fr-desc">Live web UI — sessions, metrics, events, faults, logs</div></div>
+        <div class="fr"><div class="fr-name t-blue">CSV / JSON Export</div><div class="fr-desc">chaos-jungle export — per session or all sessions</div></div>
+        <div class="fr"><div class="fr-name t-blue">pandas DataFrame</div><div class="fr-desc">db.to_dataframe() — all sessions for analysis</div></div>
+        <div class="fr"><div class="fr-name t-blue">chaos-jungle fetch</div><div class="fr-desc">Download DB + logs from a remote SSH host</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     SLIDE 8 — SAFETY & ASSERTIONS
+══════════════════════════════════════ -->
+<div class="slide" id="slide-8">
+  <div class="slide-bar">
+    <span class="slide-num">08</span>
+    <span class="slide-title">Safety & Assertions</span>
+    <span class="slide-tag">staying in control</span>
+  </div>
+  <div class="slide-body">
+    <div class="grid2">
+      <div class="col">
+        <div class="sec" style="color:#dc2626">SAFETY POLICY</div>
+        <div class="card ac-red" style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;color:#dc2626;margin-bottom:10px">SafetyPolicy — gatekeeper before anything runs</div>
+          <div class="fr" style="margin-bottom:6px"><div class="fr-name" style="width:130px;font-size:11px">max_danger</div><div class="fr-desc">0 = network only · 1 = CPU/memory · 2 = kill/corrupt</div></div>
+          <div class="fr" style="margin-bottom:6px"><div class="fr-name" style="width:130px;font-size:11px">dry_run</div><div class="fr-desc">Log commands without executing — safe preview mode</div></div>
+          <div class="fr"><div class="fr-name" style="width:130px;font-size:11px">allowed_targets</div><div class="fr-desc">Whitelist of hosts that can be targeted</div></div>
+        </div>
+
+        <div class="sec" style="color:#dc2626">GUARDRAILS</div>
+        <div class="fr"><div class="fr-name t-red">ConflictError</div><div class="fr-desc">Two tc netem faults on same interface → blocked before start</div></div>
+        <div class="fr"><div class="fr-name t-red">Live State Check</div><div class="fr-desc">Existing tc rules from a previous run → blocked</div></div>
+        <div class="fr"><div class="fr-name t-red">Suite Validation</div><div class="fr-desc">Incompatible scenarios running in parallel → warned</div></div>
+        <div class="fr"><div class="fr-name t-red">Auto-Revert</div><div class="fr-desc">Every fault reverted in finally block — even on crash</div></div>
+      </div>
+
+      <div class="col">
+        <div class="sec" style="color:#dc2626">ORACLE ASSERTIONS</div>
+        <div class="card ac-red" style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;color:#dc2626;margin-bottom:8px">Binary pass/fail checks on workload results</div>
+          <div style="font-size:10px;font-family:monospace;color:#334155;line-height:2.1">
+            Oracle(lambda r: r["retries"] &lt; 5, "max 5 retries")<br>
+            Oracle(lambda r: r["success_rate"] &gt; 0.9)<br>
+            runner.measure(workload, oracles=[o1, o2])<br>
+            result.passed_oracles()  →  True / False
+          </div>
+        </div>
+
+        <div class="sec" style="color:#dc2626">TRACE CAPTURE & REPLAY</div>
+        <div class="fr"><div class="fr-name t-red">Trace Capture</div><div class="fr-desc">Record all LLM API calls during a fault session</div></div>
+        <div class="fr"><div class="fr-name t-red">Trace Replay</div><div class="fr-desc">Replay captured traces to reproduce exact failure conditions</div></div>
+
+        <div class="sec" style="color:#dc2626;margin-top:4px">DANGER LEVELS</div>
+        <div class="row" style="gap:8px">
+          <div class="card" style="border-color:#16a34a44;background:#f0fdf4;flex:1;padding:12px;text-align:center">
+            <div style="font-size:18px;font-weight:800;color:#16a34a">0</div>
+            <div style="font-size:10px;color:#64748b;margin-top:4px">Network faults<br>Safe, fully reversible</div>
+          </div>
+          <div class="card" style="border-color:#d9770644;background:#fffbeb;flex:1;padding:12px;text-align:center">
+            <div style="font-size:18px;font-weight:800;color:#d97706">1</div>
+            <div style="font-size:10px;color:#64748b;margin-top:4px">CPU / Memory<br>Temporary pressure</div>
+          </div>
+          <div class="card" style="border-color:#dc262644;background:#fef2f2;flex:1;padding:12px;text-align:center">
+            <div style="font-size:18px;font-weight:800;color:#dc2626">2</div>
+            <div style="font-size:10px;color:#64748b;margin-top:4px">Kill / Corrupt<br>Requires explicit allow</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<!-- ── Navigation ── -->
+<div class="nav">
+  <button id="prev" onclick="navigate(-1)" disabled>← Prev</button>
+  <span class="counter" id="counter">1 / 9</span>
+  <button id="next" onclick="navigate(1)">Next →</button>
+</div>
+
+<script>
+  const total = 9;
+  let current = 0;
+
+  function navigate(dir) {
+    document.getElementById('slide-' + current).classList.remove('active');
+    current = Math.max(0, Math.min(total - 1, current + dir));
+    document.getElementById('slide-' + current).classList.add('active');
+    document.getElementById('counter').textContent = (current + 1) + ' / ' + total;
+    document.getElementById('prev').disabled = current === 0;
+    document.getElementById('next').disabled = current === total - 1;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') navigate(1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   navigate(-1);
+  });
+</script>
+</body>
+</html>

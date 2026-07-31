@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>chaos-jungle — Architecture</title>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { curve: 'basis' } });
+</script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── Slide deck ── */
+  .deck {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+  }
+
+  .slide {
+    display: none;
+    width: 100%;
+    height: 100%;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 60px;
+    gap: 24px;
+    position: absolute;
+    top: 0; left: 0;
+  }
+
+  .slide.active { display: flex; }
+
+  /* ── Slide header ── */
+  .slide-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .slide-num {
+    font-size: 12px;
+    color: #8b949e;
+    min-width: 40px;
+  }
+
+  .slide h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #58a6ff;
+    letter-spacing: -0.3px;
+  }
+
+  .tag {
+    font-size: 11px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    padding: 2px 8px;
+    border-radius: 12px;
+    margin-left: auto;
+  }
+
+  /* ── Diagram wrapper ── */
+  .diagram {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 100%;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .diagram .mermaid {
+    max-height: calc(100vh - 200px);
+    overflow: auto;
+  }
+
+  /* ── Nav bar ── */
+  .nav {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 24px;
+    padding: 8px 20px;
+    z-index: 100;
+  }
+
+  .nav button {
+    background: none;
+    border: 1px solid #30363d;
+    color: #e6edf3;
+    padding: 6px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.15s;
+  }
+
+  .nav button:hover { background: #21262d; }
+  .nav button:disabled { opacity: 0.3; cursor: default; }
+
+  .nav .counter {
+    font-size: 13px;
+    color: #8b949e;
+    min-width: 60px;
+    text-align: center;
+  }
+
+  /* ── Title slide ── */
+  .title-slide {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    gap: 16px;
+    text-align: center;
+  }
+  .title-slide.active { display: flex; }
+
+  .title-slide .logo {
+    font-size: 56px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #58a6ff, #3fb950);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -2px;
+  }
+
+  .title-slide .sub {
+    font-size: 20px;
+    color: #8b949e;
+  }
+
+  .title-slide .pills {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+  }
+
+  .pill {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 13px;
+    color: #58a6ff;
+  }
+</style>
+</head>
+<body>
+
+<div class="deck">
+
+  <!-- ── Slide 0: Title ── -->
+  <div class="title-slide active" id="slide-0">
+    <div class="logo">chaos-jungle</div>
+    <div class="sub">Fault Injection Framework — Architecture</div>
+    <div class="pills">
+      <span class="pill">5 Planes</span>
+      <span class="pill">3 Transport Depths</span>
+      <span class="pill">3 Target Types</span>
+      <span class="pill">SQLite Audit Trail</span>
+    </div>
+  </div>
+
+  <!-- ── Slide 1: Five Planes ── -->
+  <div class="slide" id="slide-1">
+    <div class="slide-header">
+      <span class="slide-num">01</span>
+      <h2>Five-Plane Architecture</h2>
+      <span class="tag">overview</span>
+    </div>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart TD
+    YOU["YOUR CODE\nScenario · ChaosRunner · measure()"]
+
+    subgraph CP["CONTROL PLANE"]
+        SCN["Scenario\nnamed list of Faults"]
+        RUN["ChaosRunner\nlifecycle orchestrator"]
+    end
+
+    subgraph TP["TRANSPORT PLANE"]
+        PROXY["HTTP Proxy — LLM API faults"]
+        PATCH["Transport Patch — httpx / requests"]
+        OS["OS / Kernel — tc · stress-ng · systemctl"]
+    end
+
+    subgraph TGP["TARGET PLANE"]
+        LOCAL["LocalTarget — subprocess"]
+        SSH["SSHTarget — Paramiko SSH"]
+        HTTP["HTTPTarget — cj-daemon REST"]
+    end
+
+    subgraph EP["EVALUATION PLANE"]
+        JUDGE["LLMJudge — faithfulness · hallucination"]
+        ORACLE["Oracles — binary assertions"]
+        METRICS["MeasurementResult — baseline · fault · delta"]
+    end
+
+    subgraph DP["DATA PLANE"]
+        DB["SQLite — chaos_jungle.db"]
+        DASH["Dashboard :8080"]
+        CSV["CSV Export"]
+    end
+
+    YOU --> CP
+    CP --> TP
+    CP --> TGP
+    CP --> EP
+    EP --> DP
+    TGP --> DP
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Slide 2: Experiment Lifecycle ── -->
+  <div class="slide" id="slide-2">
+    <div class="slide-header">
+      <span class="slide-num">02</span>
+      <h2>Experiment Lifecycle</h2>
+      <span class="tag">ChaosRunner</span>
+    </div>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart LR
+    PRE["PREFLIGHT\ncheck tools\non target"]
+    START["START\ninject faults\nin order"]
+    BASE["BASELINE\nrun workload\nwithout fault"]
+    FAULT["FAULT\nrun workload\nfault active"]
+    STOP["STOP\nremove faults\nreverse order"]
+    REV["REVERT\nundo side\neffects"]
+    REC["RECORD\nwrite to\nSQLite"]
+
+    BASE --> PRE --> START --> FAULT --> STOP --> REV --> REC
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Slide 3: Sequence ── -->
+  <div class="slide" id="slide-3">
+    <div class="slide-header">
+      <span class="slide-num">03</span>
+      <h2>Component Interaction — measure()</h2>
+      <span class="tag">sequence</span>
+    </div>
+    <div class="diagram">
+      <div class="mermaid">
+sequenceDiagram
+    participant YOU as Your Code
+    participant RUN as ChaosRunner
+    participant DB as SessionDB
+    participant LOG as LoggingTarget
+    participant SSH as SSHTarget
+    participant FLT as Fault
+
+    YOU->>RUN: measure(workload, n_baseline=5, n_fault=5)
+
+    loop 5× baseline
+        RUN->>YOU: workload()
+        YOU-->>RUN: metrics dict
+    end
+
+    RUN->>DB: open_session("scenario")
+    DB-->>RUN: session_id = 5
+    RUN->>LOG: wrap(SSHTarget, db, session_id=5)
+    RUN->>FLT: preflight(logged)
+    FLT->>LOG: run("which tc")
+    LOG->>SSH: run("which tc")
+    SSH-->>LOG: (0, "/sbin/tc", "")
+    LOG->>DB: record_command(cmd, stdout, exit_code)
+    RUN->>FLT: start(logged)
+    FLT->>LOG: sudo("tc qdisc add dev eth0 root netem delay 100ms")
+    LOG->>SSH: sudo(cmd)
+    LOG->>DB: record_command + add_event
+
+    loop 5× fault active
+        RUN->>YOU: workload()
+        YOU-->>RUN: metrics dict
+    end
+
+    RUN->>FLT: stop(logged)
+    RUN->>DB: close_session(5, "reverted")
+    RUN->>DB: record_result(baseline, fault, delta)
+    RUN-->>YOU: MeasurementResult
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Slide 4: Target Layer ── -->
+  <div class="slide" id="slide-4">
+    <div class="slide-header">
+      <span class="slide-num">04</span>
+      <h2>Target Layer — LoggingTarget Proxy</h2>
+      <span class="tag">targets</span>
+    </div>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart LR
+    FLT["Fault\ncalls target.sudo(cmd)"]
+
+    LT["LoggingTarget\ntransparent proxy\n\n① forward call to real target\n② write to DB simultaneously\nFault has zero knowledge of DB"]
+
+    DB["SessionDB\nevents table\ncommands table\n\ncmd · stdout · stderr\nexit_code · timestamp\nfault_id"]
+
+    subgraph REAL["Real Target"]
+        TL["LocalTarget\nsubprocess.run()"]
+        TS["SSHTarget\nparamiko\nexec_command()"]
+        TH["HTTPTarget\nHTTP POST /exec\ncj-daemon :8642"]
+    end
+
+    subgraph MACHINE["Machine"]
+        LM["same machine"]
+        RM["remote Linux\nover SSH"]
+        DM["daemon machine\nbehind firewall"]
+    end
+
+    FLT -->|"always talks to LoggingTarget"| LT
+    LT -->|"forward"| REAL
+    LT -->|"log"| DB
+
+    TL --> LM
+    TS --> RM
+    TH --> DM
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Slide 5: Transport Intercept ── -->
+  <div class="slide" id="slide-5">
+    <div class="slide-header">
+      <span class="slide-num">05</span>
+      <h2>Transport Intercept — inject()</h2>
+      <span class="tag">intercept layer</span>
+    </div>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart TD
+    SDK["LLM SDK\nopenai · anthropic · litellm · langchain\nany library using httpx or requests"]
+
+    subgraph PATCH["MONKEY-PATCH  — httpx.Client.send replaced at class level"]
+        MATCH["_Stack.matching(url)\nthread-local behavior stack\ncheck if url matches active layer"]
+        BEFORE["behavior.before(url)\nLatency → time.sleep(N)\nTimeout → raise TimeoutException\nRateLimit → check count"]
+        REAL["real HTTP request\nactual TCP connection"]
+        AFTER["behavior.after(url, response)\nUnavailable → return 503\nCorruptResponse → replace body\nRateLimit → return 429 after N calls"]
+    end
+
+    API["Real API Endpoint\napi.openai.com  api.anthropic.com\nlocalhost:11434"]
+
+    SDK -->|"every HTTP call goes through patch"| MATCH
+    MATCH -->|"no match → passthrough"| REAL
+    MATCH -->|"match found"| BEFORE
+    BEFORE --> REAL
+    REAL -->|"TCP / HTTPS"| API
+    API -->|"response"| REAL
+    REAL --> AFTER
+    AFTER -->|"original or modified response"| SDK
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Slide 6: Data Flow ── -->
+  <div class="slide" id="slide-6">
+    <div class="slide-header">
+      <span class="slide-num">06</span>
+      <h2>Data Plane — Everything Written to SQLite</h2>
+      <span class="tag">data plane</span>
+    </div>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart LR
+    subgraph WRITES["WRITTEN DURING EXPERIMENT"]
+        W1["open_session()\nINSERT sessions"]
+        W2["record_fault()\nINSERT faults"]
+        W3["add_event()\nINSERT events"]
+        W4["record_command()\ncmd · stdout · stderr · exit_code\nprivileged · fault_id"]
+        W5["record_result()\nbaseline · fault · delta\njudge scores"]
+    end
+
+    DB[("SQLite\nchaos_jungle.db\n\nsessions\nfaults\nevents\ncommands\nresults\ntraces")]
+
+    W1 --> DB
+    W2 --> DB
+    W3 --> DB
+    W4 --> DB
+    W5 --> DB
+
+    DB --> DASH["Dashboard :8080\nweb UI — session viewer"]
+    DB --> CSV["export_db_to_csv()\nCSV files for analysis"]
+    DB --> CLI["chaos-jungle list\nterminal summary"]
+    DB --> ATTACH["ChaosRunner.attach()\nstop from another process"]
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Slide 7: Full Component Map ── -->
+  <div class="slide" id="slide-7">
+    <div class="slide-header">
+      <span class="slide-num">07</span>
+      <h2>Full Component Ownership</h2>
+      <span class="tag">complete map</span>
+    </div>
+    <div class="diagram">
+      <div class="mermaid">
+flowchart TD
+    subgraph CR["ChaosRunner — owns everything"]
+        SCN["Scenario\nname + Fault list"]
+        DB2["SessionDB\nSQLite file"]
+        POL["SafetyPolicy\ndanger_level gate\ndry_run flag\nallowed_targets"]
+        LT2["LoggingTarget\nwraps Target"]
+        TMR["threading.Timer\nauto-stop after duration"]
+
+        subgraph TGT["Target"]
+            TL2["LocalTarget"]
+            TS2["SSHTarget"]
+            TH2["HTTPTarget"]
+        end
+    end
+
+    subgraph FAULTS["Faults"]
+        FN["NetworkDelay / NetworkLoss\ndanger=0  tc netem"]
+        FR["CPUStress / MemoryStress\ndanger=1  stress-ng"]
+        FP["ProcessKill / ServiceFault\ndanger=2  pkill / systemctl"]
+        FS["StorageCorrupt\ndanger=2  dd + crontab"]
+        FL["LLMLatency / LLMHallucination\ndanger=0  HTTP proxy"]
+    end
+
+    subgraph EVAL["Evaluation"]
+        JDG["LLMJudge\ncalls judge model\nfaithfulness · hallucination · coherence"]
+        ORC["Oracles\nbinary pass/fail\non workload results"]
+    end
+
+    SCN --> FAULTS
+    LT2 -->|"wraps"| TGT
+    FAULTS -->|"start / stop via"| LT2
+    LT2 -->|"logs to"| DB2
+    CR --> EVAL
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Navigation ── -->
+<div class="nav">
+  <button id="prev" onclick="navigate(-1)" disabled>← Prev</button>
+  <span class="counter" id="counter">1 / 8</span>
+  <button id="next" onclick="navigate(1)">Next →</button>
+</div>
+
+<script>
+  const total = 8; // 0..7
+  let current = 0;
+
+  function navigate(dir) {
+    document.getElementById('slide-' + current).classList.remove('active');
+    current = Math.max(0, Math.min(total - 1, current + dir));
+    document.getElementById('slide-' + current).classList.add('active');
+    document.getElementById('counter').textContent = (current + 1) + ' / ' + total;
+    document.getElementById('prev').disabled = current === 0;
+    document.getElementById('next').disabled = current === total - 1;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') navigate(1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   navigate(-1);
+  });
+</script>
+</body>
+</html>

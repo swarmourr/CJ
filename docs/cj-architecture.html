@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>chaos-jungle — Architecture</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px;
+}
+
+.page { width: 1100px; }
+
+h1 { font-size: 20px; font-weight: 800; color: #58a6ff; margin-bottom: 4px; }
+.sub { font-size: 12px; color: #484f58; margin-bottom: 36px; }
+
+/* ── row layout ── */
+.row { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.row.center { justify-content: center; }
+
+/* ── arrow between rows ── */
+.down-arrow {
+  display: flex; justify-content: center;
+  font-size: 20px; color: #30363d;
+  margin: 2px 0 2px;
+  line-height: 1;
+}
+.down-arrow.split { gap: 320px; }
+.down-arrow.triple { gap: 160px; }
+
+/* ── base box ── */
+.box {
+  border: 1.5px solid #30363d;
+  border-radius: 8px;
+  background: #161b22;
+  padding: 14px 18px;
+}
+.box-name {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: "SF Mono", Consolas, monospace;
+  margin-bottom: 4px;
+}
+.box-desc {
+  font-size: 10px;
+  color: #8b949e;
+  line-height: 1.5;
+}
+
+/* color accents */
+.c-blue   { border-color:#58a6ff55; background:#0a1628; }
+.c-green  { border-color:#3fb95055; background:#071811; }
+.c-orange { border-color:#d2992255; background:#1a1200; }
+.c-red    { border-color:#f8514955; background:#190808; }
+.c-purple { border-color:#bc8cff55; background:#130a26; }
+.c-teal   { border-color:#39d35355; background:#071811; }
+.c-grey   { border-color:#8b949e55; background:#111519; }
+.c-yellow { border-color:#e3b34155; background:#1a1400; }
+.c-pink   { border-color:#f7816655; background:#1a0a07; }
+
+.t-blue   { color:#58a6ff; }
+.t-green  { color:#3fb950; }
+.t-orange { color:#d29922; }
+.t-red    { color:#f85149; }
+.t-purple { color:#bc8cff; }
+.t-teal   { color:#39d353; }
+.t-grey   { color:#8b949e; }
+.t-yellow { color:#e3b341; }
+.t-pink   { color:#f78166; }
+
+/* ── tag chips ── */
+.chip {
+  display: inline-block;
+  font-size: 9px; font-weight: 700;
+  padding: 1px 7px; border-radius: 10px;
+  margin: 3px 2px 0 0;
+  border: 1px solid;
+}
+.chip-blue   { color:#79c0ff; border-color:#1f4f9055; background:#0d1f33; }
+.chip-green  { color:#56d364; border-color:#2ea04355; background:#071811; }
+.chip-orange { color:#ffa657; border-color:#9e5a0055; background:#1a0f00; }
+.chip-red    { color:#ff7b72; border-color:#8a1f1f55; background:#190808; }
+.chip-purple { color:#c9a7ff; border-color:#6e40c955; background:#130a26; }
+.chip-grey   { color:#8b949e; border-color:#30363d;   background:#111519; }
+
+/* ── section label ── */
+.section {
+  font-size: 9px; font-weight: 700; letter-spacing: 2px;
+  text-transform: uppercase; color: #484f58;
+  margin: 20px 0 8px;
+  border-top: 1px solid #21262d;
+  padding-top: 10px;
+}
+
+/* ── divider line ── */
+.connector {
+  display: flex; align-items: center; justify-content: center;
+  color: #30363d; font-size: 18px; padding: 4px 0;
+}
+
+/* flex helpers */
+.f1 { flex: 1; }
+.f2 { flex: 2; }
+.f3 { flex: 3; }
+.w120 { width: 120px; flex-shrink: 0; }
+.w160 { width: 160px; flex-shrink: 0; }
+.w200 { width: 200px; flex-shrink: 0; }
+.w240 { width: 240px; flex-shrink: 0; }
+.w280 { width: 280px; flex-shrink: 0; }
+.w320 { width: 320px; flex-shrink: 0; }
+.w360 { width: 360px; flex-shrink: 0; }
+.w440 { width: 440px; flex-shrink: 0; }
+.w520 { width: 520px; flex-shrink: 0; }
+.full { width: 100%; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>chaos-jungle — Architecture</h1>
+<p class="sub">All main components and how they connect</p>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 1 — YOUR CODE
+════════════════════════════════════════════════════ -->
+<div class="section">entry point</div>
+<div class="row center">
+  <div class="box c-blue full" style="text-align:center">
+    <div class="box-name t-blue">YOUR CODE</div>
+    <div class="box-desc">Python — Scenario · ChaosRunner · inject() · @chaos decorator</div>
+  </div>
+</div>
+
+<div class="down-arrow">↓</div>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 2 — SCENARIO + EXPERIMENT SUITE
+════════════════════════════════════════════════════ -->
+<div class="section">what to break</div>
+<div class="row">
+
+  <!-- Scenario -->
+  <div class="box c-grey w280">
+    <div class="box-name t-grey">Scenario</div>
+    <div class="box-desc">Named, ordered list of Faults.<br>Pure data — no logic.</div>
+  </div>
+
+  <!-- Faults -->
+  <div class="box c-orange f1">
+    <div class="box-name t-orange">Faults</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+      <span class="chip chip-green">NetworkDelay</span>
+      <span class="chip chip-green">NetworkLoss</span>
+      <span class="chip chip-green">LLMLatency</span>
+      <span class="chip chip-green">LLMRateLimit</span>
+      <span class="chip chip-green">LLMHallucination</span>
+      <span class="chip chip-orange">CPUStress</span>
+      <span class="chip chip-orange">MemoryStress</span>
+      <span class="chip chip-orange">IOStress</span>
+      <span class="chip chip-red">ProcessKill</span>
+      <span class="chip chip-red">ServiceFault</span>
+      <span class="chip chip-red">StorageCorrupt</span>
+      <span class="chip chip-red">DiskFull</span>
+      <span class="chip chip-purple">SemanticCorrupt</span>
+      <span class="chip chip-purple">SkillFault</span>
+    </div>
+    <div class="box-desc" style="margin-top:8px">
+      <span style="color:#3fb950">■</span> danger 0 — safe &nbsp;
+      <span style="color:#d29922">■</span> danger 1 — moderate &nbsp;
+      <span style="color:#f85149">■</span> danger 2 — destructive
+    </div>
+  </div>
+
+  <!-- ExperimentSuite -->
+  <div class="box c-grey w200">
+    <div class="box-name t-grey">ExperimentSuite</div>
+    <div class="box-desc">Run multiple Scenarios<br>in sequence or parallel.<br>Aggregate results.</div>
+  </div>
+
+</div>
+
+<div class="down-arrow">↓</div>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 3 — CHAOSRUNNER
+════════════════════════════════════════════════════ -->
+<div class="section">orchestrator</div>
+<div class="row">
+
+  <!-- Guardrails -->
+  <div class="box c-orange w220">
+    <div class="box-name t-orange">Guardrails</div>
+    <div class="box-desc">
+      Conflict detection before injection.<br>
+      <span class="chip chip-red">ConflictError</span>
+      <span class="chip chip-orange">ConflictWarning</span><br>
+      Checks: same iface? same path? same service?
+    </div>
+  </div>
+
+  <!-- ChaosRunner -->
+  <div class="box c-blue f1" style="text-align:center">
+    <div class="box-name t-blue" style="font-size:16px">ChaosRunner</div>
+    <div style="display:flex;justify-content:center;gap:6px;margin:10px 0 6px;flex-wrap:wrap">
+      <span class="chip chip-blue">start()</span>
+      <span class="chip chip-blue">stop()</span>
+      <span class="chip chip-blue">measure()</span>
+      <span class="chip chip-blue">door()</span>
+      <span class="chip chip-blue">run(duration)</span>
+      <span class="chip chip-blue">attach()</span>
+    </div>
+    <div class="box-desc">Preflight → Baseline → Inject → Fault → Stop → Revert → Record</div>
+  </div>
+
+  <!-- SafetyPolicy -->
+  <div class="box c-red w220">
+    <div class="box-name t-red">SafetyPolicy</div>
+    <div class="box-desc">
+      Gate by danger level 0/1/2.<br>
+      <span class="chip chip-red">max_danger</span>
+      <span class="chip chip-red">dry_run</span>
+      <span class="chip chip-red">allowed_targets</span><br>
+      <span class="chip chip-red">allowed_paths</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="down-arrow">↓</div>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 4 — STRATEGIES
+════════════════════════════════════════════════════ -->
+<div class="section">strategies — when and how faults fire</div>
+<div class="row">
+
+  <div class="box c-yellow f1">
+    <div class="box-name t-yellow">Manual / On-demand</div>
+    <div class="box-desc">runner.start() · runner.stop()<br>inject() context manager<br>Developer controls timing explicitly.</div>
+  </div>
+
+  <div class="box c-yellow f1">
+    <div class="box-name t-yellow">Percentage-Based</div>
+    <div class="box-desc">Latency(2.0, probability=0.30)<br>Fires on random X% of requests.<br>Roll made once per request.</div>
+  </div>
+
+  <div class="box c-yellow f1">
+    <div class="box-name t-yellow">Cycling — door()</div>
+    <div class="box-desc">Alternates fault-ON / fault-OFF<br>for N cycles. Measures recovery<br>between each cycle.</div>
+  </div>
+
+  <div class="box c-yellow f1">
+    <div class="box-name t-yellow">Ramp-Up / Progressive</div>
+    <div class="box-desc">Increase fault intensity over time.<br>Finds the breaking point.<br>(R10 — Progressive Overload)</div>
+  </div>
+
+  <div class="box c-yellow f1">
+    <div class="box-name t-yellow">Timed Auto-Stop</div>
+    <div class="box-desc">runner.start(duration="10m")<br>Background timer stops fault<br>automatically after duration.</div>
+  </div>
+
+</div>
+
+<div class="down-arrow">↓</div>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 5 — TARGET PLANE
+════════════════════════════════════════════════════ -->
+<div class="section">target plane — where faults land</div>
+<div class="row">
+
+  <!-- LoggingTarget -->
+  <div class="box c-purple w320">
+    <div class="box-name t-purple">LoggingTarget &nbsp;<span style="font-weight:400;font-size:10px;color:#8b949e">transparent proxy</span></div>
+    <div class="box-desc">
+      ChaosRunner wraps every target in this.<br>
+      Faults always call LoggingTarget — never the real target directly.<br>
+      Intercepts every run() and sudo() → writes to SessionDB.
+    </div>
+  </div>
+
+  <!-- 3 targets -->
+  <div class="box c-green f1">
+    <div class="box-name t-green">LocalTarget</div>
+    <div class="box-desc">subprocess.run()<br>Same machine · any OS<br>LLM faults · quick tests</div>
+  </div>
+
+  <div class="box c-green f1">
+    <div class="box-name t-green">SSHTarget</div>
+    <div class="box-desc">Paramiko SSH<br>exec_command() over TCP<br>Remote Linux server</div>
+  </div>
+
+  <div class="box c-green f1">
+    <div class="box-name t-green">HTTPTarget</div>
+    <div class="box-desc">HTTP POST → /exec<br>→ cj-daemon :8642<br>Firewall / CI machines</div>
+  </div>
+
+</div>
+
+<div class="down-arrow">↓</div>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 6 — INJECTION MECHANISMS
+════════════════════════════════════════════════════ -->
+<div class="section">injection mechanisms — how faults reach the system</div>
+<div class="row">
+
+  <div class="box c-red f1">
+    <div class="box-name t-red">Depth 1 — OS / Kernel</div>
+    <div class="box-desc">
+      Runs privileged commands on the target machine.<br>
+      <span class="chip chip-red">tc netem</span>
+      <span class="chip chip-red">stress-ng</span>
+      <span class="chip chip-red">pkill</span>
+      <span class="chip chip-red">systemctl</span>
+      <span class="chip chip-red">docker</span>
+      <span class="chip chip-red">dd</span><br>
+      Requires: Linux + sudo
+    </div>
+  </div>
+
+  <div class="box c-orange f1">
+    <div class="box-name t-orange">Depth 2 — HTTP Proxy</div>
+    <div class="box-desc">
+      MITM proxy sits between SDK and real API.<br>
+      Point SDK at <code style="color:#d29922">localhost:&lt;port&gt;</code><br>
+      <span class="chip chip-orange">LLMLatency</span>
+      <span class="chip chip-orange">LLMRateLimit</span>
+      <span class="chip chip-orange">LLMHallucination</span>
+      <span class="chip chip-orange">SemanticCorrupt</span>
+    </div>
+  </div>
+
+  <div class="box c-blue f1">
+    <div class="box-name t-blue">Depth 3 — Transport Patch</div>
+    <div class="box-desc">
+      Monkey-patches <code style="color:#58a6ff">httpx.Client.send</code><br>
+      Works on any OS — no sudo, no port, no proxy.<br>
+      <span class="chip chip-blue">inject()</span>
+      <span class="chip chip-blue">Latency</span>
+      <span class="chip chip-blue">RateLimit</span>
+      <span class="chip chip-blue">Timeout</span>
+      <span class="chip chip-blue">Unavailable</span>
+    </div>
+  </div>
+
+</div>
+
+<div class="down-arrow">↓</div>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 7 — EVALUATION
+════════════════════════════════════════════════════ -->
+<div class="section">evaluation — measuring the damage</div>
+<div class="row">
+
+  <div class="box c-teal w360">
+    <div class="box-name t-teal">measure() → MeasurementResult</div>
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <div style="flex:1;background:#071811;border:1px solid #3fb95033;border-radius:5px;padding:8px">
+        <div style="font-size:10px;color:#3fb950;font-weight:700">baseline</div>
+        <div style="font-size:10px;color:#8b949e;margin-top:3px">n_baseline runs<br>no fault active</div>
+      </div>
+      <div style="flex:1;background:#190808;border:1px solid #f8514933;border-radius:5px;padding:8px">
+        <div style="font-size:10px;color:#f85149;font-weight:700">fault</div>
+        <div style="font-size:10px;color:#8b949e;margin-top:3px">n_fault runs<br>fault active</div>
+      </div>
+      <div style="flex:1;background:#1a1200;border:1px solid #d2992233;border-radius:5px;padding:8px">
+        <div style="font-size:10px;color:#d29922;font-weight:700">delta</div>
+        <div style="font-size:10px;color:#8b949e;margin-top:3px">fault − baseline<br>per metric</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="box c-purple f1">
+    <div class="box-name t-purple">LLMJudge</div>
+    <div class="box-desc">
+      Calls a second "judge" model to score responses.<br>
+      <span class="chip chip-purple">faithfulness</span>
+      <span class="chip chip-purple">hallucination</span>
+      <span class="chip chip-purple">coherence</span>
+      <span class="chip chip-purple">guardrail_violation</span><br>
+      passed_quality(min_faith=0.7, max_halluc=0.3)
+    </div>
+  </div>
+
+  <div class="box c-pink f1">
+    <div class="box-name t-pink">Oracles</div>
+    <div class="box-desc">
+      Binary pass/fail on workload results.<br>
+      <span class="chip chip-grey">NoPIILeakage</span>
+      <span class="chip chip-grey">MaxCost</span>
+      <span class="chip chip-grey">MaxLatency</span><br>
+      <span class="chip chip-grey">CorrectSkillSelected</span>
+      <span class="chip chip-grey">SkillFallbackRate</span><br>
+      passed_oracles() → True/False
+    </div>
+  </div>
+
+</div>
+
+<div class="down-arrow">↓</div>
+
+<!-- ══════════════════════════════════════════════════
+     LAYER 8 — DATA PLANE
+════════════════════════════════════════════════════ -->
+<div class="section">data plane — every experiment stored</div>
+<div class="row">
+
+  <div class="box c-grey f2">
+    <div class="box-name t-grey">SessionDB &nbsp;<span style="font-weight:400;font-size:10px">~/.chaos-jungle/chaos_jungle.db</span></div>
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+      <span class="chip chip-grey">sessions</span>
+      <span class="chip chip-grey">faults</span>
+      <span class="chip chip-grey">events</span>
+      <span class="chip chip-grey">commands</span>
+      <span class="chip chip-grey">results</span>
+      <span class="chip chip-grey">traces</span>
+    </div>
+    <div class="box-desc" style="margin-top:6px">Every shell command · stdout · stderr · exit code · timestamp · fault_id</div>
+  </div>
+
+  <div class="box c-teal f1">
+    <div class="box-name t-teal">Dashboard</div>
+    <div class="box-desc"><code style="color:#39d353">chaos-jungle dashboard</code><br>Web UI on :8080<br>Session viewer · event log</div>
+  </div>
+
+  <div class="box c-teal f1">
+    <div class="box-name t-teal">CLI</div>
+    <div class="box-desc"><code style="color:#39d353">chaos-jungle list</code><br>Terminal summary<br>of all past sessions</div>
+  </div>
+
+  <div class="box c-teal f1">
+    <div class="box-name t-teal">CSV Export</div>
+    <div class="box-desc"><code style="color:#39d353">export_db_to_csv()</code><br>CSV files for<br>external analysis</div>
+  </div>
+
+</div>
+
+
+<!-- ══════════════════════════════════════════════════
+     SEQUENCE DIAGRAM
+════════════════════════════════════════════════════ -->
+<div class="section" style="margin-top:48px">sequence diagram — measure() full flow</div>
+<div style="background:#161b22;border:1.5px solid #30363d;border-radius:10px;padding:28px;margin-bottom:12px">
+  <div class="mermaid">
+sequenceDiagram
+    participant U  as Your Code
+    participant CR as ChaosRunner
+    participant GR as Guardrails
+    participant SP as SafetyPolicy
+    participant DB as SessionDB
+    participant LT as LoggingTarget
+    participant TG as SSHTarget
+    participant F  as Fault
+    participant JD as LLMJudge
+
+    U->>CR: measure(workload, n_baseline=5, n_fault=5, evaluator=judge)
+
+    rect rgb(7, 24, 17)
+        Note over CR: Phase 1 — Baseline (no fault)
+        loop 5 times
+            CR->>U: workload()
+            U-->>CR: dict metrics
+        end
+        CR->>CR: avg → baseline = {duration_s: 0.11}
+    end
+
+    rect rgb(10, 22, 40)
+        Note over CR: Phase 2 — Inject
+        CR->>GR: check_scenario(scenario)
+        GR-->>CR: OK or ConflictError
+        CR->>SP: check_scenario + check_target
+        SP-->>CR: OK or DangerError
+        CR->>DB: open_session("scenario")
+        DB-->>CR: session_id = 5
+        CR->>LT: wrap(SSHTarget, db, session_id=5)
+        CR->>F: preflight(logged)
+        F->>LT: run("which tc")
+        LT->>TG: run("which tc")
+        TG-->>LT: (0, "/sbin/tc", "")
+        LT->>DB: record_command(cmd, stdout, exit_code)
+        CR->>DB: record_fault(session_id, "NetworkDelay", params)
+        DB-->>CR: fault_id = 12
+        CR->>F: start(logged)
+        F->>LT: sudo("tc qdisc add dev eth0 root netem delay 100ms")
+        LT->>TG: sudo(cmd)
+        TG-->>LT: (0, "", "")
+        LT->>DB: record_command + add_event
+    end
+
+    rect rgb(25, 8, 8)
+        Note over CR: Phase 3 — Fault runs (inside finally)
+        loop 5 times
+            CR->>U: workload()
+            U-->>CR: dict metrics
+        end
+        CR->>CR: avg → fault = {duration_s: 0.42}
+    end
+
+    rect rgb(26, 18, 0)
+        Note over CR: Phase 4 — Stop
+        CR->>F: stop(logged)
+        F->>LT: sudo("tc qdisc del dev eth0 root")
+        LT->>TG: sudo(cmd)
+        CR->>F: revert(logged)
+        CR->>DB: close_session(5, "reverted")
+    end
+
+    rect rgb(19, 10, 38)
+        Note over CR: Phase 5 — Evaluate
+        CR->>CR: delta = fault - baseline = {duration_s: +0.31}
+        CR->>JD: score(question, context, response) × 5
+        JD-->>CR: JudgeScore(faithfulness, hallucination, coherence)
+        CR->>DB: record_result(baseline, fault, delta, judge_scores)
+    end
+
+    CR-->>U: MeasurementResult
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     CLASS DIAGRAM
+════════════════════════════════════════════════════ -->
+<div class="section" style="margin-top:48px">class diagram — inheritance and relationships</div>
+<div style="background:#161b22;border:1.5px solid #30363d;border-radius:10px;padding:24px;margin-bottom:12px">
+
+  <!-- ═══ FAULT HIERARCHY ═══ -->
+  <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#d29922;margin-bottom:10px">FAULT HIERARCHY</div>
+  <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:24px">
+
+    <div style="background:#1a1200;border:1.5px solid #d2992266;border-radius:8px;width:178px;flex-shrink:0;font-family:monospace">
+      <div style="padding:8px 12px;background:#d2992211;border-bottom:1px solid #d2992233;font-weight:700;color:#d29922;display:flex;align-items:center;gap:6px">
+        Fault
+        <span style="font-size:9px;color:#8b949e;background:#21262d;border-radius:3px;padding:1px 5px">abstract</span>
+      </div>
+      <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8;border-bottom:1px solid #21262d">
+        danger_level: int<br>dependencies: list
+      </div>
+      <div style="padding:8px 12px;font-size:10px;color:#e6edf3;line-height:1.8">
+        +start(target)<br>+stop(target)<br>+revert(target)<br>+preflight(target)
+      </div>
+    </div>
+
+    <div style="align-self:center;color:#484f58;font-size:11px;text-align:center;padding:0 6px;flex-shrink:0">
+      <div>◄───</div>
+      <div style="font-size:9px;margin-top:2px">extends</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:6px;flex:1">
+      <div style="background:#071811;border:1.5px solid #3fb95055;border-radius:6px;display:flex;align-items:center;font-family:monospace">
+        <div style="padding:6px 10px;border-right:1px solid #3fb95033;font-weight:700;color:#3fb950;font-size:11px;width:148px;flex-shrink:0">NetworkDelay</div>
+        <div style="padding:6px 10px;font-size:10px;color:#8b949e;flex:1">delay: str · jitter: str · iface: str</div>
+        <div style="padding:4px 8px;font-size:9px;color:#3fb95077;white-space:nowrap">danger=0</div>
+      </div>
+      <div style="background:#1a0f00;border:1.5px solid #ffa65755;border-radius:6px;display:flex;align-items:center;font-family:monospace">
+        <div style="padding:6px 10px;border-right:1px solid #ffa65733;font-weight:700;color:#ffa657;font-size:11px;width:148px;flex-shrink:0">CPUStress</div>
+        <div style="padding:6px 10px;font-size:10px;color:#8b949e;flex:1">cores: int · duration_s: int</div>
+        <div style="padding:4px 8px;font-size:9px;color:#ffa65777;white-space:nowrap">danger=1</div>
+      </div>
+      <div style="background:#190808;border:1.5px solid #f8514955;border-radius:6px;display:flex;align-items:center;font-family:monospace">
+        <div style="padding:6px 10px;border-right:1px solid #f8514933;font-weight:700;color:#f85149;font-size:11px;width:148px;flex-shrink:0">ProcessKill</div>
+        <div style="padding:6px 10px;font-size:10px;color:#8b949e;flex:1">pattern: str · signal: str</div>
+        <div style="padding:4px 8px;font-size:9px;color:#f8514977;white-space:nowrap">danger=2</div>
+      </div>
+      <div style="background:#190808;border:1.5px solid #f8514955;border-radius:6px;display:flex;align-items:center;font-family:monospace">
+        <div style="padding:6px 10px;border-right:1px solid #f8514933;font-weight:700;color:#f85149;font-size:11px;width:148px;flex-shrink:0">StorageCorrupt</div>
+        <div style="padding:6px 10px;font-size:10px;color:#8b949e;flex:1">pattern: str · directory: str</div>
+        <div style="padding:4px 8px;font-size:9px;color:#f8514977;white-space:nowrap">danger=2</div>
+      </div>
+      <div style="background:#130a26;border:1.5px solid #bc8cff55;border-radius:6px;display:flex;align-items:center;font-family:monospace">
+        <div style="padding:6px 10px;border-right:1px solid #bc8cff33;font-weight:700;color:#bc8cff;font-size:11px;width:148px;flex-shrink:0">LLMLatency</div>
+        <div style="padding:6px 10px;font-size:10px;color:#8b949e;flex:1">delay_s: float · upstream: str</div>
+        <div style="padding:4px 8px;font-size:9px;color:#bc8cff77;white-space:nowrap">danger=0</div>
+      </div>
+      <div style="font-size:10px;color:#484f58;padding:3px 10px;font-family:monospace">+ NetworkLoss · NetworkCorrupt · MemoryStress · IOStress · DiskFull · LLMRateLimit · LLMHallucination · …</div>
+    </div>
+  </div>
+
+  <!-- ═══ TARGET HIERARCHY ═══ -->
+  <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#58a6ff;margin-bottom:10px">TARGET HIERARCHY</div>
+  <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:24px">
+
+    <div style="background:#0a1628;border:1.5px solid #58a6ff66;border-radius:8px;width:178px;flex-shrink:0;font-family:monospace">
+      <div style="padding:8px 12px;background:#58a6ff11;border-bottom:1px solid #58a6ff33;font-weight:700;color:#58a6ff;display:flex;align-items:center;gap:6px">
+        Target
+        <span style="font-size:9px;color:#8b949e;background:#21262d;border-radius:3px;padding:1px 5px">abstract</span>
+      </div>
+      <div style="padding:8px 12px;font-size:10px;color:#e6edf3;line-height:1.8">
+        +connect()<br>+run(cmd) → tuple<br>+sudo(cmd) → tuple<br>+put(local, remote)
+      </div>
+    </div>
+
+    <div style="align-self:center;color:#484f58;font-size:11px;text-align:center;padding:0 6px;flex-shrink:0">
+      <div>◄───</div>
+      <div style="font-size:9px;margin-top:2px">extends</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:6px;flex:1">
+      <div style="background:#071811;border:1.5px solid #3fb95055;border-radius:6px;font-family:monospace">
+        <div style="padding:7px 12px;border-bottom:1px solid #3fb95022;display:flex;align-items:center;gap:8px">
+          <span style="font-weight:700;color:#3fb950;font-size:11px">LocalTarget</span>
+        </div>
+        <div style="padding:6px 12px;font-size:10px;color:#8b949e">subprocess.run() — same machine, no SSH</div>
+      </div>
+      <div style="background:#0a1628;border:1.5px solid #58a6ff55;border-radius:6px;font-family:monospace">
+        <div style="padding:7px 12px;border-bottom:1px solid #58a6ff22;display:flex;align-items:center;gap:8px">
+          <span style="font-weight:700;color:#58a6ff;font-size:11px">SSHTarget</span>
+          <span style="font-size:10px;color:#8b949e">host · user · port</span>
+        </div>
+        <div style="padding:6px 12px;font-size:10px;color:#8b949e">Paramiko SSH — remote Linux machine</div>
+      </div>
+      <div style="background:#130a26;border:1.5px solid #bc8cff55;border-radius:6px;font-family:monospace">
+        <div style="padding:7px 12px;border-bottom:1px solid #bc8cff22;display:flex;align-items:center;gap:8px">
+          <span style="font-weight:700;color:#bc8cff;font-size:11px">HTTPTarget</span>
+          <span style="font-size:10px;color:#8b949e">base_url</span>
+        </div>
+        <div style="padding:6px 12px;font-size:10px;color:#8b949e">cj-daemon REST :8642 — machine behind firewall</div>
+      </div>
+      <div style="background:#071811;border:1.5px solid #39d35355;border-radius:6px;font-family:monospace;border-style:dashed">
+        <div style="padding:7px 12px;border-bottom:1px solid #39d35322;display:flex;align-items:center;gap:8px">
+          <span style="font-weight:700;color:#39d353;font-size:11px">LoggingTarget</span>
+          <span style="font-size:9px;color:#39d35388;background:#071811;border:1px solid #39d35333;border-radius:10px;padding:1px 6px">wraps any Target</span>
+        </div>
+        <div style="padding:6px 12px;font-size:10px;color:#8b949e">session_id · fault_id — intercepts every run()/sudo() and writes to SessionDB</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ CONTROL + EVALUATION ═══ -->
+  <div style="font-size:9px;font-weight:700;letter-spacing:2px;color:#3fb950;margin-bottom:10px">CONTROL + EVALUATION PLANE</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+
+    <div style="background:#071811;border:1.5px solid #3fb95066;border-radius:8px;font-family:monospace">
+      <div style="padding:8px 12px;background:#3fb95011;border-bottom:1px solid #3fb95033;font-weight:700;color:#3fb950">ChaosRunner</div>
+      <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8;border-bottom:1px solid #21262d">
+        scenario: Scenario<br>target: Target<br>db: SessionDB<br>policy: SafetyPolicy
+      </div>
+      <div style="padding:8px 12px;font-size:10px;color:#e6edf3;line-height:1.8">
+        +start(duration)<br>+stop()<br>+measure(workload, …)<br>+door(…, cycles)<br>+attach()
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="background:#1a1200;border:1.5px solid #d2992255;border-radius:8px;font-family:monospace">
+        <div style="padding:8px 12px;background:#d2992211;border-bottom:1px solid #d2992233;font-weight:700;color:#d29922">Scenario</div>
+        <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8">name: str<br>faults: list[Fault]</div>
+      </div>
+      <div style="background:#190808;border:1.5px solid #f8514955;border-radius:8px;font-family:monospace">
+        <div style="padding:8px 12px;background:#f8514911;border-bottom:1px solid #f8514933;font-weight:700;color:#f85149">SafetyPolicy</div>
+        <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8">
+          max_danger: int<br>dry_run: bool<br>allowed_targets: list
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="background:#0a1628;border:1.5px solid #58a6ff55;border-radius:8px;font-family:monospace">
+        <div style="padding:8px 12px;background:#58a6ff11;border-bottom:1px solid #58a6ff33;font-weight:700;color:#58a6ff">SessionDB</div>
+        <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8">
+          path: str<br>open_session() → int<br>record_fault(…)<br>record_result(…)
+        </div>
+      </div>
+      <div style="background:#130a26;border:1.5px solid #bc8cff55;border-radius:8px;font-family:monospace">
+        <div style="padding:8px 12px;background:#bc8cff11;border-bottom:1px solid #bc8cff33;font-weight:700;color:#bc8cff">MeasurementResult</div>
+        <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8">
+          baseline · fault · delta: dict<br>judge_baseline: JudgeScore<br>passed(key, threshold)<br>passed_quality(…)
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div style="background:#071811;border:1.5px solid #39d35355;border-radius:8px;font-family:monospace">
+      <div style="padding:8px 12px;background:#39d35311;border-bottom:1px solid #39d35333;font-weight:700;color:#39d353">LLMJudge</div>
+      <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8">
+        model: str · base_url: str<br>+score(question, context, response) → JudgeScore
+      </div>
+    </div>
+    <div style="background:#071811;border:1.5px solid #39d35355;border-radius:8px;font-family:monospace">
+      <div style="padding:8px 12px;background:#39d35311;border-bottom:1px solid #39d35333;font-weight:700;color:#39d353">JudgeScore</div>
+      <div style="padding:8px 12px;font-size:10px;color:#8b949e;line-height:1.8">
+        faithfulness · hallucination · coherence: float<br>guardrail_violation: bool<br>+passed(min_faith, max_halluc)
+      </div>
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div style="display:flex;gap:20px;margin-top:16px;padding-top:12px;border-top:1px solid #21262d;font-size:10px;color:#484f58;font-family:monospace;flex-wrap:wrap">
+    <span style="color:#8b949e">◄─── extends (inheritance)</span>
+    <span>ChaosRunner → Scenario · Target · SessionDB · SafetyPolicy · LLMJudge · MeasurementResult</span>
+    <span>LoggingTarget wraps any Target</span>
+    <span>Scenario contains list[Fault]</span>
+    <span>LLMJudge returns JudgeScore</span>
+  </div>
+
+</div>
+
+</div><!-- /page -->
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    sequence: { actorMargin: 60, messageMargin: 30 },
+    classDiagram: { rankSpacing: 60 }
+  });
+</script>
+</body>
+</html>

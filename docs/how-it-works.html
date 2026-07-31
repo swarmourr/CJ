@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>chaos-jungle — How It Works</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px;
+}
+.page { width: 1100px; }
+
+h1 { font-size: 22px; font-weight: 800; color: #58a6ff; margin-bottom: 4px; }
+.sub { font-size: 12px; color: #484f58; margin-bottom: 36px; }
+
+/* arrows */
+.down { text-align: center; font-size: 18px; color: #30363d; padding: 4px 0; }
+.right { font-size: 14px; color: #30363d; padding: 0 8px; align-self: center; }
+
+/* rows */
+.row { display: flex; align-items: stretch; gap: 10px; margin-bottom: 4px; }
+.row.center { justify-content: center; }
+
+/* boxes */
+.box {
+  border: 1.5px solid #30363d;
+  border-radius: 8px;
+  background: #161b22;
+  padding: 12px 16px;
+}
+.box-name {
+  font-size: 13px; font-weight: 700;
+  font-family: "SF Mono", Consolas, monospace;
+  margin-bottom: 3px;
+}
+.box-desc { font-size: 10px; color: #8b949e; line-height: 1.6; }
+
+/* colors */
+.c-blue   { border-color:#58a6ff55; background:#0a1628; }
+.c-green  { border-color:#3fb95055; background:#071811; }
+.c-orange { border-color:#d2992255; background:#1a1200; }
+.c-red    { border-color:#f8514955; background:#190808; }
+.c-purple { border-color:#bc8cff55; background:#130a26; }
+.c-teal   { border-color:#39d35355; background:#071811; }
+.c-grey   { border-color:#8b949e55; background:#111519; }
+.c-yellow { border-color:#e3b34155; background:#1a1400; }
+
+.t-blue   { color:#58a6ff; }
+.t-green  { color:#3fb950; }
+.t-orange { color:#d29922; }
+.t-red    { color:#f85149; }
+.t-purple { color:#bc8cff; }
+.t-teal   { color:#39d353; }
+.t-grey   { color:#8b949e; }
+.t-yellow { color:#e3b341; }
+
+/* chips */
+.chip {
+  display: inline-block;
+  font-size: 9px; font-weight: 700;
+  padding: 1px 7px; border-radius: 10px;
+  margin: 2px 2px 0 0;
+  border: 1px solid;
+}
+.chip-blue   { color:#79c0ff; border-color:#1f4f9055; background:#0d1f33; }
+.chip-green  { color:#56d364; border-color:#2ea04355; background:#071811; }
+.chip-orange { color:#ffa657; border-color:#9e5a0055; background:#1a0f00; }
+.chip-red    { color:#ff7b72; border-color:#8a1f1f55; background:#190808; }
+.chip-purple { color:#c9a7ff; border-color:#6e40c955; background:#130a26; }
+.chip-grey   { color:#8b949e; border-color:#30363d;   background:#111519; }
+.chip-teal   { color:#56d3a0; border-color:#1a6e4a55; background:#071811; }
+
+.section {
+  font-size: 9px; font-weight: 700; letter-spacing: 2px;
+  text-transform: uppercase; color: #484f58;
+  margin: 28px 0 10px;
+  border-top: 1px solid #21262d;
+  padding-top: 10px;
+}
+
+.f1 { flex: 1; }
+.f2 { flex: 2; }
+.w120 { width: 120px; flex-shrink: 0; }
+.w160 { width: 160px; flex-shrink: 0; }
+.w200 { width: 200px; flex-shrink: 0; }
+.w240 { width: 240px; flex-shrink: 0; }
+.w280 { width: 280px; flex-shrink: 0; }
+.w320 { width: 320px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>How chaos-jungle Works</h1>
+  <div class="sub">From your code to fault injection — the full lifecycle</div>
+
+  <!-- ══════ STEP 1: ENTRY POINT ══════ -->
+  <div class="section">step 1 — define the experiment</div>
+  <div class="row center">
+    <div class="box c-grey w320">
+      <div class="box-name t-grey">Your Code</div>
+      <div class="box-desc">
+        <span class="chip chip-grey">Decorator</span>
+        <span class="chip chip-grey">Context Manager</span>
+        <span class="chip chip-grey">Explicit API</span>
+        <span class="chip chip-grey">CLI</span>
+        <span class="chip chip-grey">pytest plugin</span>
+      </div>
+    </div>
+    <div class="right">→</div>
+    <div class="box c-orange w240">
+      <div class="box-name t-orange">Scenario</div>
+      <div class="box-desc">Named list of Fault objects<br>pure data — no logic</div>
+    </div>
+    <div class="right">→</div>
+    <div class="box c-green w280">
+      <div class="box-name t-green">ChaosRunner</div>
+      <div class="box-desc">Lifecycle orchestrator<br>owns everything that follows</div>
+    </div>
+  </div>
+
+  <!-- ══════ STEP 2: SAFETY ══════ -->
+  <div class="down">↓</div>
+  <div class="section">step 2 — safety checks</div>
+  <div class="row center">
+    <div class="box c-red w240">
+      <div class="box-name t-red">SafetyPolicy</div>
+      <div class="box-desc">
+        <span class="chip chip-red">max_danger 0/1/2</span>
+        <span class="chip chip-red">dry_run</span>
+        <span class="chip chip-red">allowed_targets</span><br>
+        Raises DangerError before anything executes
+      </div>
+    </div>
+    <div class="right">+</div>
+    <div class="box c-red w240">
+      <div class="box-name t-red">Guardrails</div>
+      <div class="box-desc">
+        <span class="chip chip-red">conflict detection</span>
+        <span class="chip chip-red">live state check</span><br>
+        Two tc faults on same iface → ConflictError
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════ STEP 3: LIFECYCLE ══════ -->
+  <div class="down">↓</div>
+  <div class="section">step 3 — experiment lifecycle</div>
+  <div class="row center">
+    <div class="box c-blue w120" style="text-align:center">
+      <div class="box-name t-blue" style="font-size:11px">PREFLIGHT</div>
+      <div class="box-desc">check tools<br>on target</div>
+    </div>
+    <div class="right">→</div>
+    <div class="box c-grey w120" style="text-align:center">
+      <div class="box-name t-grey" style="font-size:11px">BASELINE</div>
+      <div class="box-desc">run workload<br>no fault</div>
+    </div>
+    <div class="right">→</div>
+    <div class="box c-orange w120" style="text-align:center">
+      <div class="box-name t-orange" style="font-size:11px">INJECT</div>
+      <div class="box-desc">start faults<br>in order</div>
+    </div>
+    <div class="right">→</div>
+    <div class="box c-red w120" style="text-align:center">
+      <div class="box-name t-red" style="font-size:11px">FAULT</div>
+      <div class="box-desc">run workload<br>fault active</div>
+    </div>
+    <div class="right">→</div>
+    <div class="box c-green w120" style="text-align:center">
+      <div class="box-name t-green" style="font-size:11px">REVERT</div>
+      <div class="box-desc">stop + undo<br>reverse order</div>
+    </div>
+    <div class="right">→</div>
+    <div class="box c-blue w120" style="text-align:center">
+      <div class="box-name t-blue" style="font-size:11px">RECORD</div>
+      <div class="box-desc">write to<br>SQLite</div>
+    </div>
+  </div>
+
+  <!-- ══════ STEP 4: TARGET + LOGGING ══════ -->
+  <div class="down">↓</div>
+  <div class="section">step 4 — fault delivery</div>
+  <div class="row">
+
+    <!-- LoggingTarget -->
+    <div class="box c-teal w240">
+      <div class="box-name t-teal">LoggingTarget</div>
+      <div class="box-desc">
+        Transparent proxy — wraps any target<br><br>
+        Every <code style="font-size:10px;color:#56d3a0">run()</code> and <code style="font-size:10px;color:#56d3a0">sudo()</code> call is:<br>
+        ① forwarded to real target<br>
+        ② written to SessionDB simultaneously<br><br>
+        Faults have zero knowledge of the DB
+      </div>
+    </div>
+
+    <div class="right">→</div>
+
+    <!-- Targets -->
+    <div style="display:flex;flex-direction:column;gap:8px;flex:1">
+      <div class="box c-green">
+        <div class="box-name t-green" style="font-size:12px">LocalTarget</div>
+        <div class="box-desc">subprocess.run() — same machine, no SSH needed</div>
+      </div>
+      <div class="box c-blue">
+        <div class="box-name t-blue" style="font-size:12px">SSHTarget</div>
+        <div class="box-desc">Paramiko SSH — host · user · port · key auth</div>
+      </div>
+      <div class="box c-purple">
+        <div class="box-name t-purple" style="font-size:12px">HTTPTarget</div>
+        <div class="box-desc">cj-daemon REST :8642 — machine behind firewall, no SSH required</div>
+      </div>
+    </div>
+
+    <div class="right">→</div>
+
+    <!-- Fault execution -->
+    <div style="display:flex;flex-direction:column;gap:8px;flex:1">
+      <div class="box c-orange">
+        <div class="box-name t-orange" style="font-size:11px">OS / Kernel Layer</div>
+        <div class="box-desc">
+          <span class="chip chip-orange">tc netem</span>
+          <span class="chip chip-orange">stress-ng</span>
+          <span class="chip chip-orange">pkill</span>
+          <span class="chip chip-orange">systemctl</span>
+          <span class="chip chip-orange">BPF/XDP</span>
+        </div>
+      </div>
+      <div class="box c-purple">
+        <div class="box-name t-purple" style="font-size:11px">HTTP Proxy Layer</div>
+        <div class="box-desc">
+          <span class="chip chip-purple">LLM latency</span>
+          <span class="chip chip-purple">rate limit</span>
+          <span class="chip chip-purple">hallucination</span>
+          <span class="chip chip-purple">timeout</span>
+        </div>
+      </div>
+      <div class="box c-blue">
+        <div class="box-name t-blue" style="font-size:11px">Transport Intercept</div>
+        <div class="box-desc">
+          <span class="chip chip-blue">httpx patch</span>
+          <span class="chip chip-blue">requests patch</span>
+          <span class="chip chip-blue">any OS</span>
+          <span class="chip chip-blue">no sudo</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══════ STEP 5: DATA + EVALUATION ══════ -->
+  <div class="down">↓</div>
+  <div class="section">step 5 — record & evaluate</div>
+  <div class="row">
+
+    <div class="box c-blue f1">
+      <div class="box-name t-blue">SessionDB — SQLite</div>
+      <div class="box-desc">
+        <span class="chip chip-blue">sessions</span>
+        <span class="chip chip-blue">faults</span>
+        <span class="chip chip-blue">events</span>
+        <span class="chip chip-blue">commands</span>
+        <span class="chip chip-blue">results</span>
+        <span class="chip chip-blue">traces</span><br>
+        Every action written — full audit trail
+      </div>
+    </div>
+
+    <div class="right">→</div>
+
+    <div class="box c-green f1">
+      <div class="box-name t-green">MeasurementResult</div>
+      <div class="box-desc">
+        baseline · fault · delta<br>
+        <span class="chip chip-green">passed(key, threshold)</span>
+        <span class="chip chip-green">passed_quality()</span>
+        <span class="chip chip-green">passed_oracles()</span>
+      </div>
+    </div>
+
+    <div class="right">→</div>
+
+    <div class="box c-purple f1">
+      <div class="box-name t-purple">LLMJudge</div>
+      <div class="box-desc">
+        Calls a judge model to score responses<br>
+        <span class="chip chip-purple">faithfulness</span>
+        <span class="chip chip-purple">hallucination</span>
+        <span class="chip chip-purple">coherence</span>
+      </div>
+    </div>
+
+    <div class="right">→</div>
+
+    <div class="box c-grey f1">
+      <div class="box-name t-grey">Outputs</div>
+      <div class="box-desc">
+        <span class="chip chip-grey">Dashboard :8080</span>
+        <span class="chip chip-grey">CSV export</span>
+        <span class="chip chip-grey">CLI summary</span>
+        <span class="chip chip-grey">pandas DataFrame</span>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+</body>
+</html>
