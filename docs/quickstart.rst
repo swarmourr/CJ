@@ -1,3 +1,10 @@
+.. |any-os|        replace:: :bdg-success:`Any OS`
+.. |no-sudo|       replace:: :bdg-success:`No sudo`
+.. |ci|            replace:: :bdg-success:`CI`
+.. |linux-only|    replace:: :bdg-info:`Linux`
+.. |ssh|           replace:: :bdg-info:`SSH`
+.. |sudo-required| replace:: :bdg-warning:`sudo`
+
 Quickstart
 ==========
 
@@ -186,7 +193,9 @@ local judge model.
    print("Quality gate passed:", result.passed_quality(min_faithfulness=0.70))
 
 
-Example 3 — network delay on a remote machine (Linux, SSH)
+Example 3 — network delay on a remote machine
+
+|linux-only| |sudo-required| |ssh|
 -----------------------------------------------------------
 
 Measure the latency impact of a 200 ms delay on an HTTP service running on
@@ -214,7 +223,9 @@ a remote Ubuntu machine.
    # fault_mean("duration_s") ≈ baseline_mean + 0.2 s
 
 
-Example 4 — service crash (Linux, SSH)
+Example 4 — service crash
+
+|linux-only| |sudo-required| |ssh|
 ---------------------------------------
 
 Stop nginx, measure health-check failures, then restore it automatically.

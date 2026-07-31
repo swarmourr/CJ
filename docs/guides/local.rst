@@ -6,7 +6,7 @@ Local Target
 Use ``LocalTarget`` when chaos-jungle and your workload run on the **same
 machine**.  No SSH key or daemon is needed.
 
-LLM / AI faults work on any OS with ``LocalTarget`` — no Linux or ``sudo``
+LLM / AI faults work on any OS with ``LocalTarget``
 required.  Infrastructure faults (network, storage, process, resources) require
 Linux and ``sudo``.
 

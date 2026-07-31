@@ -17,7 +17,7 @@ appropriate permissions).  ``sudo`` is required for ``ServiceFault``.
    %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1a4731', 'primaryTextColor': '#7dc829', 'primaryBorderColor': '#7dc829', 'lineColor': '#7dc829', 'secondaryColor': '#2e3440', 'tertiaryColor': '#0f2318', 'mainBkg': '#1a4731', 'nodeBorder': '#7dc829', 'clusterBkg': '#0f2318', 'titleColor': '#7dc829', 'edgeLabelBackground': '#0f2318'}}}%%
    flowchart TD
        subgraph TARGET_P["TARGET MACHINE LAYERS"]
-           PK["OS PROCESSES\nProcessKill\npkill -f pattern\nkill -signal\nirreversible — no sudo needed"]
+           PK["OS PROCESSES\nProcessKill\npkill -f pattern\nkill -signal\nno elevated privileges"]
            SF["SYSTEMD UNITS\nServiceFault\nsystemctl stop / mask / kill\nauto-restored — sudo needed"]
            CK["DOCKER CONTAINERS\nContainerKill\ndocker kill / stop / pause / rm -f\nauto-restarted — docker group needed"]
        end

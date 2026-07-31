@@ -53,25 +53,55 @@ dt.sig {
   border-left: 4px solid #7dc829 !important;
 }
 
-/* ── Compatibility badges ────────────────────────────────────────── */
+/* ── Compatibility badges (sphinx-design) ───────────────────────── */
 .sd-badge {
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 2px 10px;
-  border-radius: 12px;
-  letter-spacing: 0.4px;
-  display: inline-block;
-  margin: 2px 4px 2px 0;
+  font-size: 0.72rem !important;
+  font-weight: 700 !important;
+  padding: 3px 12px !important;
+  border-radius: 20px !important;
+  letter-spacing: 0.5px !important;
+  display: inline-flex !important;
+  align-items: center;
+  margin: 0 4px 0 0 !important;
+  text-transform: uppercase;
+  text-decoration: none !important;
+  vertical-align: middle;
 }
-.bdg-success, .sd-bg-success { background: #1a4731; color: #7dc829; border: 1px solid #7dc829; }
-.bdg-info,    .sd-bg-info    { background: #0d1b2a; color: #90caf9; border: 1px solid #2196f3; }
-.bdg-warning, .sd-bg-warning { background: #2a1a0d; color: #ffcc80; border: 1px solid #ff9800; }
 
-/* Badge row spacing */
-p > .sd-badge + .sd-badge,
-p > .bdg-success + .bdg-info,
-p > .bdg-info + .bdg-warning,
-p > .bdg-success + .bdg-warning { margin-left: 4px; }
+/* Any OS / No sudo / CI — green pill */
+.sd-badge.sd-bg-success,
+.sd-badge-success {
+  background: #1a4731 !important;
+  color: #7dc829 !important;
+  border: 1.5px solid #7dc829 !important;
+  box-shadow: 0 0 6px #7dc82933;
+}
+
+/* Linux / SSH — blue pill */
+.sd-badge.sd-bg-info,
+.sd-badge-info {
+  background: #0d1b2a !important;
+  color: #90caf9 !important;
+  border: 1.5px solid #2196f3 !important;
+}
+
+/* sudo — orange pill */
+.sd-badge.sd-bg-warning,
+.sd-badge-warning {
+  background: #2a1a0d !important;
+  color: #ffcc80 !important;
+  border: 1.5px solid #ff9800 !important;
+}
+
+/* Badge row: add small gap between badges */
+.sd-badge + .sd-badge { margin-left: 4px !important; }
+
+/* Badge container line spacing */
+p:has(> .sd-badge) {
+  margin-top: 6px !important;
+  margin-bottom: 14px !important;
+  line-height: 2;
+}
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }

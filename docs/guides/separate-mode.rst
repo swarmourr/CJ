@@ -84,7 +84,7 @@ CLI — all fault types
 
    chaos-jungle stop
 
-**Process / service faults (Linux, SSH):**
+**Process / service faults** |linux-only| |sudo-required| |ssh|
 
 .. code-block:: bash
 
@@ -99,7 +99,7 @@ CLI — all fault types
    # Restore nginx
    chaos-jungle stop --target ssh://ubuntu@worker1
 
-**Resource exhaustion (Linux, SSH):**
+**Resource exhaustion** |linux-only| |sudo-required| |ssh|
 
 .. code-block:: bash
 

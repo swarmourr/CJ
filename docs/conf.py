@@ -19,7 +19,18 @@ extensions = [
     "sphinx_autodoc_typehints",     # type hints in docs
     "myst_parser",                  # Markdown support
     "sphinxcontrib.mermaid",        # Mermaid diagrams
+    "sphinx_design",                # Badges, cards, tabs
 ]
+
+# ── Global substitutions (badges available in every RST file) ──────
+rst_epilog = """
+.. |any-os|        replace:: :bdg-success:`Any OS`
+.. |no-sudo|       replace:: :bdg-success:`No sudo`
+.. |ci|            replace:: :bdg-success:`CI`
+.. |linux-only|    replace:: :bdg-ref-info-line:`Linux`
+.. |ssh|           replace:: :bdg-ref-info-line:`SSH`
+.. |sudo-required| replace:: :bdg-ref-warning-line:`sudo`
+"""
 
 # ── Mermaid ────────────────────────────────────────────────────────
 mermaid_version = "11"              # CDN version (used for HTML output)
