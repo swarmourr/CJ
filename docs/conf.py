@@ -127,7 +127,12 @@ html_theme_options = {
     "light_css_variables": {
         "color-brand-primary":              "#1a4731",
         "color-brand-content":              "#1a4731",
+        "color-link":                       "#1a4731",
+        "color-link--hover":                "#7dc829",
+        "color-link--visited":              "#2a6a42",
+        "color-link--visited--hover":       "#7dc829",
         "color-sidebar-brand-text":         "#1a4731",
+        "color-sidebar-link-text":          "#1a4731",
         "color-sidebar-link-text--top-level": "#1a4731",
         "color-sidebar-item-background--current": "#d8f0c0",
         "color-api-name":                   "#1a4731",
