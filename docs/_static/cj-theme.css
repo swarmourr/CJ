@@ -53,11 +53,6 @@ dt.sig {
   border-left: 4px solid #7dc829 !important;
 }
 
-/* ── Links (light mode) ─────────────────────────────────────────── */
-a, a:link          { color: #1a4731 !important; }
-a:visited          { color: #2a6a42 !important; }
-a:hover, a:focus   { color: #7dc829 !important; }
-
 /* ── Compatibility badges (sphinx-design) ───────────────────────── */
 .sd-badge {
   font-size: 0.72rem !important;

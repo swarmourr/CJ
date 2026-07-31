@@ -107,6 +107,11 @@ html_theme_options = {
         "color-sidebar-item-background--current": "#1a4731",
         "color-sidebar-item-background--hover":   "#162e22",
         "color-sidebar-item-expander-background--hover": "#1a4731",
+        # Links (dark mode — must be readable on #0a1a10 bg)
+        "color-link":                       "#7dc829",
+        "color-link--hover":                "#a8e063",
+        "color-link--visited":              "#5aa01f",
+        "color-link--visited--hover":       "#a8e063",
         # Foreground / text
         "color-foreground-primary":         "#ffffff",
         "color-foreground-secondary":       "#cccccc",
