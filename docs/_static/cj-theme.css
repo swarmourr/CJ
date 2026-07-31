@@ -64,8 +64,14 @@ dt.sig {
   margin: 2px 4px 2px 0;
 }
 .bdg-success, .sd-bg-success { background: #1a4731; color: #7dc829; border: 1px solid #7dc829; }
-.bdg-info,    .sd-bg-info    { background: #0f2318; color: #90caf9; border: 1px solid #2196f3; }
+.bdg-info,    .sd-bg-info    { background: #0d1b2a; color: #90caf9; border: 1px solid #2196f3; }
 .bdg-warning, .sd-bg-warning { background: #2a1a0d; color: #ffcc80; border: 1px solid #ff9800; }
+
+/* Badge row spacing */
+p > .sd-badge + .sd-badge,
+p > .bdg-success + .bdg-info,
+p > .bdg-info + .bdg-warning,
+p > .bdg-success + .bdg-warning { margin-left: 4px; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }

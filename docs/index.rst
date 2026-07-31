@@ -1,6 +1,8 @@
 .. |any-os|        replace:: :bdg-success:`Any OS`
 .. |no-sudo|       replace:: :bdg-success:`No sudo`
+.. |ci|            replace:: :bdg-success:`CI`
 .. |linux-only|    replace:: :bdg-info:`Linux`
+.. |ssh|           replace:: :bdg-info:`SSH`
 .. |sudo-required| replace:: :bdg-warning:`sudo`
 
 chaos-jungle

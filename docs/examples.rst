@@ -1,13 +1,22 @@
+.. |any-os|        replace:: :bdg-success:`Any OS`
+.. |no-sudo|       replace:: :bdg-success:`No sudo`
+.. |linux-only|    replace:: :bdg-info:`Linux`
+.. |sudo-required| replace:: :bdg-warning:`sudo`
+.. |ssh|           replace:: :bdg-info:`SSH`
+.. |ci|            replace:: :bdg-success:`CI`
+
 Examples
 ========
 
 Copy-paste-ready examples for every fault layer.  Start with the layer that
-matches your stack — 
+matches your stack.
 
 ----
 
 LLM / AI Faults
-----------------------------------
+----------------
+
+|any-os| |no-sudo| |ci|
 
 These examples use a local `Ollama <https://ollama.com>`_ model.  Replace
 ``qwen2.5:latest`` with any model you have pulled.
@@ -234,8 +243,10 @@ Measure faithfulness and hallucination scores automatically:
 
 ----
 
-Process / Service / Container Faults (Linux, SSH)
----------------------------------------------------
+Process / Service / Container Faults
+------------------------------------
+
+|linux-only| |sudo-required| |ssh|
 
 Kill a process
 ~~~~~~~~~~~~~~
@@ -294,8 +305,10 @@ Pause a Docker container
 
 ----
 
-Resource Exhaustion Faults (Linux, SSH)
------------------------------------------
+Resource Exhaustion Faults
+--------------------------
+
+|linux-only| |sudo-required| |ssh|
 
 CPU saturation
 ~~~~~~~~~~~~~~
@@ -349,8 +362,10 @@ Memory pressure
 
 ----
 
-Network Faults (Linux, SSH)
------------------------------
+Network Faults
+--------------
+
+|linux-only| |sudo-required| |ssh|
 
 .. code-block:: python
 
@@ -396,8 +411,10 @@ Silent network corruption (BPF):
 
 ----
 
-Storage Faults (Linux, SSH)
------------------------------
+Storage Faults
+--------------
+
+|linux-only| |sudo-required| |ssh|
 
 .. code-block:: python
 
@@ -415,8 +432,10 @@ Storage Faults (Linux, SSH)
 
 ----
 
-State Faults (Linux, SSH)
----------------------------
+State Faults
+------------
+
+|linux-only| |sudo-required| |ssh|
 
 .. code-block:: python
 
