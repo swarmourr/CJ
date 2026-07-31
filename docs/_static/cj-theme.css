@@ -53,6 +53,20 @@ dt.sig {
   border-left: 4px solid #7dc829 !important;
 }
 
+/* ── Compatibility badges ────────────────────────────────────────── */
+.sd-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 12px;
+  letter-spacing: 0.4px;
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+}
+.bdg-success, .sd-bg-success { background: #1a4731; color: #7dc829; border: 1px solid #7dc829; }
+.bdg-info,    .sd-bg-info    { background: #0f2318; color: #90caf9; border: 1px solid #2196f3; }
+.bdg-warning, .sd-bg-warning { background: #2a1a0d; color: #ffcc80; border: 1px solid #ff9800; }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #0a1a10; }

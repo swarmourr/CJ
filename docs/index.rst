@@ -1,3 +1,8 @@
+.. |any-os|        replace:: :bdg-success:`Any OS`
+.. |no-sudo|       replace:: :bdg-success:`No sudo`
+.. |linux-only|    replace:: :bdg-info:`Linux`
+.. |sudo-required| replace:: :bdg-warning:`sudo`
+
 chaos-jungle
 ============
 
@@ -36,7 +41,7 @@ Two-minute tour
 
    from chaos_jungle.intercept import inject, RateLimit, Latency
 
-   # Zero setup — patches httpx/requests directly.  Works on macOS.
+   # Zero setup — patches httpx/requests directly.
    with inject(Latency(3.0), RateLimit(after_n=5)):
        result = my_agent.run("Book me a flight to Paris")
 
@@ -69,7 +74,12 @@ Two-minute tour
 What can you break?
 --------------------
 
-**LLM / AI Agent faults** — no Linux, no sudo, works on macOS
+**LLM / AI Agent faults**
+
+.. rst-class:: compat-badges
+
+   |any-os| |no-sudo|
+
 
 .. list-table::
    :header-rows: 1
@@ -96,7 +106,12 @@ What can you break?
    * - Quality scoring (:ref:`guide-judge`)
      - Faithfulness, hallucination, coherence, guardrail violation (LLMJudge)
 
-**Infrastructure faults** — Linux + SSH required
+**Infrastructure faults**
+
+.. rst-class:: compat-badges
+
+   |linux-only| |sudo-required|
+
 
 .. list-table::
    :header-rows: 1
@@ -187,8 +202,21 @@ Installation
    # or latest from GitHub
    pip install git+https://github.com/swarmourr/CJ.git
 
-Requirements: Python 3.9+.  LLM / AI faults work on **macOS and Linux**.
-Infrastructure faults require a **Linux target** with ``sudo``.
+Requirements: Python 3.9+.
+
+.. list-table::
+   :widths: 50 25 25
+   :header-rows: 1
+
+   * - Fault family
+     - OS
+     - Privileges
+   * - LLM / AI faults
+     - Any
+     - None
+   * - Infrastructure faults
+     - Linux
+     - sudo
 
 ----
 
