@@ -391,40 +391,76 @@ Mutation modes: `nullify`, `delete`, `negate`, `type_mismatch`, `inject`.
 
 ---
 
-## Module map
+## Package layout
 
 ```
 chaos_jungle/
 │
-├── scenario.py        ── Scenario dataclass
-├── runner.py          ── ChaosRunner · MeasurementResult · door()
-├── suite.py           ── ExperimentSuite
-├── decorators.py      ── @chaos · @chaos_session · @chaos_measure
-├── intercept.py       ── inject() · Behavior subclasses
-├── pytest_plugin.py   ── @pytest.mark.chaos auto-fixture
+├── __init__.py            ── public API re-exports (from chaos_jungle import …)
+├── config.py              ── ConfigLoader — build Faults/Targets/Suites from YAML
+├── pytest_plugin.py       ── @pytest.mark.chaos auto-fixture
 │
-├── faults/
-│   ├── llm.py         ── LLMLatency · LLMRateLimit · LLMHallucination …
-│   ├── semantic.py    ── SemanticCorrupt (4 modes)
-│   ├── state.py       ── RedisStateCorrupt · JsonStateCorrupt · PostgresStateCorrupt
-│   ├── network.py     ── NetworkDelay · NetworkLoss · NetworkCorrupt …
-│   ├── storage.py     ── StorageCorrupt
-│   ├── process.py     ── ProcessKill · ServiceFault · ContainerKill
-│   ├── resources.py   ── CPUStress · MemoryStress · IOStress · DiskFull
-│   └── bpf.py         ── SilentNetworkCorrupt
+├── core/                  ── orchestration layer
+│   ├── runner.py          ── ChaosRunner · MeasurementResult · door()
+│   ├── scenario.py        ── Scenario dataclass
+│   ├── suite.py           ── ExperimentSuite
+│   ├── scheduler.py       ── ChaosScheduler (recurring experiments)
+│   ├── guardrails.py      ── ConflictError · SafetyPolicy · validators
+│   └── preflight.py       ── Preflight class — tool detection + auto-install
 │
-├── targets/
-│   ├── local.py       ── LocalTarget
-│   ├── ssh.py         ── SSHTarget
-│   └── http.py        ── HTTPTarget
+├── control/               ── HTTP control plane
+│   ├── daemon.py          ── cj-daemon FastAPI REST agent
+│   ├── dashboard.py       ── web dashboard (FastAPI)
+│   ├── registry.py        ── ScenarioRegistry — UUID-keyed remote scenario store
+│   └── cli.py             ── chaos-jungle CLI (Click)
 │
-├── judge.py           ── LLMJudge · JudgeScore · average_scores
-├── metrics.py         ── PingLatency · CommandMetric · FileIntegrity …
-├── session_db.py      ── SQLite schema + helpers
-├── dashboard.py       ── FastAPI web dashboard
-├── daemon.py          ── cj-daemon REST agent
-├── guardrails.py      ── ConflictError / ConflictWarning
-└── preflight.py       ── tool detection + auto-install
+├── analysis/              ── evaluation and quality measurement
+│   ├── hypothesis.py      ── Hypothesis · HypothesisResult · AssertionResult
+│   ├── oracles.py         ── Oracle assertions (NoSecretLeakage, MaxCost …)
+│   ├── judge.py           ── LLMJudge · JudgeScore · Evaluator
+│   └── conversation.py    ── ConversationScenario · Turn · TurnResult
+│
+├── inject/                ── lightweight injection utilities
+│   ├── intercept.py       ── inject() · Behavior subclasses (Latency, Jitter …)
+│   ├── decorators.py      ── @chaos · @chaos_session · @chaos_measure
+│   ├── fuzzing.py         ── ChaosFuzzer · fuzz_scenarios
+│   └── fetch.py           ── fetch() · collect_logs · export_db_to_csv
+│
+├── faults/                ── fault implementations
+│   ├── base.py            ── Fault ABC · VerificationResult · PreflightError
+│   ├── network.py         ── NetworkDelay · NetworkLoss · NetworkCorrupt …
+│   ├── storage.py         ── StorageCorrupt
+│   ├── llm.py             ── LLMLatency · LLMRateLimit · LLMHallucination …
+│   ├── state.py           ── RedisStateCorrupt · JsonStateCorrupt · PostgresStateCorrupt
+│   ├── process.py         ── ProcessKill · ServiceFault · ContainerKill
+│   ├── resources.py       ── CPUStress · MemoryStress · IOStress · DiskFull
+│   ├── gpu.py             ── GPUMemoryPressure
+│   ├── skill.py           ── SkillUnavailable · SkillMisroute …
+│   ├── skill_file.py      ── SkillFileUnavailable · SkillFileInstructionCorrupt …
+│   └── bpf.py             ── SilentNetworkCorrupt (XDP/TC BPF)
+│
+├── targets/               ── machine abstraction
+│   ├── base.py            ── Target ABC
+│   ├── local.py           ── LocalTarget (subprocess)
+│   ├── ssh.py             ── SSHTarget (Paramiko)
+│   └── http.py            ── HTTPTarget (cj-daemon REST client)
+│
+├── metrics/               ── metric collection
+│   ├── base.py            ── Metric ABC
+│   ├── builtin.py         ── PingLatency · CommandMetric · FileIntegrity
+│   ├── custom.py          ── metric() decorator · ScriptMetric
+│   ├── metric_set.py      ── MetricSet (.exclude/.add/.only)
+│   ├── strategy.py        ── CollectStrategy (SNAPSHOT / RECOVERY)
+│   └── schema.py          ── MetricSample · MetricSummary · CollectedMetrics
+│
+├── exporters/             ── result exporters
+│   ├── base.py            ── Exporter ABC
+│   ├── prometheus.py      ── PrometheusExporter
+│   ├── datadog.py         ── DatadogExporter
+│   └── webhook.py         ── WebhookExporter
+│
+└── db/
+    └── session_db.py      ── SessionDB — SQLite schema + all queries
 ```
 
 ---

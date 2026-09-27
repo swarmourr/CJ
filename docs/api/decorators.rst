@@ -1,5 +1,5 @@
 Decorators
 ==========
 
-.. automodule:: chaos_jungle.decorators
+.. automodule:: chaos_jungle.inject.decorators
    :members:

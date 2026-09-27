@@ -1,5 +1,5 @@
 Runner
 ======
 
-.. automodule:: chaos_jungle.runner
+.. automodule:: chaos_jungle.core.runner
    :members:

@@ -318,14 +318,21 @@ Where to go next
    :caption: API Reference
 
    api/faults
-   api/judge
    api/targets
    api/scenario
    api/runner
-   api/decorators
-   api/metrics
-   api/guardrails
    api/suite
+   api/scheduler
+   api/guardrails
+   api/preflight
+   api/decorators
+   api/intercept
+   api/fuzzing
+   api/hypothesis
+   api/oracles
+   api/judge
+   api/conversation
+   api/metrics
    api/cli
    api/daemon
    api/dashboard

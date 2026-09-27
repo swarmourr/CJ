@@ -1,7 +1,7 @@
 ExperimentSuite
 ===============
 
-.. automodule:: chaos_jungle.suite
+.. automodule:: chaos_jungle.core.suite
    :members:
 
 .. automodule:: chaos_jungle.config

@@ -20,7 +20,7 @@ Launching
 
 .. code-block:: python
 
-   from chaos_jungle.dashboard import run
+   from chaos_jungle.control.dashboard import run
 
    run(host="127.0.0.1", port=8050)   # blocks until Ctrl-C
 
@@ -65,6 +65,6 @@ The dashboard also exposes a JSON API used by the frontend:
 Python API reference
 --------------------
 
-.. automodule:: chaos_jungle.dashboard
+.. automodule:: chaos_jungle.control.dashboard
    :members:
    :undoc-members: False

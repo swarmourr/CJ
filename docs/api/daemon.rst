@@ -73,6 +73,6 @@ token is configured the daemon accepts all requests.
 Python API reference
 --------------------
 
-.. automodule:: chaos_jungle.daemon
+.. automodule:: chaos_jungle.control.daemon
    :members:
    :undoc-members: False

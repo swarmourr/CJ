@@ -3,11 +3,11 @@
 Guardrails
 ==========
 
-.. automodule:: chaos_jungle.guardrails
+.. automodule:: chaos_jungle.core.guardrails
    :members:
 
 Oracles
 =======
 
-.. automodule:: chaos_jungle.oracles
+.. automodule:: chaos_jungle.analysis.oracles
    :members:

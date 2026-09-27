@@ -1,5 +1,5 @@
 Scenario
 ========
 
-.. automodule:: chaos_jungle.scenario
+.. automodule:: chaos_jungle.core.scenario
    :members:
