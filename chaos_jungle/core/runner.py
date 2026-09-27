@@ -885,7 +885,12 @@ class ChaosRunner:
             _interval = _policy.monitor_interval_s
             _t0 = self._fault_start_ts or time.time()
 
+            _consecutive_violations = 0
+
             def _abort_loop() -> None:
+                nonlocal _consecutive_violations
+                from chaos_jungle.core.guardrails import AbortError as _AbortError
+
                 while not self._abort_stop.wait(timeout=_interval):
                     try:
                         # Pass real live metrics so every threshold is checked.
@@ -921,35 +926,47 @@ class ChaosRunner:
                             latency_p99_s=_p99,
                             retries=_retries,
                         )
-                    except Exception as _exc:
-                        from chaos_jungle.core.guardrails import AbortError
-                        if isinstance(_exc, AbortError):
-                            print(
-                                f"[chaos-jungle] ABORT: {_exc} — stopping chaos"
-                            )
-                            if self._session_id is not None:
-                                try:
-                                    self.db.add_event(
-                                        self._session_id,
-                                        f"ABORT: {_exc}",
-                                    )
-                                except Exception:
-                                    pass
-                            if _policy.abort_callback is not None:
-                                try:
-                                    _policy.abort_callback(str(_exc))
-                                except Exception:
-                                    pass
-                            # Launch stop() in a new thread to avoid self-join:
-                            # _abort_loop → stop() → _stop_shared_resources()
-                            # → abort_thread.join() would deadlock.
-                            threading.Thread(
-                                target=self.stop,
-                                kwargs={"_status_override": "aborted"},
-                                daemon=True,
-                                name="cj-abort-stop",
-                            ).start()
+                        # Successful check — reset consecutive violation counter.
+                        _consecutive_violations = 0
+                    except _AbortError as _exc:
+                        # Emergency stop bypasses the consecutive-violation gate;
+                        # metric threshold violations require violation_threshold
+                        # consecutive ticks before triggering.
+                        _is_emergency = _policy._emergency_stop.is_set()
+                        if _is_emergency:
+                            _consecutive_violations = _policy.violation_threshold
+                        else:
+                            _consecutive_violations += 1
+
+                        if _consecutive_violations < _policy.violation_threshold:
+                            continue  # not enough consecutive violations yet
+
+                        print(f"[chaos-jungle] ABORT: {_exc} — stopping chaos")
+                        if self._session_id is not None:
+                            try:
+                                self.db.add_event(
+                                    self._session_id,
+                                    f"ABORT: {_exc}",
+                                )
+                            except Exception:
+                                pass
+                        if _policy.abort_callback is not None:
+                            try:
+                                _policy.abort_callback(str(_exc))
+                            except Exception:
+                                pass
+                        # Launch stop() in a new thread to avoid self-join:
+                        # _abort_loop → stop() → _stop_shared_resources()
+                        # → abort_thread.join() would deadlock.
+                        threading.Thread(
+                            target=self.stop,
+                            kwargs={"_status_override": "aborted"},
+                            daemon=True,
+                            name="cj-abort-stop",
+                        ).start()
                         return
+                    except Exception:
+                        return  # unexpected error — exit abort loop gracefully
 
             self._abort_thread = threading.Thread(
                 target=_abort_loop, daemon=True, name="cj-abort-monitor"
@@ -1716,7 +1733,12 @@ class ChaosRunner:
                 _sess = self.db.get_session(self._session_id)
                 if _sess:
                     _verdict = str(_sess["verdict"]) if "verdict" in _sess.keys() else "INCONCLUSIVE"
-                    result.injection_valid = (_verdict == "VALID")
+                    if _verdict == "VALID":
+                        result.injection_valid = True
+                    elif _verdict == "INVALID":
+                        result.injection_valid = False
+                    else:  # INCONCLUSIVE — injection could not be verified either way
+                        result.injection_valid = None
                     result.injection_valid_reason = f"session verdict: {_verdict}"
                     if _verdict != "VALID":
                         # Effect size is unreliable when injection is not confirmed.

@@ -305,7 +305,10 @@ class SessionDB:
                 pass
 
         _llm_extra_cols = [
-            ("fault_triggered", "INTEGER NOT NULL DEFAULT 0"),
+            ("fault_triggered",        "INTEGER NOT NULL DEFAULT 0"),
+            ("configured_faults_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("triggered_faults_json",  "TEXT NOT NULL DEFAULT '[]'"),
+            ("fault_evidence_json",    "TEXT NOT NULL DEFAULT '{}'"),
         ]
         for col, defn in _llm_extra_cols:
             try:

@@ -445,20 +445,176 @@ class TestMeasurementResultValidity:
             # the important thing is that effect_size would have been cleared.
             assert "Errors during stop" in str(exc), f"Unexpected error: {exc}"
 
-    def test_measure_injection_valid_inconclusive_is_false(self):
-        """Unverified fault (INCONCLUSIVE verdict) → injection_valid=False."""
+    def test_measure_injection_valid_inconclusive_is_none(self):
+        """Unverified fault (INCONCLUSIVE verdict) → injection_valid=None.
+
+        INCONCLUSIVE means the injection could not be verified either way —
+        this is scientifically distinct from a confirmed failure (False).
+        """
         f = UnverifiedFault()
         runner = _make_runner([f])
 
         result = runner.measure(lambda: {"latency": 0.01}, n_baseline=1, n_fault=1)
 
-        assert result.injection_valid is False, (
-            f"Expected injection_valid=False for INCONCLUSIVE verdict, "
+        assert result.injection_valid is None, (
+            f"Expected injection_valid=None for INCONCLUSIVE verdict, "
             f"got {result.injection_valid!r}"
         )
+        assert "INCONCLUSIVE" in result.injection_valid_reason
 
 
 # ── Proxy unit tests: tracing and fault_triggered accuracy ─────────────────────
+
+
+class TestMetricThresholdAborts:
+    """Verify that every numeric SafetyPolicy threshold closes the session as 'aborted'.
+
+    Each test:
+    1. Creates a runner with the threshold under test set to a value that will
+       be exceeded by the synthetic LLM call rows inserted into the DB.
+    2. Starts the runner (fault is active, abort monitor is running).
+    3. Inserts synthetic llm_calls rows directly into the session DB so the
+       abort loop sees metric values above the threshold on its next tick.
+    4. Waits for the session to reach a terminal state.
+    5. Asserts the session status is 'aborted'.
+    """
+
+    _MONITOR_INTERVAL = 0.05   # fast ticks for tests
+    _WAIT_TIMEOUT = 5.0
+
+    def _insert_llm_calls(self, runner, *, http_status=200, cost_usd=0.0,
+                          latency_s=0.0, is_retry=0, n=1) -> None:
+        """Insert synthetic llm_calls rows for the active session."""
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).isoformat()
+        for _ in range(n):
+            runner.db._conn.execute(
+                "INSERT INTO llm_calls "
+                "(session_id, phase, call_index, timestamp, model, "
+                " http_status, cost_usd, latency_s, is_retry) "
+                "VALUES (?, 'fault', 0, ?, 'test', ?, ?, ?, ?)",
+                (runner._session_id, ts, http_status, cost_usd, latency_s, is_retry),
+            )
+        runner.db._conn.commit()
+
+    def _wait_for_terminal(self, runner) -> str:
+        deadline = time.time() + self._WAIT_TIMEOUT
+        while time.time() < deadline:
+            sess = runner.db.get_session(runner._session_id)
+            if sess["status"] not in ("active", "stopping"):
+                return sess["status"]
+            time.sleep(0.02)
+        return runner.db.get_session(runner._session_id)["status"]
+
+    def _make_runner_with_policy(self, policy):
+        return _make_runner([TrackingFault()], policy=policy)
+
+    def test_error_rate_threshold_aborts(self):
+        """max_error_rate: inserting all-error rows exceeds the threshold → abort."""
+        from chaos_jungle.core.guardrails import SafetyPolicy
+
+        policy = SafetyPolicy(
+            max_error_rate=0.5,
+            monitor_interval_s=self._MONITOR_INTERVAL,
+        )
+        runner = self._make_runner_with_policy(policy)
+        runner.start()
+
+        # Insert 3 error responses (http_status 500) — error rate = 1.0 > 0.5
+        self._insert_llm_calls(runner, http_status=500, n=3)
+
+        status = self._wait_for_terminal(runner)
+        assert status == "aborted", (
+            f"Expected 'aborted' after error_rate threshold exceeded, got {status!r}"
+        )
+
+    def test_cost_usd_threshold_aborts(self):
+        """max_cost_usd: inserting a row with high cost exceeds the threshold → abort."""
+        from chaos_jungle.core.guardrails import SafetyPolicy
+
+        policy = SafetyPolicy(
+            max_cost_usd=0.10,
+            monitor_interval_s=self._MONITOR_INTERVAL,
+        )
+        runner = self._make_runner_with_policy(policy)
+        runner.start()
+
+        # Insert a call that costs $0.50 — exceeds $0.10 limit
+        self._insert_llm_calls(runner, cost_usd=0.50)
+
+        status = self._wait_for_terminal(runner)
+        assert status == "aborted", (
+            f"Expected 'aborted' after cost_usd threshold exceeded, got {status!r}"
+        )
+
+    def test_latency_p99_threshold_aborts(self):
+        """max_latency_p99_s: inserting high-latency rows exceeds p99 threshold → abort."""
+        from chaos_jungle.core.guardrails import SafetyPolicy
+
+        policy = SafetyPolicy(
+            max_latency_p99_s=1.0,
+            monitor_interval_s=self._MONITOR_INTERVAL,
+        )
+        runner = self._make_runner_with_policy(policy)
+        runner.start()
+
+        # Insert 10 rows all with latency 5.0s — p99 = 5.0 > 1.0
+        self._insert_llm_calls(runner, latency_s=5.0, n=10)
+
+        status = self._wait_for_terminal(runner)
+        assert status == "aborted", (
+            f"Expected 'aborted' after latency_p99_s threshold exceeded, got {status!r}"
+        )
+
+    def test_retry_count_threshold_aborts(self):
+        """max_retries: inserting rows with is_retry=1 accumulates to exceed limit → abort."""
+        from chaos_jungle.core.guardrails import SafetyPolicy
+
+        policy = SafetyPolicy(
+            max_retries=2,
+            monitor_interval_s=self._MONITOR_INTERVAL,
+        )
+        runner = self._make_runner_with_policy(policy)
+        runner.start()
+
+        # Insert 5 retry rows — total retries = 5 > 2
+        self._insert_llm_calls(runner, is_retry=1, n=5)
+
+        status = self._wait_for_terminal(runner)
+        assert status == "aborted", (
+            f"Expected 'aborted' after max_retries threshold exceeded, got {status!r}"
+        )
+
+    def test_violation_threshold_requires_consecutive_violations(self):
+        """violation_threshold=3: a single violation must NOT abort; 3 consecutive must."""
+        from chaos_jungle.core.guardrails import SafetyPolicy
+
+        policy = SafetyPolicy(
+            max_error_rate=0.5,
+            violation_threshold=3,
+            monitor_interval_s=self._MONITOR_INTERVAL,
+        )
+        runner = self._make_runner_with_policy(policy)
+        runner.start()
+
+        # Insert error rows immediately — every tick after this will see error_rate=1.0.
+        # After 3 consecutive violations the abort must fire.
+        self._insert_llm_calls(runner, http_status=500, n=5)
+
+        status = self._wait_for_terminal(runner, )
+        assert status == "aborted", (
+            f"Expected 'aborted' after {policy.violation_threshold} consecutive violations, "
+            f"got {status!r}"
+        )
+
+    def _wait_for_terminal(self, runner, timeout: float = _WAIT_TIMEOUT) -> str:  # type: ignore[override]
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            sess = runner.db.get_session(runner._session_id)
+            if sess["status"] not in ("active", "stopping"):
+                return sess["status"]
+            time.sleep(0.02)
+        return runner.db.get_session(runner._session_id)["status"]
 
 
 class TestProxyTracing:

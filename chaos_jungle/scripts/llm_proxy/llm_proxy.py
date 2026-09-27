@@ -863,6 +863,9 @@ def _record_llm_call(
     agent_addr: str = "",
     fault_triggered: int = 0,
     call_index: "int | None" = None,
+    configured_faults_json: str = "[]",
+    triggered_faults_json: str = "[]",
+    fault_evidence_json: str = "{}",
 ) -> int:
     """Write one LLM call row to the chaos-jungle session DB (best-effort).
 
@@ -892,8 +895,9 @@ def _record_llm_call(
             "  response_length_chars, ttft_s, system_fingerprint,"
             "  rate_limit_remaining_requests, rate_limit_remaining_tokens,"
             "  system_prompt, full_messages_json, error_type,"
-            "  is_retry, is_final_response, fault_offset_s, agent_addr, fault_triggered"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "  is_retry, is_final_response, fault_offset_s, agent_addr, fault_triggered,"
+            "  configured_faults_json, triggered_faults_json, fault_evidence_json"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 _SESSION_ID, _PHASE, idx, ts, model,
                 prompt_tokens, completion_tokens, cost_usd, finish_reason,
@@ -909,6 +913,7 @@ def _record_llm_call(
                 rate_limit_remaining_requests, rate_limit_remaining_tokens,
                 system_prompt, full_messages_json, error_type,
                 is_retry, is_final_response, fault_offset_s, agent_addr, fault_triggered,
+                configured_faults_json, triggered_faults_json, fault_evidence_json,
             ),
         )
         llm_call_id = cur.lastrowid or 0
@@ -1018,6 +1023,8 @@ def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
                 if k.lower() in ("content-type", "cache-control", "x-accel-buffering"):
                     handler.send_header(k, v)
             handler.send_header("Transfer-Encoding", "chunked")
+            if call_index is not None:
+                handler.send_header("X-CJ-Trace-ID", str(call_index))
             handler.end_headers()
 
             for raw_line in resp:
@@ -1168,50 +1175,66 @@ def _check_block(cfg: dict, count: int, req_body: "dict | None") -> "tuple[int, 
 def _mutate_request(cfg: dict, req_body: "dict | None", raw_body: bytes, triggered: list) -> "tuple[dict | None, bytes]":
     """Apply request-modifying faults. Returns (modified_req_body, modified_raw_body).
 
-    Appends fault name to *triggered* only when the fault actually executes.
+    For content-modifying faults, appends fault name to *triggered* only when
+    the serialised body actually changed after the mutation (proof of manifestation).
+    For latency, execution of the sleep is sufficient evidence.
     """
     fault = cfg["fault"]
     if fault == "skill_bad_output" and _is_tool_request(req_body) and req_body:
         if _skill_name_matches(req_body, cfg.get("skill_name", "")):
+            _before = raw_body
             req_body = _inject_skill_bad_output(req_body, cfg.get("bad_output_mode", "invalid_json"))
             raw_body = json.dumps(req_body).encode()
-            triggered.append(fault)
+            if raw_body != _before:
+                triggered.append(fault)
     if fault == "skill_version_skew" and _is_tool_request(req_body) and req_body:
+        _before = raw_body
         req_body = _inject_skill_version_skew(req_body, cfg.get("old_version", "0.1.0"))
         raw_body = json.dumps(req_body).encode()
-        triggered.append(fault)
+        if raw_body != _before:
+            triggered.append(fault)
     if fault == "skill_memory_stale" and _is_tool_request(req_body) and req_body:
+        _before = raw_body
         req_body = _inject_skill_memory_stale(req_body, cfg.get("stale_data", ""))
         raw_body = json.dumps(req_body).encode()
-        triggered.append(fault)
+        if raw_body != _before:
+            triggered.append(fault)
     if fault == "skill_instruction_corrupt" and req_body is not None:
+        _before = raw_body
         req_body = _inject_skill_instruction_corrupt(req_body, cfg.get("corrupt_instruction", ""))
         raw_body = json.dumps(req_body).encode()
-        triggered.append(fault)
+        if raw_body != _before:
+            triggered.append(fault)
     if fault == "token_starve" and req_body is not None:
+        _before = raw_body
         n = cfg.get("max_tokens", 5)
         req_body["max_tokens"] = n
         req_body["num_predict"] = n
         raw_body = json.dumps(req_body).encode()
-        triggered.append(fault)
+        if raw_body != _before:
+            triggered.append(fault)
     if fault == "semantic_corrupt" and req_body is not None:
+        _before = raw_body
         req_body = _apply_semantic_corrupt(req_body, cfg.get("semantic_mode", "entity_swap"))
         raw_body = json.dumps(req_body).encode()
-        triggered.append(fault)
+        if raw_body != _before:
+            triggered.append(fault)
     if fault == "latency":
         time.sleep(cfg.get("delay_s", 2.0))
-        triggered.append(fault)
+        triggered.append(fault)  # sleep always executes — no body change to compare
     return req_body, raw_body
 
 
 def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None", triggered: list) -> bytes:
     """Apply response-modifying faults. Returns modified resp_body.
 
-    Appends fault name to *triggered* only when the fault actually executes.
+    Appends fault name to *triggered* only when the response body actually changed
+    after transformation (proof of manifestation).
     """
     global _cost_usd
     fault = cfg["fault"]
     if fault == "corrupt":
+        _before = resp_body
         mode = cfg.get("mode", "truncate")
         if mode == "truncate":
             resp_body = resp_body[: max(1, len(resp_body) // 2)]
@@ -1219,8 +1242,10 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None", trigg
             resp_body = b"{}"
         elif mode == "invalid_json":
             resp_body = b"<<chaos-jungle: response corrupted>>"
-        triggered.append(fault)
+        if resp_body != _before:
+            triggered.append(fault)
     if fault == "hallucinate":
+        _before = resp_body
         generator_url   = cfg.get("generator_url", "")
         generator_model = cfg.get("generator_model", "")
         if generator_url and generator_model:
@@ -1229,13 +1254,18 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None", trigg
         else:
             text = cfg.get("text", "WRONG ANSWER (injected by chaos-jungle)")
         resp_body = _inject_hallucination(resp_body, text)
-        triggered.append(fault)
+        if resp_body != _before:
+            triggered.append(fault)
     if fault == "skill_misroute":
+        _before = resp_body
         resp_body = _inject_skill_misroute(resp_body, cfg.get("wrong_skill", ""))
-        triggered.append(fault)
+        if resp_body != _before:
+            triggered.append(fault)
     if fault == "skill_conflict":
+        _before = resp_body
         resp_body = _inject_skill_conflict(resp_body, cfg.get("conflict_text", ""))
-        triggered.append(fault)
+        if resp_body != _before:
+            triggered.append(fault)
     if fault == "budget_exceeded":
         try:
             data = json.loads(resp_body)
@@ -1350,6 +1380,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if not _DB_PATH or not _SESSION_ID:
                 return
             _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "")
+            _cfg_json = json.dumps([c["fault"] for c in chain])
+            _trg_json = json.dumps(_triggered_faults)
             _record_llm_call(
                 model=_req["model"], prompt_tokens=0, completion_tokens=0,
                 cost_usd=0.0, finish_reason="", prompt_text=_req["prompt_text"],
@@ -1364,6 +1396,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 max_tokens_requested=_req["max_tokens_requested"],
                 response_length_chars=0, ttft_s=None, system_fingerprint="",
                 call_index=_trace_id,
+                configured_faults_json=_cfg_json,
+                triggered_faults_json=_trg_json,
             )
 
         # ------------------------------------------------------------------
@@ -1439,6 +1473,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     and _resp["response_tool_calls"] == 0
                 )
                 _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "passthrough")
+                _cfg_json = json.dumps([c["fault"] for c in chain])
+                _trg_json = json.dumps(_triggered_faults)
                 _llm_call_id = _record_llm_call(
                     model=_req["model"],
                     prompt_tokens=_pt,
@@ -1476,6 +1512,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     fault_offset_s=_fault_offset(),
                     agent_addr=self.client_address[0] if self.client_address else "",
                     call_index=_trace_id,
+                    configured_faults_json=_cfg_json,
+                    triggered_faults_json=_trg_json,
                 )
                 _record_tool_calls(
                     _SESSION_ID, _llm_call_id, req_body, _PHASE,
