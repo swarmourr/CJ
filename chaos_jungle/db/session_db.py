@@ -59,7 +59,8 @@ class SessionDB:
                 status      TEXT    NOT NULL DEFAULT 'active',
                 target_type TEXT    NOT NULL DEFAULT '',
                 target_addr TEXT    NOT NULL DEFAULT '',
-                abort_reason TEXT
+                abort_reason TEXT,
+                verdict     TEXT    NOT NULL DEFAULT 'INCONCLUSIVE'
             );
 
             CREATE TABLE IF NOT EXISTS faults (
@@ -293,14 +294,25 @@ class SessionDB:
                 pass
 
         _session_cols = [
-            ("target_type", "TEXT NOT NULL DEFAULT ''"),
-            ("target_addr", "TEXT NOT NULL DEFAULT ''"),
+            ("target_type",  "TEXT NOT NULL DEFAULT ''"),
+            ("target_addr",  "TEXT NOT NULL DEFAULT ''"),
+            ("verdict",      "TEXT NOT NULL DEFAULT 'INCONCLUSIVE'"),
         ]
         for col, defn in _session_cols:
             try:
                 self._conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
             except Exception:
                 pass
+
+        _llm_extra_cols = [
+            ("fault_triggered", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        for col, defn in _llm_extra_cols:
+            try:
+                self._conn.execute(f"ALTER TABLE llm_calls ADD COLUMN {col} {defn}")
+            except Exception:
+                pass
+
         self._conn.commit()
 
     # ── Tool Calls ────────────────────────────────────────────────
@@ -565,6 +577,28 @@ class SessionDB:
                 "UPDATE sessions SET status = ? WHERE id = ?",
                 (status, session_id),
             )
+        self._conn.commit()
+
+    def set_session_verdict(
+        self,
+        session_id: int,
+        verdict: str,
+    ) -> None:
+        """Set the experiment verdict for a session.
+
+        Parameters
+        ----------
+        session_id : int
+        verdict : str
+            One of ``"VALID"``, ``"INVALID"``, or ``"INCONCLUSIVE"``.
+            VALID — all faults confirmed injected and reverted.
+            INVALID — at least one fault confirmed not injected or not reverted.
+            INCONCLUSIVE — at least one fault has no verification override.
+        """
+        self._conn.execute(
+            "UPDATE sessions SET verdict = ? WHERE id = ?",
+            (verdict, session_id),
+        )
         self._conn.commit()
 
     def close_session(self, session_id: int, status: str = "reverted") -> None:

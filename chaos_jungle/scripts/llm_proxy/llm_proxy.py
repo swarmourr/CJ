@@ -861,6 +861,7 @@ def _record_llm_call(
     is_final_response: int = 0,
     fault_offset_s: float | None = None,
     agent_addr: str = "",
+    fault_triggered: int = 0,
 ) -> int:
     """Write one LLM call row to the chaos-jungle session DB (best-effort).
 
@@ -887,8 +888,8 @@ def _record_llm_call(
             "  response_length_chars, ttft_s, system_fingerprint,"
             "  rate_limit_remaining_requests, rate_limit_remaining_tokens,"
             "  system_prompt, full_messages_json, error_type,"
-            "  is_retry, is_final_response, fault_offset_s, agent_addr"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "  is_retry, is_final_response, fault_offset_s, agent_addr, fault_triggered"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 _SESSION_ID, _PHASE, idx, ts, model,
                 prompt_tokens, completion_tokens, cost_usd, finish_reason,
@@ -903,7 +904,7 @@ def _record_llm_call(
                 response_length_chars, ttft_s, system_fingerprint,
                 rate_limit_remaining_requests, rate_limit_remaining_tokens,
                 system_prompt, full_messages_json, error_type,
-                is_retry, is_final_response, fault_offset_s, agent_addr,
+                is_retry, is_final_response, fault_offset_s, agent_addr, fault_triggered,
             ),
         )
         llm_call_id = cur.lastrowid or 0
@@ -1263,6 +1264,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._reply(200, b'{"ok":true}')
             return
 
+        # ── Config endpoint: GET /_cj/config ──────────────────────
+        if self.path == "/_cj/config":
+            cfg = json.dumps({
+                "fault":       FAULT,
+                "fault_chain": FAULT_CHAIN,
+                "fault_args":  FAULT_ARGS,
+                "session_id":  _SESSION_ID,
+                "phase":       _PHASE,
+            }).encode()
+            self._reply(200, cfg)
+            return
+
         # ── Control endpoint: POST /_cj/session ───────────────────
         if self.path == "/_cj/session":
             try:
@@ -1308,6 +1321,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 cost_usd=0.0, finish_reason="", prompt_text=_req["prompt_text"],
                 response_text="", latency_s=round(time.time() - _t_start, 4),
                 http_status=status, fault_name=fault, was_blocked=1, was_modified=0,
+                fault_triggered=1,
                 total_tokens=0, tokens_per_second=0.0,
                 request_size_bytes=_req["request_size_bytes"], response_size_bytes=0,
                 message_count=_req["message_count"], tool_count=_req["tool_count"],
@@ -1399,6 +1413,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     fault_name=fault,
                     was_blocked=0,
                     was_modified=1 if fault in _MODIFYING_FAULTS else 0,
+                    fault_triggered=1 if fault not in ("passthrough", "") else 0,
                     total_tokens=_tot,
                     tokens_per_second=_tps,
                     request_size_bytes=_req["request_size_bytes"],
@@ -1432,10 +1447,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self._reply(status, resp_body, resp_ct)
 
     def _reply(self, status: int, body: bytes,
-               content_type: str = _CT_JSON) -> None:
+               content_type: str = _CT_JSON,
+               trace_id: int | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # Per-request correlation ID so callers can link responses to DB records
+        _tid = trace_id if trace_id is not None else _call_index
+        self.send_header("X-CJ-Trace-ID", str(_tid))
         self.end_headers()
         self.wfile.write(body)
 

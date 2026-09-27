@@ -139,6 +139,8 @@ class MeasurementResult:
     fault_std: dict = field(default_factory=dict)
     baseline_ci95: dict = field(default_factory=dict)
     fault_ci95: dict = field(default_factory=dict)
+    # Cohen's d effect size per metric: (mean_fault - mean_baseline) / pooled_std
+    effect_size: dict = field(default_factory=dict)
     # Injection validity: None = unchecked; True/False = verified
     injection_valid: "bool | None" = field(default=None)
     injection_valid_reason: str = field(default="")
@@ -398,6 +400,41 @@ def _confidence_interval_95(std: dict[str, float], n: int) -> dict[str, float]:
     return {k: round(t * s / math.sqrt(n), 6) for k, s in std.items()}
 
 
+def _cohens_d(
+    baseline_runs: list[dict],
+    fault_runs: list[dict],
+) -> dict[str, float]:
+    """Compute Cohen's d effect size for each numeric metric.
+
+    d = (mean_fault - mean_baseline) / pooled_std
+
+    Returns an empty dict when there are fewer than 2 total observations or
+    the pooled std is zero (no variance).
+    """
+    import math
+    n_b = len(baseline_runs)
+    n_f = len(fault_runs)
+    if n_b + n_f < 2:
+        return {}
+    result: dict[str, float] = {}
+    keys = set(baseline_runs[0]) | set(fault_runs[0]) if (baseline_runs and fault_runs) else set()
+    for k in keys:
+        b_vals = [r[k] for r in baseline_runs if isinstance(r.get(k), (int, float))]
+        f_vals = [r[k] for r in fault_runs if isinstance(r.get(k), (int, float))]
+        if not b_vals or not f_vals:
+            continue
+        mean_b = sum(b_vals) / len(b_vals)
+        mean_f = sum(f_vals) / len(f_vals)
+        var_b = sum((x - mean_b) ** 2 for x in b_vals) / max(len(b_vals) - 1, 1)
+        var_f = sum((x - mean_f) ** 2 for x in f_vals) / max(len(f_vals) - 1, 1)
+        pooled_var = ((n_b - 1) * var_b + (n_f - 1) * var_f) / max(n_b + n_f - 2, 1)
+        pooled_std = math.sqrt(pooled_var)
+        if pooled_std == 0:
+            continue
+        result[k] = round((mean_f - mean_b) / pooled_std, 6)
+    return result
+
+
 def _extract_workload_metrics(runs: list[dict], names: list[str]) -> dict[str, float]:
     """Extract and average named metrics from a list of workload() return dicts."""
     result: dict[str, float] = {}
@@ -564,6 +601,8 @@ class ChaosRunner:
         self._abort_stop: threading.Event = threading.Event()
         self._fault_start_ts: float | None = None
         self._shared_llm_proc = None
+        # fid -> "VALID" | "INVALID" | "INCONCLUSIVE" — populated by start()
+        self._activation_verdicts: dict[int, str] = {}
 
         # Auto-register scenario in registry with the correct type/target_ip
         # so the local DB always reflects where the scenario will run.
@@ -764,6 +803,7 @@ class ChaosRunner:
 
                 if vr.not_implemented:
                     # No override — warn but continue; not a real failure
+                    self._activation_verdicts[fid] = "INCONCLUSIVE"
                     print(
                         f"[chaos-jungle] WARNING: {fault.__class__.__name__} "
                         f"has no verify_active() — cannot confirm injection"
@@ -775,6 +815,7 @@ class ChaosRunner:
                     )
                 elif not vr.verified:
                     # Real check ran and reported fault is not active — roll back
+                    self._activation_verdicts[fid] = "INVALID"
                     self.db.update_fault_status(fid, "injection_failed")
                     self.db.add_event(
                         self._session_id,
@@ -785,6 +826,9 @@ class ChaosRunner:
                     raise RuntimeError(
                         f"verify_active failed for {fault.__class__.__name__}: {vr.reason}"
                     )
+                else:
+                    # verified=True, not_implemented=False → injection confirmed
+                    self._activation_verdicts[fid] = "VALID"
 
             self.db.update_fault_status(fid, "active")
 
@@ -857,10 +901,15 @@ class ChaosRunner:
                                     )
                                 except Exception:
                                     pass
-                            try:
-                                self.stop(_status_override="aborted")
-                            except Exception:
-                                pass
+                            # Launch stop() in a new thread to avoid self-join:
+                            # _abort_loop → stop() → _stop_shared_resources()
+                            # → abort_thread.join() would deadlock.
+                            threading.Thread(
+                                target=self.stop,
+                                kwargs={"_status_override": "aborted"},
+                                daemon=True,
+                                name="cj-abort-stop",
+                            ).start()
                         return
 
             self._abort_thread = threading.Thread(
@@ -998,6 +1047,9 @@ class ChaosRunner:
         errors: list[Exception] = []
         reverted_count = 0
 
+        # ── Phase 1: stop + revert all faults ────────────────────────────────
+        # Collect faults that completed phase 1 successfully for phase 2.
+        phase1_done: list[tuple] = []
         for fault, fid in reversed(self._activated):
             try:
                 logged.fault_id = fid
@@ -1009,62 +1061,7 @@ class ChaosRunner:
                 )
                 fault.stop(logged)
                 fault.revert(logged)
-
-                # Verify recovery — exceptions are NOT swallowed
-                try:
-                    vr = fault.verify_recovered(logged)
-                except Exception as vexc:
-                    errors.append(vexc)
-                    self.db.update_fault_status(fid, "revert_failed")
-                    self.db.add_event(
-                        self._session_id,
-                        f"RECOVER VERIFY ERROR {fault.__class__.__name__}: {vexc}",
-                        fault_id=fid,
-                    )
-                    print(
-                        f"[chaos-jungle] RECOVER VERIFY ERROR "
-                        f"{fault.__class__.__name__}: {vexc}"
-                    )
-                    continue
-
-                self.db.update_fault_verification(
-                    fid, verified_recovered=vr.verified, note=vr.reason
-                )
-
-                if vr.not_implemented:
-                    # No override — warn but still count as reverted
-                    print(
-                        f"[chaos-jungle] WARNING: {fault.__class__.__name__} "
-                        f"has no verify_recovered() — cannot confirm cleanup"
-                    )
-                elif not vr.verified:
-                    # Real check ran and says fault is still active — revert failed
-                    errors.append(RuntimeError(
-                        f"verify_recovered failed for {fault.__class__.__name__}: {vr.reason}"
-                    ))
-                    self.db.update_fault_status(fid, "revert_failed")
-                    self.db.add_event(
-                        self._session_id,
-                        f"RECOVER VERIFY FAILED {fault.__class__.__name__}: {vr.reason}",
-                        fault_id=fid,
-                    )
-                    print(
-                        f"[chaos-jungle] RECOVER VERIFY FAILED "
-                        f"{fault.__class__.__name__}: {vr.reason}"
-                    )
-                    self.db.close_fault(fid)
-                    reverted_count += 1
-                    continue
-
-                self.db.update_fault_status(fid, "reverted")
-                self.db.close_fault(fid)
-                self.db.add_event(
-                    self._session_id,
-                    f"Fault stopped and reverted: {fault.__class__.__name__}",
-                    fault_id=fid,
-                )
-                print(f"[chaos-jungle] Reverted {fault.__class__.__name__}")
-                reverted_count += 1
+                phase1_done.append((fault, fid))
             except Exception as exc:
                 errors.append(exc)
                 self.db.update_fault_status(fid, "revert_failed")
@@ -1076,7 +1073,92 @@ class ChaosRunner:
                 print(f"[chaos-jungle] ERROR reverting {fault.__class__.__name__}: {exc}")
 
         self._activated = []
+
+        # ── Between phases: kill shared resources BEFORE verify_recovered ─────
+        # This ensures verify_recovered() sees a clean environment
+        # (env vars restored, proxy terminated) rather than the live proxy.
         self._stop_shared_resources()
+
+        # ── Phase 2: verify recovery ──────────────────────────────────────────
+        recovery_verdicts: dict[int, str] = {}
+        for fault, fid in phase1_done:
+            try:
+                vr = fault.verify_recovered(logged)
+            except Exception as vexc:
+                errors.append(vexc)
+                self.db.update_fault_status(fid, "revert_failed")
+                self.db.add_event(
+                    self._session_id,
+                    f"RECOVER VERIFY ERROR {fault.__class__.__name__}: {vexc}",
+                    fault_id=fid,
+                )
+                print(
+                    f"[chaos-jungle] RECOVER VERIFY ERROR "
+                    f"{fault.__class__.__name__}: {vexc}"
+                )
+                recovery_verdicts[fid] = "INVALID"
+                continue
+
+            self.db.update_fault_verification(
+                fid, verified_recovered=vr.verified, note=vr.reason
+            )
+
+            if vr.not_implemented:
+                recovery_verdicts[fid] = "INCONCLUSIVE"
+                print(
+                    f"[chaos-jungle] WARNING: {fault.__class__.__name__} "
+                    f"has no verify_recovered() — cannot confirm cleanup"
+                )
+            elif not vr.verified:
+                recovery_verdicts[fid] = "INVALID"
+                errors.append(RuntimeError(
+                    f"verify_recovered failed for {fault.__class__.__name__}: {vr.reason}"
+                ))
+                self.db.update_fault_status(fid, "revert_failed")
+                self.db.add_event(
+                    self._session_id,
+                    f"RECOVER VERIFY FAILED {fault.__class__.__name__}: {vr.reason}",
+                    fault_id=fid,
+                )
+                print(
+                    f"[chaos-jungle] RECOVER VERIFY FAILED "
+                    f"{fault.__class__.__name__}: {vr.reason}"
+                )
+                self.db.close_fault(fid)
+                reverted_count += 1
+                continue
+            else:
+                recovery_verdicts[fid] = "VALID"
+
+            self.db.update_fault_status(fid, "reverted")
+            self.db.close_fault(fid)
+            self.db.add_event(
+                self._session_id,
+                f"Fault stopped and reverted: {fault.__class__.__name__}",
+                fault_id=fid,
+            )
+            print(f"[chaos-jungle] Reverted {fault.__class__.__name__}")
+            reverted_count += 1
+
+        # ── Compute and store session verdict ─────────────────────────────────
+        _all_verdicts = (
+            list(self._activation_verdicts.values()) + list(recovery_verdicts.values())
+        )
+        if _all_verdicts:
+            if "INVALID" in _all_verdicts:
+                _session_verdict = "INVALID"
+            elif "INCONCLUSIVE" in _all_verdicts:
+                _session_verdict = "INCONCLUSIVE"
+            else:
+                _session_verdict = "VALID"
+            try:
+                self.db.set_session_verdict(self._session_id, _session_verdict)
+                self.db.add_event(
+                    self._session_id,
+                    f"Session verdict: {_session_verdict}",
+                )
+            except Exception:
+                pass
 
         try:
             self.db.compute_and_store_impact(self._session_id)
@@ -1184,6 +1266,9 @@ class ChaosRunner:
         on_fault_start: "Callable[[int], None] | None" = None,
         cooldown_s: float = 0.0,
         hypothesis: "Hypothesis | None" = None,
+        n_warmup: int = 0,
+        randomize_order: bool = False,
+        seed: "int | None" = None,
     ) -> "MeasurementResult":
         """Run *workload* under baseline and fault conditions and compare.
 
@@ -1298,60 +1383,84 @@ class ChaosRunner:
             except Exception:
                 pass
 
-        # ── 1. Baseline runs (no fault) ───────────────────────────
-        print(f"[chaos-jungle] Measuring baseline ({n_baseline} trial(s)) ...")
+        # Decide execution order: baseline-first (default) or fault-first
+        import random as _random
+        _rng = _random.Random(seed)
+        _fault_first = randomize_order and _rng.random() < 0.5
+        if _fault_first:
+            print("[chaos-jungle] Randomized order: fault phase runs first")
+
         raw_baseline: list[dict] = []
-        for _ in range(n_baseline):
-            raw_baseline.append(workload())
-        baseline = _avg_metrics(raw_baseline)
-
-        # Baseline metric snapshot
-        _b_sample = None
-        if strategy is not None:
-            from chaos_jungle.metrics.strategy import collect_system_snapshot
-            from chaos_jungle.metrics.schema import MetricSample as _MS2
-            _b_sys = collect_system_snapshot(self.target, _active_system)
-            _b_wl  = _extract_workload_metrics(raw_baseline, _active_workload)
-            _b_sample = _MS2(
-                timestamp_s=time.time(),
-                phase="baseline",
-                trial=0,
-                values={**_b_sys, **_b_wl},
-            )
-
-        # ── 2. Fault runs ─────────────────────────────────────────
-        if cooldown_s > 0:
-            print(f"[chaos-jungle] Cooldown — waiting {cooldown_s:.1f}s before fault phase ...")
-            time.sleep(cooldown_s)
-
-        print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
-        self.start()
-        if on_fault_start is not None and self._session_id is not None:
-            try:
-                on_fault_start(self._session_id)
-            except Exception:
-                pass
         raw_fault: list[dict] = []
+        _b_sample = None
         _f_sample = None
-        try:
-            for _ in range(n_fault):
-                raw_fault.append(workload())
 
-            # Fault snapshot (while fault still active)
+        def _collect_baseline() -> None:
+            nonlocal _b_sample
+            if n_warmup > 0:
+                print(f"[chaos-jungle] Baseline warm-up ({n_warmup} run(s), discarded) ...")
+                for _ in range(n_warmup):
+                    workload()
+            print(f"[chaos-jungle] Measuring baseline ({n_baseline} trial(s)) ...")
+            for _ in range(n_baseline):
+                raw_baseline.append(workload())
             if strategy is not None:
                 from chaos_jungle.metrics.strategy import collect_system_snapshot
                 from chaos_jungle.metrics.schema import MetricSample as _MS2
-                _f_sys = collect_system_snapshot(self.target, _active_system)
-                _f_wl  = _extract_workload_metrics(raw_fault, _active_workload)
-                _f_sample = _MS2(
+                _b_sys = collect_system_snapshot(self.target, _active_system)
+                _b_wl  = _extract_workload_metrics(raw_baseline, _active_workload)
+                _b_sample = _MS2(
                     timestamp_s=time.time(),
-                    phase="fault",
+                    phase="baseline",
                     trial=0,
-                    values={**_f_sys, **_f_wl},
+                    values={**_b_sys, **_b_wl},
                 )
-        finally:
-            self.stop()
 
+        def _collect_fault() -> None:
+            nonlocal _f_sample
+            print(f"[chaos-jungle] Measuring under fault ({n_fault} trial(s)) ...")
+            self.start()
+            if on_fault_start is not None and self._session_id is not None:
+                try:
+                    on_fault_start(self._session_id)
+                except Exception:
+                    pass
+            try:
+                if n_warmup > 0:
+                    print(f"[chaos-jungle] Fault warm-up ({n_warmup} run(s), discarded) ...")
+                    for _ in range(n_warmup):
+                        workload()
+                for _ in range(n_fault):
+                    raw_fault.append(workload())
+                if strategy is not None:
+                    from chaos_jungle.metrics.strategy import collect_system_snapshot
+                    from chaos_jungle.metrics.schema import MetricSample as _MS2
+                    _f_sys = collect_system_snapshot(self.target, _active_system)
+                    _f_wl  = _extract_workload_metrics(raw_fault, _active_workload)
+                    _f_sample = _MS2(
+                        timestamp_s=time.time(),
+                        phase="fault",
+                        trial=0,
+                        values={**_f_sys, **_f_wl},
+                    )
+            finally:
+                self.stop()
+
+        # ── 1 & 2. Run baseline and fault phases in chosen order ──────────────
+        if _fault_first:
+            _collect_fault()
+            if cooldown_s > 0:
+                print(f"[chaos-jungle] Cooldown — waiting {cooldown_s:.1f}s ...")
+                time.sleep(cooldown_s)
+            _collect_baseline()
+        else:
+            _collect_baseline()
+            if cooldown_s > 0:
+                print(f"[chaos-jungle] Cooldown — waiting {cooldown_s:.1f}s before fault phase ...")
+                time.sleep(cooldown_s)
+            _collect_fault()
+
+        baseline = _avg_metrics(raw_baseline)
         fault = _avg_metrics(raw_fault)
 
         # ── 2b. Post-stop metric collection ───────────────────────
@@ -1405,6 +1514,7 @@ class ChaosRunner:
         fault_std     = _std_metrics(raw_fault)
         baseline_ci95 = _confidence_interval_95(baseline_std, n_baseline)
         fault_ci95    = _confidence_interval_95(fault_std, n_fault)
+        effect_size   = _cohens_d(raw_baseline, raw_fault)
 
         # ── 4. LLM quality evaluation (optional) ──────────────────
         judge_baseline_score = None
@@ -1532,6 +1642,7 @@ class ChaosRunner:
             fault_std=fault_std,
             baseline_ci95=baseline_ci95,
             fault_ci95=fault_ci95,
+            effect_size=effect_size,
         )
 
         # ── 6. Persist to DB ──────────────────────────────────────

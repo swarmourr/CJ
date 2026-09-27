@@ -194,12 +194,46 @@ class _LLMProxyFault(Fault):
         pass  # stateless — stop() is sufficient
 
     def verify_active(self, target: "Target") -> "VerificationResult":
+        import urllib.request as _ur
         from chaos_jungle.faults.base import VerificationResult
+
         if self._managed_externally:
-            return VerificationResult(
-                verified=True,
-                reason=f"{self.__class__.__name__}: managed externally by ChaosRunner",
-            )
+            # For shared-proxy faults, query the config endpoint to confirm
+            # the fault is registered and the proxy is healthy.
+            try:
+                with _ur.urlopen(
+                    f"http://127.0.0.1:{self.port}/_cj/config", timeout=2
+                ) as resp:
+                    import json as _json
+                    cfg = _json.loads(resp.read())
+                active_faults = (
+                    [f["fault"] for f in cfg.get("fault_chain", [])]
+                    if cfg.get("fault_chain")
+                    else [cfg.get("fault", "")]
+                )
+                if self._fault_name not in active_faults:
+                    return VerificationResult(
+                        verified=False,
+                        reason=(
+                            f"{self.__class__.__name__}: fault '{self._fault_name}' not found "
+                            f"in proxy config (active: {active_faults})"
+                        ),
+                        observed=cfg,
+                    )
+                return VerificationResult(
+                    verified=True,
+                    reason=(
+                        f"{self.__class__.__name__}: fault '{self._fault_name}' confirmed "
+                        f"in shared proxy on port {self.port}"
+                    ),
+                    observed=cfg,
+                )
+            except Exception as exc:
+                return VerificationResult(
+                    verified=False,
+                    reason=f"{self.__class__.__name__}: proxy config check failed: {exc}",
+                )
+
         if self._proc is None:
             return VerificationResult(
                 verified=False,
@@ -210,10 +244,31 @@ class _LLMProxyFault(Fault):
                 verified=False,
                 reason=f"{self.__class__.__name__}: proxy exited (rc={self._proc.returncode})",
             )
+        # Query config endpoint to confirm fault is registered
+        try:
+            with _ur.urlopen(
+                f"http://127.0.0.1:{self.port}/_cj/config", timeout=2
+            ) as resp:
+                import json as _json
+                cfg = _json.loads(resp.read())
+            active_fault = cfg.get("fault", "")
+            if active_fault and active_fault != self._fault_name:
+                return VerificationResult(
+                    verified=False,
+                    reason=(
+                        f"{self.__class__.__name__}: proxy registered fault '{active_fault}' "
+                        f"but expected '{self._fault_name}'"
+                    ),
+                    observed=cfg,
+                )
+            observed = {"pid": self._proc.pid, "port": self.port, **cfg}
+        except Exception:
+            observed = {"pid": self._proc.pid, "port": self.port}
         return VerificationResult(
             verified=True,
-            reason=f"{self.__class__.__name__}: proxy running (pid={self._proc.pid})",
-            observed={"pid": self._proc.pid, "port": self.port},
+            reason=f"{self.__class__.__name__}: proxy running (pid={self._proc.pid}), "
+                   f"fault='{self._fault_name}' confirmed",
+            observed=observed,
         )
 
     def verify_recovered(self, target: "Target") -> "VerificationResult":
