@@ -483,6 +483,9 @@ class ChaosRunner:
         self.resource_interval_s = resource_interval_s
         self._session_id: int | None = None
         self._fault_ids: list[int] = []
+        # Tracks (fault, fault_id) pairs confirmed as activated — used for rollback
+        self._activated: list[tuple] = []
+        self._stopped: bool = False
         self._timer: threading.Timer | None = None
         self._resource_thread: threading.Thread | None = None
         self._resource_stop: threading.Event = threading.Event()
@@ -570,6 +573,8 @@ class ChaosRunner:
             t.daemon = True
             t.start()
             return self
+
+        self._stopped = False
         self.target.connect()
 
         # guardrails — scenario + runtime checks
@@ -597,6 +602,8 @@ class ChaosRunner:
             except Exception:
                 pass
 
+        self.db.update_session_status(self._session_id, "preflight")
+
         # wrap target so every command is logged to the session DB
         logged = LoggingTarget(self.target, self.db, self._session_id)
 
@@ -604,11 +611,15 @@ class ChaosRunner:
             for fault in self.scenario.faults:
                 fault.preflight(logged, auto_install=self.auto_install)
 
+        self.db.update_session_status(self._session_id, "injecting")
+
         self._shared_llm_proc, self._shared_llm_env_var, self._shared_llm_saved_env = (
             _start_shared_llm_proxy(self.scenario.faults, self._session_id, self.db)
         )
 
         self._fault_ids = []
+        self._activated = []
+
         for fault in self.scenario.faults:
             fid = self.db.record_fault(
                 self._session_id,
@@ -616,7 +627,7 @@ class ChaosRunner:
                 fault._parameters(),
             )
             self._fault_ids.append(fid)
-            logged.fault_id = fid   # tag subsequent commands with this fault
+            logged.fault_id = fid
             self.db.add_event(
                 self._session_id,
                 f"Starting fault: {fault.__class__.__name__}",
@@ -624,7 +635,6 @@ class ChaosRunner:
             )
             _dry = self.policy is not None and self.policy.dry_run
 
-            # Resource snapshot BEFORE injection (optional)
             if self.monitor_resources:
                 try:
                     snap_before = _collect_resources()
@@ -632,13 +642,28 @@ class ChaosRunner:
                 except Exception:
                     pass
 
-            if _dry:
-                fault.dry_run(logged)
-            else:
-                print(f"[chaos-jungle] Injecting {fault.__class__.__name__}({fault._parameters()})")
-                fault.start(logged)
+            try:
+                if _dry:
+                    fault.dry_run(logged)
+                else:
+                    print(f"[chaos-jungle] Injecting {fault.__class__.__name__}({fault._parameters()})")
+                    fault.start(logged)
+            except Exception as inject_exc:
+                # Record this fault as failed before rolling back
+                self.db.update_fault_status(fid, "injection_failed")
+                self.db.add_event(
+                    self._session_id,
+                    f"ERROR injecting {fault.__class__.__name__}: {inject_exc}",
+                    fault_id=fid,
+                )
+                # Roll back all previously activated faults in reverse order
+                self._rollback(logged)
+                raise
 
-            # Resource snapshot AFTER injection (optional)
+            # Only record as activated after successful start
+            self._activated.append((fault, fid))
+            self.db.update_fault_status(fid, "active")
+
             if self.monitor_resources:
                 try:
                     snap_after = _collect_resources()
@@ -679,6 +704,7 @@ class ChaosRunner:
             )
             self._resource_thread.start()
 
+        self.db.update_session_status(self._session_id, "active")
         print(f"[chaos-jungle] Chaos ON  — scenario '{self.scenario.name}'  "
               f"(session id: {self._session_id})")
 
@@ -691,56 +717,50 @@ class ChaosRunner:
 
         return self
 
-    def _auto_stop(self) -> None:
-        """Called by the background timer when duration expires."""
-        print(f"[chaos-jungle] Duration reached — auto-stopping chaos")
-        try:
-            self.stop()
-        except Exception as exc:
-            print(f"[chaos-jungle] ERROR during auto-stop: {exc}")
+    def _rollback(self, logged) -> None:
+        """Revert all confirmed-activated faults in reverse order.
 
-    def stop(self) -> None:
-        """Stop and revert all faults in the scenario.
-
-        Always runs even if the workload crashed. Closes the database
-        session when done. Cancels any active duration timer.
+        Called internally when fault injection fails mid-scenario.
+        Records each revert attempt regardless of individual failures.
         """
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-
-        if self._session_id is None:
-            raise RuntimeError("No active session — call start() first or use attach()")
-
-        logged = LoggingTarget(self.target, self.db, self._session_id)
-        errors = []
-        for fault, fid in zip(reversed(self.scenario.faults), reversed(self._fault_ids)):
+        cleanup_errors = []
+        for fault, fid in reversed(self._activated):
             try:
                 logged.fault_id = fid
+                self.db.update_fault_status(fid, "stopping")
                 self.db.add_event(
                     self._session_id,
-                    f"Stopping fault: {fault.__class__.__name__}",
+                    f"Rollback: reverting {fault.__class__.__name__}",
                     fault_id=fid,
                 )
                 fault.stop(logged)
                 fault.revert(logged)
+                self.db.update_fault_status(fid, "reverted")
                 self.db.close_fault(fid)
                 self.db.add_event(
                     self._session_id,
-                    f"Fault stopped and reverted: {fault.__class__.__name__}",
+                    f"Rollback: {fault.__class__.__name__} reverted",
                     fault_id=fid,
                 )
-                print(f"[chaos-jungle] Reverted {fault.__class__.__name__}")
+                print(f"[chaos-jungle] Rollback: reverted {fault.__class__.__name__}")
             except Exception as exc:
-                errors.append(exc)
+                cleanup_errors.append(exc)
+                self.db.update_fault_status(fid, "revert_failed")
                 self.db.add_event(
                     self._session_id,
-                    f"ERROR stopping {fault.__class__.__name__}: {exc}",
+                    f"Rollback ERROR reverting {fault.__class__.__name__}: {exc}",
                     fault_id=fid,
                 )
-                print(f"[chaos-jungle] ERROR reverting {fault.__class__.__name__}: {exc}")
+                print(f"[chaos-jungle] Rollback ERROR: {fault.__class__.__name__}: {exc}")
 
-        # Stop shared LLM proxy (if one was started for multiple faults)
+        self._activated = []
+        self._stop_shared_resources()
+        final_status = "partially_reverted" if cleanup_errors else "injection_failed"
+        self.db.close_session(self._session_id, status=final_status)
+        self.target.disconnect()
+
+    def _stop_shared_resources(self) -> None:
+        """Stop the shared LLM proxy and resource monitoring thread. Idempotent."""
         if self._shared_llm_proc is not None:
             import os as _os, subprocess as _sp
             if self._shared_llm_env_var:
@@ -758,20 +778,110 @@ class ChaosRunner:
             self._shared_llm_env_var = None
             self._shared_llm_saved_env = None
 
-        # Stop resource monitoring thread
         if self._resource_thread is not None:
             self._resource_stop.set()
             self._resource_thread.join(timeout=5)
             self._resource_thread = None
 
-        # Auto-compute fault impact summary from LLM call data
+    def _auto_stop(self) -> None:
+        """Called by the background timer when duration expires."""
+        print(f"[chaos-jungle] Duration reached — auto-stopping chaos")
+        try:
+            self.stop()
+        except Exception as exc:
+            print(f"[chaos-jungle] ERROR during auto-stop: {exc}")
+
+    def stop(self, *, _status_override: str | None = None) -> None:
+        """Stop and revert all active faults in the scenario.
+
+        Idempotent — safe to call more than once. Only faults confirmed as
+        activated are reverted. Faults that failed to activate are skipped.
+        The session is marked ``reverted`` only when every activated fault
+        passes cleanup. Otherwise it is marked ``revert_failed`` or
+        ``partially_reverted``.
+
+        Parameters
+        ----------
+        _status_override : str or None
+            Internal — allows the abort path to force ``aborted`` status.
+        """
+        if self._stopped:
+            return
+        self._stopped = True
+
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+        if self._session_id is None:
+            raise RuntimeError("No active session — call start() first or use attach()")
+
+        self.db.update_session_status(self._session_id, "stopping")
+        logged = LoggingTarget(self.target, self.db, self._session_id)
+        errors: list[Exception] = []
+        reverted_count = 0
+
+        for fault, fid in reversed(self._activated):
+            try:
+                logged.fault_id = fid
+                self.db.update_fault_status(fid, "stopping")
+                self.db.add_event(
+                    self._session_id,
+                    f"Stopping fault: {fault.__class__.__name__}",
+                    fault_id=fid,
+                )
+                fault.stop(logged)
+                fault.revert(logged)
+
+                # Verify recovery
+                try:
+                    vr = fault.verify_recovered(logged)
+                    self.db.update_fault_verification(
+                        fid,
+                        verified_recovered=vr.verified,
+                        note=vr.reason,
+                    )
+                except Exception:
+                    pass
+
+                self.db.update_fault_status(fid, "reverted")
+                self.db.close_fault(fid)
+                self.db.add_event(
+                    self._session_id,
+                    f"Fault stopped and reverted: {fault.__class__.__name__}",
+                    fault_id=fid,
+                )
+                print(f"[chaos-jungle] Reverted {fault.__class__.__name__}")
+                reverted_count += 1
+            except Exception as exc:
+                errors.append(exc)
+                self.db.update_fault_status(fid, "revert_failed")
+                self.db.add_event(
+                    self._session_id,
+                    f"ERROR stopping {fault.__class__.__name__}: {exc}",
+                    fault_id=fid,
+                )
+                print(f"[chaos-jungle] ERROR reverting {fault.__class__.__name__}: {exc}")
+
+        self._activated = []
+        self._stop_shared_resources()
+
         try:
             self.db.compute_and_store_impact(self._session_id)
         except Exception:
             pass
 
-        self.db.close_session(self._session_id, status="reverted")
-        self.db.add_event(self._session_id, "Session closed")
+        if _status_override:
+            final_status = _status_override
+        elif errors and reverted_count > 0:
+            final_status = "partially_reverted"
+        elif errors:
+            final_status = "revert_failed"
+        else:
+            final_status = "reverted"
+
+        self.db.close_session(self._session_id, status=final_status)
+        self.db.add_event(self._session_id, f"Session closed ({final_status})")
         try:
             from chaos_jungle.registry import ScenarioRegistry
             ScenarioRegistry(db=self.db).set_done(
@@ -779,8 +889,11 @@ class ChaosRunner:
             )
         except Exception:
             pass
-        self.target.disconnect()
-        print(f"[chaos-jungle] Chaos OFF — session {self._session_id} reverted.")
+        try:
+            self.target.disconnect()
+        except Exception:
+            pass
+        print(f"[chaos-jungle] Chaos OFF — session {self._session_id} {final_status}.")
 
         if errors:
             raise RuntimeError(f"Errors during stop: {errors}")

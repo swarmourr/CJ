@@ -1,6 +1,10 @@
 """Base class for all chaos faults."""
 
+from __future__ import annotations
+
+import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,6 +17,56 @@ class PreflightError(RuntimeError):
     Contains a human-readable message listing every missing binary and
     the exact install command to fix it.
     """
+
+
+class CommandError(RuntimeError):
+    """Raised when a shell command exits with a non-zero exit code.
+
+    Attributes
+    ----------
+    cmd : str
+        The command that was run.
+    exit_code : int
+        The exit code returned by the command.
+    stdout : str
+        Standard output captured from the command.
+    stderr : str
+        Standard error captured from the command.
+    """
+
+    def __init__(self, cmd: str, exit_code: int, stdout: str, stderr: str) -> None:
+        self.cmd = cmd
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        super().__init__(
+            f"Command failed (exit {exit_code}): {cmd!r}\n"
+            f"  stdout: {stdout.strip()!r}\n"
+            f"  stderr: {stderr.strip()!r}"
+        )
+
+
+@dataclass
+class VerificationResult:
+    """Result of a fault activation or recovery verification check.
+
+    Attributes
+    ----------
+    verified : bool
+        ``True`` if the expected system state was confirmed.
+    reason : str
+        Human-readable explanation of the verification outcome.
+    observed : dict
+        Optional snapshot of the observed system state (e.g. tc qdisc output,
+        process list, proxy health response).
+    timestamp_s : float
+        Unix timestamp when the verification was performed.
+    """
+
+    verified: bool
+    reason: str
+    observed: dict = field(default_factory=dict)
+    timestamp_s: float = field(default_factory=time.time)
 
 
 class Fault(ABC):
@@ -74,6 +128,56 @@ class Fault(ABC):
         For stateful faults (e.g. storage corruption) this restores
         original data.
         """
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        """Verify that the fault is currently active on the target.
+
+        Override in subclasses to implement meaningful verification:
+
+        * Network faults: inspect ``tc qdisc`` output.
+        * CPU/memory faults: verify the stress process is running.
+        * Proxy-based faults: query the proxy health endpoint.
+        * Intercept faults: check the in-process patch is applied.
+
+        The default implementation returns ``verified=True`` with a note
+        that verification is not implemented for this fault type.
+
+        Parameters
+        ----------
+        target :
+            The machine to verify against.
+
+        Returns
+        -------
+        VerificationResult
+        """
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: no verification implemented",
+        )
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        """Verify that the fault has been fully reverted on the target.
+
+        Override in subclasses to confirm the system has returned to a
+        clean state after :meth:`stop` and :meth:`revert`.
+
+        The default implementation returns ``verified=True`` with a note
+        that verification is not implemented for this fault type.
+
+        Parameters
+        ----------
+        target :
+            The machine to verify against.
+
+        Returns
+        -------
+        VerificationResult
+        """
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: no verification implemented",
+        )
 
     def dry_run(self, target: "Target") -> None:
         """Print what this fault *would* do without actually doing it.
@@ -158,3 +262,32 @@ class Fault(ABC):
     def _parameters(self) -> dict:
         """Return fault-specific parameters. Override in subclasses."""
         return {}
+
+    @staticmethod
+    def run_checked(target: "Target", cmd: str, privileged: bool = False) -> tuple[int, str, str]:
+        """Run *cmd* on *target* and raise :exc:`CommandError` on non-zero exit.
+
+        Parameters
+        ----------
+        target :
+            Where to run the command.
+        cmd : str
+            Shell command to execute.
+        privileged : bool
+            When ``True``, run with ``target.sudo()`` instead of ``target.run()``.
+
+        Returns
+        -------
+        tuple[int, str, str]
+            ``(exit_code, stdout, stderr)`` on success.
+
+        Raises
+        ------
+        CommandError
+            If the command exits with a non-zero exit code.
+        """
+        fn = target.sudo if privileged else target.run
+        code, stdout, stderr = fn(cmd)
+        if code != 0:
+            raise CommandError(cmd, code, stdout, stderr)
+        return code, stdout, stderr

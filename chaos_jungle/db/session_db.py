@@ -56,18 +56,23 @@ class SessionDB:
                 name        TEXT    NOT NULL,
                 started_at  TEXT    NOT NULL,
                 stopped_at  TEXT,
-                status      TEXT    NOT NULL DEFAULT 'running',
+                status      TEXT    NOT NULL DEFAULT 'active',
                 target_type TEXT    NOT NULL DEFAULT '',
-                target_addr TEXT    NOT NULL DEFAULT ''
+                target_addr TEXT    NOT NULL DEFAULT '',
+                abort_reason TEXT
             );
 
             CREATE TABLE IF NOT EXISTS faults (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id  INTEGER NOT NULL REFERENCES sessions(id),
-                kind        TEXT    NOT NULL,
-                parameters  TEXT    NOT NULL DEFAULT '{}',
-                started_at  TEXT    NOT NULL,
-                stopped_at  TEXT
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      INTEGER NOT NULL REFERENCES sessions(id),
+                kind            TEXT    NOT NULL,
+                parameters      TEXT    NOT NULL DEFAULT '{}',
+                started_at      TEXT    NOT NULL,
+                stopped_at      TEXT,
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                verified_active INTEGER NOT NULL DEFAULT 0,
+                verified_recovered INTEGER NOT NULL DEFAULT 0,
+                verification_note TEXT
             );
 
             CREATE TABLE IF NOT EXISTS events (
@@ -527,14 +532,47 @@ class SessionDB:
         self._conn.commit()
         return cur.lastrowid
 
-    def close_session(self, session_id: int, status: str = "stopped") -> None:
+    def update_session_status(
+        self,
+        session_id: int,
+        status: str,
+        abort_reason: str | None = None,
+    ) -> None:
+        """Update the lifecycle status of a session without closing it.
+
+        Valid statuses: ``created``, ``preflight``, ``injecting``, ``active``,
+        ``stopping``, ``reverted``, ``injection_failed``, ``revert_failed``,
+        ``partially_reverted``, ``aborted``, ``expired``.
+
+        Parameters
+        ----------
+        session_id : int
+        status : str
+        abort_reason : str or None
+            Optional reason string recorded when status is ``aborted``.
+        """
+        if abort_reason is not None:
+            self._conn.execute(
+                "UPDATE sessions SET status = ?, abort_reason = ? WHERE id = ?",
+                (status, abort_reason, session_id),
+            )
+        else:
+            self._conn.execute(
+                "UPDATE sessions SET status = ? WHERE id = ?",
+                (status, session_id),
+            )
+        self._conn.commit()
+
+    def close_session(self, session_id: int, status: str = "reverted") -> None:
         """Mark a session as finished.
 
         Parameters
         ----------
         session_id : int
         status : str
-            ``"stopped"`` or ``"reverted"``.
+            Final lifecycle status. Typically ``"reverted"``,
+            ``"injection_failed"``, ``"revert_failed"``,
+            ``"partially_reverted"``, or ``"aborted"``.
         """
         self._conn.execute(
             "UPDATE sessions SET stopped_at = ?, status = ? WHERE id = ?",
@@ -542,10 +580,52 @@ class SessionDB:
         )
         self._conn.commit()
 
+    def update_fault_status(self, fault_id: int, status: str) -> None:
+        """Update the lifecycle status of a fault record.
+
+        Valid statuses: ``pending``, ``active``, ``stopping``, ``reverted``,
+        ``revert_failed``, ``injection_failed``.
+        """
+        self._conn.execute(
+            "UPDATE faults SET status = ? WHERE id = ?",
+            (status, fault_id),
+        )
+        self._conn.commit()
+
+    def update_fault_verification(
+        self,
+        fault_id: int,
+        *,
+        verified_active: bool | None = None,
+        verified_recovered: bool | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Store activation / recovery verification results on a fault record."""
+        updates = []
+        params: list = []
+        if verified_active is not None:
+            updates.append("verified_active = ?")
+            params.append(1 if verified_active else 0)
+        if verified_recovered is not None:
+            updates.append("verified_recovered = ?")
+            params.append(1 if verified_recovered else 0)
+        if note is not None:
+            updates.append("verification_note = ?")
+            params.append(note)
+        if not updates:
+            return
+        params.append(fault_id)
+        self._conn.execute(
+            f"UPDATE faults SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        self._conn.commit()
+
     def active_session(self) -> sqlite3.Row | None:
-        """Return the most recent running session, or ``None``."""
+        """Return the most recent active session, or ``None``."""
         return self._conn.execute(
-            "SELECT * FROM sessions WHERE status = 'running' ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM sessions WHERE status IN ('active', 'injecting', 'stopping') "
+            "ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
     def get_session(self, session_id: int) -> sqlite3.Row | None:

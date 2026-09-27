@@ -13,8 +13,11 @@ Three validators run at different points:
 """
 
 from __future__ import annotations
+import hmac
+import os
+import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from chaos_jungle.scenario import Scenario
@@ -43,13 +46,43 @@ class DangerError(RuntimeError):
     """
 
 
+class AbortError(RuntimeError):
+    """Raised when a runtime abort condition is triggered during an experiment."""
+
+
+# ── Path validation helper ─────────────────────────────────────────
+
+def _is_path_allowed(path: str, allowed_paths: list[str]) -> bool:
+    """Return True if *path* is inside one of *allowed_paths*.
+
+    Uses canonical resolved paths so that:
+    - ``/tmp-evil`` does not match ``/tmp``
+    - Relative paths and ``..`` segments cannot bypass the policy
+    - Symlinks are resolved before comparison
+    """
+    try:
+        real = os.path.realpath(os.path.abspath(path))
+    except Exception:
+        return False
+    for allowed in allowed_paths:
+        try:
+            real_allowed = os.path.realpath(os.path.abspath(allowed))
+            # commonpath raises ValueError if paths are on different drives (Windows)
+            common = os.path.commonpath([real, real_allowed])
+            if common == real_allowed:
+                return True
+        except (ValueError, Exception):
+            continue
+    return False
+
+
 @dataclass
 class SafetyPolicy:
-    """Define safety constraints enforced before any fault is injected.
+    """Define safety constraints enforced before and during fault injection.
 
     Pass a :class:`SafetyPolicy` instance as the ``policy=`` argument to
     :class:`~chaos_jungle.runner.ChaosRunner` to control what faults are
-    permitted to run.
+    permitted to run and when a running experiment should be aborted.
 
     Attributes
     ----------
@@ -57,65 +90,144 @@ class SafetyPolicy:
         Maximum ``danger_level`` permitted.  Faults with a higher level raise
         :exc:`DangerError` before injection.
 
-        * ``0`` — only safe, fully reversible faults (network/LLM latency,
-          loss, etc.)
+        * ``0`` — only safe, fully reversible faults (network/LLM latency, loss)
         * ``1`` — also allows moderate resource faults (CPU/memory stress)
-        * ``2`` — allows all faults including destructive ones (kill, disk fill,
-          storage corruption)
+        * ``2`` — allows all faults including destructive ones
 
         Default ``1``.
     dry_run : bool
         When ``True``, :meth:`Fault.dry_run` is called instead of
-        :meth:`Fault.start`, so nothing is actually injected.  Useful for
-        validating experiment config before running in production.
-        Default ``False``.
+        :meth:`Fault.start`.  Default ``False``.
     allowed_paths : list[str]
-        Allowlist of absolute path prefixes for path-based faults
-        (e.g. :class:`~chaos_jungle.faults.resources.DiskFull`,
-        :class:`~chaos_jungle.faults.storage.StorageCorrupt`).
-        When non-empty, faults targeting paths outside this list are blocked.
+        Allowlist of absolute paths for path-based faults.  Uses canonical
+        resolved paths — ``/tmp-evil`` does not match ``/tmp``.
         Default ``[]`` (no restriction).
     allowed_targets : list[str]
-        Allowlist of target hostnames or IP addresses.  When non-empty, only
-        these targets are permitted.  Uses ``getattr(target, "host", None)``
-        to extract the hostname.  Default ``[]`` (no restriction).
+        Allowlist of target hostnames or IPs.  When non-empty, targets outside
+        this list are blocked.  Default ``[]`` (no restriction).
+    max_duration_s : float or None
+        Abort the experiment after this many seconds. Default ``None``.
+    max_error_rate : float or None
+        Abort when the observed error rate exceeds this fraction (0–1).
+        Default ``None``.
+    max_cost_usd : float or None
+        Abort when cumulative LLM cost exceeds this amount. Default ``None``.
+    max_latency_p99_s : float or None
+        Abort when observed p99 latency exceeds this value. Default ``None``.
+    max_retries : int or None
+        Abort when total retry count exceeds this. Default ``None``.
+    abort_callback : callable or None
+        Called with ``(reason: str)`` when any abort condition fires.
+        Default ``None``.
+    violation_threshold : int
+        How many consecutive monitoring ticks must violate a condition before
+        aborting. Default ``1`` (abort on first violation).
+    monitor_interval_s : float
+        Interval between runtime condition checks in seconds. Default ``5.0``.
 
     Examples
     --------
-    Dry-run everything to validate config before real injection::
-
-        from chaos_jungle.guardrails import SafetyPolicy
-
-        policy = SafetyPolicy(dry_run=True)
-        runner = ChaosRunner(scenario, LocalTarget(), policy=policy)
-        runner.start()   # prints DRY-RUN messages, does nothing
-
     Allow only safe faults in CI::
 
         policy = SafetyPolicy(max_danger=0)
-        runner = ChaosRunner(scenario, LocalTarget(), policy=policy)
+
+    Abort after 60 seconds or if error rate > 50%::
+
+        policy = SafetyPolicy(max_duration_s=60, max_error_rate=0.5)
 
     Restrict disk faults to /tmp only::
 
         policy = SafetyPolicy(max_danger=2, allowed_paths=["/tmp", "/var/tmp"])
-        runner = ChaosRunner(scenario, LocalTarget(), policy=policy)
     """
 
     max_danger: int = 1
     dry_run: bool = False
     allowed_paths: list[str] = field(default_factory=list)
     allowed_targets: list[str] = field(default_factory=list)
+    # Runtime abort conditions
+    max_duration_s: float | None = None
+    max_error_rate: float | None = None
+    max_cost_usd: float | None = None
+    max_latency_p99_s: float | None = None
+    max_retries: int | None = None
+    abort_callback: Callable | None = field(default=None, repr=False)
+    violation_threshold: int = 1
+    monitor_interval_s: float = 5.0
 
-    def check_fault(self, fault, scenario_name: str = "") -> None:
-        """Raise :exc:`DangerError` if *fault* violates this policy.
+    # ── Internal state ────────────────────────────────────────────
+    _emergency_stop: threading.Event = field(
+        default_factory=threading.Event, init=False, repr=False
+    )
+    _abort_reason: str | None = field(default=None, init=False, repr=False)
+
+    def emergency_stop(self, reason: str = "manual emergency stop") -> None:
+        """Trigger an immediate abort of the running experiment.
+
+        Thread-safe. Can be called from any thread. The runner will stop and
+        revert all active faults on its next monitoring tick.
 
         Parameters
         ----------
-        fault :
-            Any :class:`~chaos_jungle.faults.base.Fault` instance.
-        scenario_name : str, optional
-            Included in error messages for context.
+        reason : str
+            Human-readable reason recorded in the session database.
         """
+        self._abort_reason = reason
+        self._emergency_stop.set()
+
+    def check_abort(
+        self,
+        *,
+        elapsed_s: float = 0.0,
+        error_rate: float | None = None,
+        cost_usd: float | None = None,
+        latency_p99_s: float | None = None,
+        retries: int | None = None,
+    ) -> None:
+        """Check all runtime abort conditions. Raise :exc:`AbortError` if any is met.
+
+        Parameters
+        ----------
+        elapsed_s : float
+            Seconds since the experiment started.
+        error_rate : float or None
+            Current observed error rate (0–1).
+        cost_usd : float or None
+            Cumulative LLM cost so far.
+        latency_p99_s : float or None
+            Observed p99 latency in seconds.
+        retries : int or None
+            Total retry count so far.
+        """
+        if self._emergency_stop.is_set():
+            raise AbortError(self._abort_reason or "emergency stop")
+        if self.max_duration_s is not None and elapsed_s >= self.max_duration_s:
+            raise AbortError(
+                f"max_duration_s={self.max_duration_s} exceeded (elapsed={elapsed_s:.1f}s)"
+            )
+        if self.max_error_rate is not None and error_rate is not None:
+            if error_rate > self.max_error_rate:
+                raise AbortError(
+                    f"max_error_rate={self.max_error_rate} exceeded (observed={error_rate:.3f})"
+                )
+        if self.max_cost_usd is not None and cost_usd is not None:
+            if cost_usd > self.max_cost_usd:
+                raise AbortError(
+                    f"max_cost_usd={self.max_cost_usd} exceeded (observed=${cost_usd:.4f})"
+                )
+        if self.max_latency_p99_s is not None and latency_p99_s is not None:
+            if latency_p99_s > self.max_latency_p99_s:
+                raise AbortError(
+                    f"max_latency_p99_s={self.max_latency_p99_s} exceeded "
+                    f"(observed={latency_p99_s:.3f}s)"
+                )
+        if self.max_retries is not None and retries is not None:
+            if retries > self.max_retries:
+                raise AbortError(
+                    f"max_retries={self.max_retries} exceeded (observed={retries})"
+                )
+
+    def check_fault(self, fault, scenario_name: str = "") -> None:
+        """Raise :exc:`DangerError` if *fault* violates this policy."""
         level = getattr(fault, "danger_level", 0)
         if level > self.max_danger:
             _LEVEL_NAMES = {0: "safe", 1: "moderate", 2: "destructive"}
@@ -132,13 +244,12 @@ class SafetyPolicy:
 
         if self.allowed_paths:
             path = getattr(fault, "path", None) or getattr(fault, "directory", None)
-            if path:
-                if not any(path.startswith(p) for p in self.allowed_paths):
-                    raise DangerError(
-                        f"{fault.__class__.__name__} targets path {path!r} which is "
-                        f"not in the allowed_paths allowlist: {self.allowed_paths}.\n"
-                        f"  Fix: Add {path!r} to SafetyPolicy(allowed_paths=[...])."
-                    )
+            if path and not _is_path_allowed(path, self.allowed_paths):
+                raise DangerError(
+                    f"{fault.__class__.__name__} targets path {path!r} which is "
+                    f"not in the allowed_paths allowlist: {self.allowed_paths}.\n"
+                    f"  Fix: Add {path!r} to SafetyPolicy(allowed_paths=[...])."
+                )
 
     def check_scenario(self, scenario: "Scenario") -> None:
         """Run :meth:`check_fault` on every fault in *scenario*."""
@@ -146,15 +257,47 @@ class SafetyPolicy:
             self.check_fault(fault, scenario_name=scenario.name)
 
     def check_target(self, target: "Target") -> None:
-        """Raise :exc:`DangerError` if *target* is not in the allowlist."""
+        """Raise :exc:`DangerError` if *target* is not in the allowlist.
+
+        - HTTP targets are validated by parsed hostname + port.
+        - SSH targets are validated by host.
+        - Local targets are allowed unless ``allowed_targets`` is non-empty,
+          in which case ``"local"`` must be in the list to permit them.
+        - An empty allowlist means no restriction.
+        """
         if not self.allowed_targets:
             return
-        host = getattr(target, "host", None)
-        if host and host not in self.allowed_targets:
+
+        cls = type(target).__name__
+        if cls == "HTTPTarget":
+            from urllib.parse import urlparse
+            url = getattr(target, "url", "") or ""
+            parsed = urlparse(url)
+            identity = f"{parsed.hostname}:{parsed.port or 80}"
+            host = parsed.hostname or ""
+        elif cls == "SSHTarget":
+            host = getattr(target, "host", "") or ""
+            identity = host
+        else:
+            # LocalTarget
+            if "local" not in self.allowed_targets:
+                raise DangerError(
+                    f"LocalTarget is not permitted by this policy. "
+                    f"Add 'local' to SafetyPolicy(allowed_targets=[...]) to allow it."
+                )
+            return
+
+        if not host:
             raise DangerError(
-                f"Target host {host!r} is not in the allowed_targets allowlist: "
+                "Cannot determine target identity — target host is empty. "
+                "Policy fails closed: add an explicit host to the target."
+            )
+
+        if identity not in self.allowed_targets and host not in self.allowed_targets:
+            raise DangerError(
+                f"Target {identity!r} is not in the allowed_targets allowlist: "
                 f"{self.allowed_targets}.\n"
-                f"  Fix: Add {host!r} to SafetyPolicy(allowed_targets=[...])."
+                f"  Fix: Add {identity!r} to SafetyPolicy(allowed_targets=[...])."
             )
 
 
