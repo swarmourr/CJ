@@ -862,6 +862,7 @@ def _record_llm_call(
     fault_offset_s: float | None = None,
     agent_addr: str = "",
     fault_triggered: int = 0,
+    call_index: "int | None" = None,
 ) -> int:
     """Write one LLM call row to the chaos-jungle session DB (best-effort).
 
@@ -871,9 +872,12 @@ def _record_llm_call(
     if not _DB_PATH or not _SESSION_ID:
         return 0
     try:
-        with _call_index_lock:
-            idx = _call_index
-            _call_index += 1
+        if call_index is not None:
+            idx = call_index
+        else:
+            with _call_index_lock:
+                idx = _call_index
+                _call_index += 1
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat()
         conn = sqlite3.connect(_DB_PATH, timeout=5)
@@ -990,7 +994,8 @@ def _record_tool_calls(
 # ---------------------------------------------------------------------------
 
 def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
-                      headers: dict, body: bytes, interrupt_after: int) -> None:
+                      headers: dict, body: bytes, interrupt_after: int,
+                      call_index: "int | None" = None) -> None:
     """Forward a streaming SSE response but close after interrupt_after data events.
 
     Also captures TTFT (time to first token) and records the call to the session DB.
@@ -1050,9 +1055,10 @@ def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
         response_text=_response_text,
         latency_s=_latency_s,
         http_status=_final_status,
-        fault_name=FAULT,
+        fault_name="stream_interrupt",
         was_blocked=0,
         was_modified=0,
+        fault_triggered=1,
         total_tokens=data_event_count,
         tokens_per_second=_tps,
         request_size_bytes=_req["request_size_bytes"],
@@ -1066,6 +1072,7 @@ def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
         response_length_chars=len(_response_text),
         ttft_s=ttft_s,
         system_fingerprint="",
+        call_index=call_index,
     )
 
 
@@ -1158,37 +1165,50 @@ def _check_block(cfg: dict, count: int, req_body: "dict | None") -> "tuple[int, 
     return None
 
 
-def _mutate_request(cfg: dict, req_body: "dict | None", raw_body: bytes) -> "tuple[dict | None, bytes]":
-    """Apply request-modifying faults. Returns (modified_req_body, modified_raw_body)."""
+def _mutate_request(cfg: dict, req_body: "dict | None", raw_body: bytes, triggered: list) -> "tuple[dict | None, bytes]":
+    """Apply request-modifying faults. Returns (modified_req_body, modified_raw_body).
+
+    Appends fault name to *triggered* only when the fault actually executes.
+    """
     fault = cfg["fault"]
     if fault == "skill_bad_output" and _is_tool_request(req_body) and req_body:
         if _skill_name_matches(req_body, cfg.get("skill_name", "")):
             req_body = _inject_skill_bad_output(req_body, cfg.get("bad_output_mode", "invalid_json"))
             raw_body = json.dumps(req_body).encode()
+            triggered.append(fault)
     if fault == "skill_version_skew" and _is_tool_request(req_body) and req_body:
         req_body = _inject_skill_version_skew(req_body, cfg.get("old_version", "0.1.0"))
         raw_body = json.dumps(req_body).encode()
+        triggered.append(fault)
     if fault == "skill_memory_stale" and _is_tool_request(req_body) and req_body:
         req_body = _inject_skill_memory_stale(req_body, cfg.get("stale_data", ""))
         raw_body = json.dumps(req_body).encode()
+        triggered.append(fault)
     if fault == "skill_instruction_corrupt" and req_body is not None:
         req_body = _inject_skill_instruction_corrupt(req_body, cfg.get("corrupt_instruction", ""))
         raw_body = json.dumps(req_body).encode()
+        triggered.append(fault)
     if fault == "token_starve" and req_body is not None:
         n = cfg.get("max_tokens", 5)
         req_body["max_tokens"] = n
         req_body["num_predict"] = n
         raw_body = json.dumps(req_body).encode()
+        triggered.append(fault)
     if fault == "semantic_corrupt" and req_body is not None:
         req_body = _apply_semantic_corrupt(req_body, cfg.get("semantic_mode", "entity_swap"))
         raw_body = json.dumps(req_body).encode()
+        triggered.append(fault)
     if fault == "latency":
         time.sleep(cfg.get("delay_s", 2.0))
+        triggered.append(fault)
     return req_body, raw_body
 
 
-def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None") -> bytes:
-    """Apply response-modifying faults. Returns modified resp_body."""
+def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None", triggered: list) -> bytes:
+    """Apply response-modifying faults. Returns modified resp_body.
+
+    Appends fault name to *triggered* only when the fault actually executes.
+    """
     global _cost_usd
     fault = cfg["fault"]
     if fault == "corrupt":
@@ -1199,6 +1219,7 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None") -> by
             resp_body = b"{}"
         elif mode == "invalid_json":
             resp_body = b"<<chaos-jungle: response corrupted>>"
+        triggered.append(fault)
     if fault == "hallucinate":
         generator_url   = cfg.get("generator_url", "")
         generator_model = cfg.get("generator_model", "")
@@ -1208,10 +1229,13 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None") -> by
         else:
             text = cfg.get("text", "WRONG ANSWER (injected by chaos-jungle)")
         resp_body = _inject_hallucination(resp_body, text)
+        triggered.append(fault)
     if fault == "skill_misroute":
         resp_body = _inject_skill_misroute(resp_body, cfg.get("wrong_skill", ""))
+        triggered.append(fault)
     if fault == "skill_conflict":
         resp_body = _inject_skill_conflict(resp_body, cfg.get("conflict_text", ""))
+        triggered.append(fault)
     if fault == "budget_exceeded":
         try:
             data = json.loads(resp_body)
@@ -1244,7 +1268,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def do_DELETE(self): self._handle()
 
     def _handle(self) -> None:
-        global _request_count, _cost_usd, _SESSION_ID, _PHASE
+        global _request_count, _cost_usd, _SESSION_ID, _PHASE, _call_index
         _t_start = time.time()
 
         with _count_lock:
@@ -1253,7 +1277,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         # Build active fault chain (supports both single-fault and multi-fault modes)
         chain = _effective_chain()
-        fault = chain[0]["fault"] if chain else "passthrough"  # used for DB recording
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0) or 0)
@@ -1302,6 +1325,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self._reply(400, json.dumps({"error": str(exc)}).encode())
             return
 
+        # Claim a unique trace ID for this request atomically before any processing.
+        # The same ID is stored in the DB and returned in X-CJ-Trace-ID so callers
+        # can always correlate the header to the exact DB row.
+        with _call_index_lock:
+            _trace_id = _call_index
+            _call_index += 1
+
+        # Track which faults actually fired during this request (for accurate DB recording).
+        _triggered_faults: list = []
+
         req_body = _parse_body(raw_body)
 
         upstream_url = _build_upstream_url(self.path)
@@ -1316,12 +1349,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         def _blocked(status: int) -> None:
             if not _DB_PATH or not _SESSION_ID:
                 return
+            _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "")
             _record_llm_call(
                 model=_req["model"], prompt_tokens=0, completion_tokens=0,
                 cost_usd=0.0, finish_reason="", prompt_text=_req["prompt_text"],
                 response_text="", latency_s=round(time.time() - _t_start, 4),
-                http_status=status, fault_name=fault, was_blocked=1, was_modified=0,
-                fault_triggered=1,
+                http_status=status, fault_name=_fn, was_blocked=1, was_modified=0,
+                fault_triggered=1 if _triggered_faults else 0,
                 total_tokens=0, tokens_per_second=0.0,
                 request_size_bytes=_req["request_size_bytes"], response_size_bytes=0,
                 message_count=_req["message_count"], tool_count=_req["tool_count"],
@@ -1329,6 +1363,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 temperature=_req["temperature"],
                 max_tokens_requested=_req["max_tokens_requested"],
                 response_length_chars=0, ttft_s=None, system_fingerprint="",
+                call_index=_trace_id,
             )
 
         # ------------------------------------------------------------------
@@ -1338,9 +1373,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         for cfg in chain:
             block = _check_block(cfg, count, req_body)
             if block is not None:
+                _triggered_faults.append(cfg["fault"])
                 blk_status, blk_body = block
-                self._reply(blk_status, blk_body)
-                _blocked(blk_status)
+                _blocked(blk_status)                              # DB first
+                self._reply(blk_status, blk_body, trace_id=_trace_id)  # header after
                 return
 
         # ------------------------------------------------------------------
@@ -1348,7 +1384,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # ------------------------------------------------------------------
 
         for cfg in chain:
-            req_body, raw_body = _mutate_request(cfg, req_body, raw_body)
+            req_body, raw_body = _mutate_request(cfg, req_body, raw_body, _triggered_faults)
 
         # ------------------------------------------------------------------
         # 3. Stream interrupt — special line-by-line forwarding
@@ -1357,10 +1393,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         is_streaming = req_body is not None and req_body.get("stream") is True
         stream_cfg = next((c for c in chain if c["fault"] == "stream_interrupt"), None)
         if stream_cfg and is_streaming:
+            _triggered_faults.append("stream_interrupt")
             fwd_hdrs = _build_fwd_headers(self.headers, raw_body)
             _stream_interrupt(
                 self, upstream_url, fwd_hdrs, raw_body,
                 interrupt_after=stream_cfg.get("interrupt_after", 3),
+                call_index=_trace_id,
             )
             return
 
@@ -1377,7 +1415,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # ------------------------------------------------------------------
 
         for cfg in chain:
-            resp_body = _mutate_response(cfg, resp_body, req_body)
+            resp_body = _mutate_response(cfg, resp_body, req_body, _triggered_faults)
 
         # ------------------------------------------------------------------
         # Capture LLM call to session DB (best-effort, forwarded path)
@@ -1400,6 +1438,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     _resp["finish_reason"] == "stop"
                     and _resp["response_tool_calls"] == 0
                 )
+                _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "passthrough")
                 _llm_call_id = _record_llm_call(
                     model=_req["model"],
                     prompt_tokens=_pt,
@@ -1410,10 +1449,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     response_text=_resp["response_text"],
                     latency_s=_latency_s,
                     http_status=status,
-                    fault_name=fault,
+                    fault_name=_fn,
                     was_blocked=0,
-                    was_modified=1 if fault in _MODIFYING_FAULTS else 0,
-                    fault_triggered=1 if fault not in ("passthrough", "") else 0,
+                    was_modified=1 if any(f in _MODIFYING_FAULTS for f in _triggered_faults) else 0,
+                    fault_triggered=1 if _triggered_faults else 0,
                     total_tokens=_tot,
                     tokens_per_second=_tps,
                     request_size_bytes=_req["request_size_bytes"],
@@ -1436,6 +1475,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     is_final_response=1 if _is_fin else 0,
                     fault_offset_s=_fault_offset(),
                     agent_addr=self.client_address[0] if self.client_address else "",
+                    call_index=_trace_id,
                 )
                 _record_tool_calls(
                     _SESSION_ID, _llm_call_id, req_body, _PHASE,
@@ -1444,7 +1484,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 pass
 
-        self._reply(status, resp_body, resp_ct)
+        self._reply(status, resp_body, resp_ct, trace_id=_trace_id)
 
     def _reply(self, status: int, body: bytes,
                content_type: str = _CT_JSON,

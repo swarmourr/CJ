@@ -876,8 +876,10 @@ class ChaosRunner:
         print(f"[chaos-jungle] Chaos ON  — scenario '{self.scenario.name}'  "
               f"(session id: {self._session_id})")
 
-        # Safety policy monitoring — runs check_abort() on every tick
-        if self.policy is not None and self._has_abort_conditions(self.policy):
+        # Safety policy monitoring — always start when a policy is present so that
+        # emergency_stop() and all threshold checks work even when no specific
+        # threshold was set at construction time.
+        if self.policy is not None:
             self._abort_stop.clear()
             _policy = self.policy
             _interval = _policy.monitor_interval_s
@@ -886,7 +888,39 @@ class ChaosRunner:
             def _abort_loop() -> None:
                 while not self._abort_stop.wait(timeout=_interval):
                     try:
-                        _policy.check_abort(elapsed_s=time.time() - _t0)
+                        # Pass real live metrics so every threshold is checked.
+                        _er = _cost = _p99 = None
+                        _retries: "int | None" = None
+                        if self._session_id is not None and (
+                            _policy.max_error_rate is not None
+                            or _policy.max_cost_usd is not None
+                            or _policy.max_latency_p99_s is not None
+                            or _policy.max_retries is not None
+                        ):
+                            try:
+                                rows = self.db._conn.execute(
+                                    "SELECT http_status, cost_usd, latency_s, is_retry "
+                                    "FROM llm_calls WHERE session_id = ?",
+                                    (self._session_id,),
+                                ).fetchall()
+                                if rows:
+                                    n = len(rows)
+                                    _er = sum(
+                                        1 for r in rows if (r[0] or 0) >= 400
+                                    ) / n
+                                    _cost = sum(r[1] or 0.0 for r in rows)
+                                    _lats = sorted(r[2] or 0.0 for r in rows)
+                                    _p99 = _lats[min(int(n * 0.99), n - 1)]
+                                    _retries = sum(r[3] or 0 for r in rows)
+                            except Exception:
+                                pass
+                        _policy.check_abort(
+                            elapsed_s=time.time() - _t0,
+                            error_rate=_er,
+                            cost_usd=_cost,
+                            latency_p99_s=_p99,
+                            retries=_retries,
+                        )
                     except Exception as _exc:
                         from chaos_jungle.core.guardrails import AbortError
                         if isinstance(_exc, AbortError):
@@ -899,6 +933,11 @@ class ChaosRunner:
                                         self._session_id,
                                         f"ABORT: {_exc}",
                                     )
+                                except Exception:
+                                    pass
+                            if _policy.abort_callback is not None:
+                                try:
+                                    _policy.abort_callback(str(_exc))
                                 except Exception:
                                     pass
                             # Launch stop() in a new thread to avoid self-join:
@@ -1125,8 +1164,7 @@ class ChaosRunner:
                     f"{fault.__class__.__name__}: {vr.reason}"
                 )
                 self.db.close_fault(fid)
-                reverted_count += 1
-                continue
+                continue  # do NOT count as reverted — recovery verification failed
             else:
                 recovery_verdicts[fid] = "VALID"
 
@@ -1668,6 +1706,23 @@ class ChaosRunner:
                         "phase":  r.phase,
                     },
                 )
+
+        # ── 7. Propagate session verdict → MeasurementResult ──────────────────
+        # The verdict (VALID / INCONCLUSIVE / INVALID) is written to the DB by
+        # stop() which ran inside _collect_fault().  Read it back here so callers
+        # get a single source of truth instead of checking the DB separately.
+        if self._session_id is not None:
+            try:
+                _sess = self.db.get_session(self._session_id)
+                if _sess:
+                    _verdict = str(_sess["verdict"]) if "verdict" in _sess.keys() else "INCONCLUSIVE"
+                    result.injection_valid = (_verdict == "VALID")
+                    result.injection_valid_reason = f"session verdict: {_verdict}"
+                    if _verdict != "VALID":
+                        # Effect size is unreliable when injection is not confirmed.
+                        result.effect_size = {}
+            except Exception:
+                pass
 
         return result
 

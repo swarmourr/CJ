@@ -262,8 +262,19 @@ class _LLMProxyFault(Fault):
                     observed=cfg,
                 )
             observed = {"pid": self._proc.pid, "port": self.port, **cfg}
-        except Exception:
-            observed = {"pid": self._proc.pid, "port": self.port}
+        except Exception as _e:
+            # Config endpoint unreachable — process exists but we cannot confirm
+            # the fault is registered.  Return INCONCLUSIVE rather than falsely
+            # claiming the injection is verified.
+            return VerificationResult(
+                verified=False,
+                not_implemented=True,
+                reason=(
+                    f"{self.__class__.__name__}: proxy config endpoint unreachable "
+                    f"(pid={self._proc.pid}, port={self.port}): {_e}"
+                ),
+                observed={"pid": self._proc.pid, "port": self.port},
+            )
         return VerificationResult(
             verified=True,
             reason=f"{self.__class__.__name__}: proxy running (pid={self._proc.pid}), "
