@@ -560,6 +560,8 @@ class ChaosRunner:
         self._timer: threading.Timer | None = None
         self._resource_thread: threading.Thread | None = None
         self._resource_stop: threading.Event = threading.Event()
+        self._abort_thread: threading.Thread | None = None
+        self._abort_stop: threading.Event = threading.Event()
         self._fault_start_ts: float | None = None
         self._shared_llm_proc = None
 
@@ -731,8 +733,59 @@ class ChaosRunner:
                 self._rollback(logged)
                 raise
 
-            # Only record as activated after successful start
+            # Add to _activated IMMEDIATELY so rollback covers it if verify fails
             self._activated.append((fault, fid))
+
+            # Verify activation — exceptions are never swallowed
+            if not _dry:
+                try:
+                    vr = fault.verify_active(logged)
+                except Exception as vexc:
+                    self.db.update_fault_status(fid, "injection_failed")
+                    self.db.add_event(
+                        self._session_id,
+                        f"VERIFY ERROR {fault.__class__.__name__}: {vexc}",
+                        fault_id=fid,
+                    )
+                    self._rollback(logged)
+                    raise RuntimeError(
+                        f"verify_active raised for {fault.__class__.__name__}: {vexc}"
+                    ) from vexc
+
+                # Store verification result
+                self.db.update_fault_verification(
+                    fid, verified_active=vr.verified, note=vr.reason
+                )
+                self.db.update_fault_snapshot(
+                    fid,
+                    injection_verified=vr.verified,
+                    verification_output=vr.reason,
+                )
+
+                if vr.not_implemented:
+                    # No override — warn but continue; not a real failure
+                    print(
+                        f"[chaos-jungle] WARNING: {fault.__class__.__name__} "
+                        f"has no verify_active() — cannot confirm injection"
+                    )
+                    self.db.add_event(
+                        self._session_id,
+                        f"WARN: {fault.__class__.__name__} verify_active not implemented",
+                        fault_id=fid,
+                    )
+                elif not vr.verified:
+                    # Real check ran and reported fault is not active — roll back
+                    self.db.update_fault_status(fid, "injection_failed")
+                    self.db.add_event(
+                        self._session_id,
+                        f"VERIFY FAILED {fault.__class__.__name__}: {vr.reason}",
+                        fault_id=fid,
+                    )
+                    self._rollback(logged)
+                    raise RuntimeError(
+                        f"verify_active failed for {fault.__class__.__name__}: {vr.reason}"
+                    )
+
             self.db.update_fault_status(fid, "active")
 
             if self.monitor_resources:
@@ -779,6 +832,42 @@ class ChaosRunner:
         print(f"[chaos-jungle] Chaos ON  — scenario '{self.scenario.name}'  "
               f"(session id: {self._session_id})")
 
+        # Safety policy monitoring — runs check_abort() on every tick
+        if self.policy is not None and self._has_abort_conditions(self.policy):
+            self._abort_stop.clear()
+            _policy = self.policy
+            _interval = _policy.monitor_interval_s
+            _t0 = self._fault_start_ts or time.time()
+
+            def _abort_loop() -> None:
+                while not self._abort_stop.wait(timeout=_interval):
+                    try:
+                        _policy.check_abort(elapsed_s=time.time() - _t0)
+                    except Exception as _exc:
+                        from chaos_jungle.core.guardrails import AbortError
+                        if isinstance(_exc, AbortError):
+                            print(
+                                f"[chaos-jungle] ABORT: {_exc} — stopping chaos"
+                            )
+                            if self._session_id is not None:
+                                try:
+                                    self.db.add_event(
+                                        self._session_id,
+                                        f"ABORT: {_exc}",
+                                    )
+                                except Exception:
+                                    pass
+                            try:
+                                self.stop(_status_override="aborted")
+                            except Exception:
+                                pass
+                        return
+
+            self._abort_thread = threading.Thread(
+                target=_abort_loop, daemon=True, name="cj-abort-monitor"
+            )
+            self._abort_thread.start()
+
         if duration is not None:
             seconds = parse_duration(duration)
             self._timer = threading.Timer(seconds, self._auto_stop)
@@ -787,6 +876,18 @@ class ChaosRunner:
             print(f"[chaos-jungle] Chaos ON — auto-stop in {duration} ({seconds:.0f}s)")
 
         return self
+
+    @staticmethod
+    def _has_abort_conditions(policy: "SafetyPolicy") -> bool:
+        """Return True if the policy has any active runtime abort conditions."""
+        return any([
+            policy.max_duration_s is not None,
+            policy.max_error_rate is not None,
+            policy.max_cost_usd is not None,
+            policy.max_latency_p99_s is not None,
+            policy.max_retries is not None,
+            policy._emergency_stop.is_set(),
+        ])
 
     def _rollback(self, logged) -> None:
         """Revert all confirmed-activated faults in reverse order.
@@ -854,6 +955,11 @@ class ChaosRunner:
             self._resource_thread.join(timeout=5)
             self._resource_thread = None
 
+        if self._abort_thread is not None:
+            self._abort_stop.set()
+            self._abort_thread.join(timeout=2)
+            self._abort_thread = None
+
     def _auto_stop(self) -> None:
         """Called by the background timer when duration expires."""
         print(f"[chaos-jungle] Duration reached — auto-stopping chaos")
@@ -904,16 +1010,51 @@ class ChaosRunner:
                 fault.stop(logged)
                 fault.revert(logged)
 
-                # Verify recovery
+                # Verify recovery — exceptions are NOT swallowed
                 try:
                     vr = fault.verify_recovered(logged)
-                    self.db.update_fault_verification(
-                        fid,
-                        verified_recovered=vr.verified,
-                        note=vr.reason,
+                except Exception as vexc:
+                    errors.append(vexc)
+                    self.db.update_fault_status(fid, "revert_failed")
+                    self.db.add_event(
+                        self._session_id,
+                        f"RECOVER VERIFY ERROR {fault.__class__.__name__}: {vexc}",
+                        fault_id=fid,
                     )
-                except Exception:
-                    pass
+                    print(
+                        f"[chaos-jungle] RECOVER VERIFY ERROR "
+                        f"{fault.__class__.__name__}: {vexc}"
+                    )
+                    continue
+
+                self.db.update_fault_verification(
+                    fid, verified_recovered=vr.verified, note=vr.reason
+                )
+
+                if vr.not_implemented:
+                    # No override — warn but still count as reverted
+                    print(
+                        f"[chaos-jungle] WARNING: {fault.__class__.__name__} "
+                        f"has no verify_recovered() — cannot confirm cleanup"
+                    )
+                elif not vr.verified:
+                    # Real check ran and says fault is still active — revert failed
+                    errors.append(RuntimeError(
+                        f"verify_recovered failed for {fault.__class__.__name__}: {vr.reason}"
+                    ))
+                    self.db.update_fault_status(fid, "revert_failed")
+                    self.db.add_event(
+                        self._session_id,
+                        f"RECOVER VERIFY FAILED {fault.__class__.__name__}: {vr.reason}",
+                        fault_id=fid,
+                    )
+                    print(
+                        f"[chaos-jungle] RECOVER VERIFY FAILED "
+                        f"{fault.__class__.__name__}: {vr.reason}"
+                    )
+                    self.db.close_fault(fid)
+                    reverted_count += 1
+                    continue
 
                 self.db.update_fault_status(fid, "reverted")
                 self.db.close_fault(fid)

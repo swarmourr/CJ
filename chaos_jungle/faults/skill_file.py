@@ -377,6 +377,33 @@ class _LocalSkillFault(Fault):
             self._backup = None
             self._original_mode = None
 
+    def revert(self, target) -> None:  # type: ignore[override]
+        self.stop(target)
+
+    def verify_active(self, target) -> "VerificationResult":  # type: ignore[override]
+        from chaos_jungle.faults.base import VerificationResult
+        if self._backup is None:
+            return VerificationResult(
+                verified=False,
+                reason=f"{self.__class__.__name__}: no backup held — start() not called",
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: skill file corrupted (backup held)",
+        )
+
+    def verify_recovered(self, target) -> "VerificationResult":  # type: ignore[override]
+        from chaos_jungle.faults.base import VerificationResult
+        if self._backup is not None:
+            return VerificationResult(
+                verified=False,
+                reason=f"{self.__class__.__name__}: backup still held — stop() not called",
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: skill file restored",
+        )
+
     def _corrupt(self, content: str) -> str:
         raise NotImplementedError(
             f"{self.__class__.__name__}._corrupt() not implemented"
@@ -850,6 +877,30 @@ class SkillJSONCorrupt(Fault):
 
     def revert(self, target) -> None:  # type: ignore[override]
         self.stop(target)
+
+    def verify_active(self, target) -> "VerificationResult":  # type: ignore[override]
+        from chaos_jungle.faults.base import VerificationResult
+        if self._backup is None:
+            return VerificationResult(
+                verified=False,
+                reason=f"{self.__class__.__name__}: no backup held — start() not called",
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: JSON file corrupted (backup held)",
+        )
+
+    def verify_recovered(self, target) -> "VerificationResult":  # type: ignore[override]
+        from chaos_jungle.faults.base import VerificationResult
+        if self._backup is not None:
+            return VerificationResult(
+                verified=False,
+                reason=f"{self.__class__.__name__}: backup still held — stop() not called",
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: JSON file restored",
+        )
 
     def _parameters(self) -> dict:
         return {

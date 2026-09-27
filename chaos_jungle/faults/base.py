@@ -61,12 +61,19 @@ class VerificationResult:
         process list, proxy health response).
     timestamp_s : float
         Unix timestamp when the verification was performed.
+    not_implemented : bool
+        ``True`` when this result comes from the base-class default — meaning
+        the fault subclass has not overridden this verification method.
+        The runner logs a warning but does **not** treat this as a failure.
+        When ``False`` (the default for all real overrides), a ``verified=False``
+        result triggers rollback / revert_failed.
     """
 
     verified: bool
     reason: str
     observed: dict = field(default_factory=dict)
     timestamp_s: float = field(default_factory=time.time)
+    not_implemented: bool = False
 
 
 class Fault(ABC):
@@ -139,8 +146,9 @@ class Fault(ABC):
         * Proxy-based faults: query the proxy health endpoint.
         * Intercept faults: check the in-process patch is applied.
 
-        The default implementation returns ``verified=True`` with a note
-        that verification is not implemented for this fault type.
+        The default implementation returns ``verified=False, not_implemented=True``
+        — the runner logs a warning but does not roll back, since the fault has
+        simply not implemented this check rather than actively confirming failure.
 
         Parameters
         ----------
@@ -152,8 +160,9 @@ class Fault(ABC):
         VerificationResult
         """
         return VerificationResult(
-            verified=True,
-            reason=f"{self.__class__.__name__}: no verification implemented",
+            verified=False,
+            reason=f"{self.__class__.__name__}: verify_active not implemented",
+            not_implemented=True,
         )
 
     def verify_recovered(self, target: "Target") -> VerificationResult:
@@ -162,8 +171,9 @@ class Fault(ABC):
         Override in subclasses to confirm the system has returned to a
         clean state after :meth:`stop` and :meth:`revert`.
 
-        The default implementation returns ``verified=True`` with a note
-        that verification is not implemented for this fault type.
+        The default implementation returns ``verified=False, not_implemented=True``
+        — the runner logs a warning but does not treat this as a revert failure,
+        since the fault has simply not implemented this check.
 
         Parameters
         ----------
@@ -175,8 +185,9 @@ class Fault(ABC):
         VerificationResult
         """
         return VerificationResult(
-            verified=True,
-            reason=f"{self.__class__.__name__}: no verification implemented",
+            verified=False,
+            reason=f"{self.__class__.__name__}: verify_recovered not implemented",
+            not_implemented=True,
         )
 
     def dry_run(self, target: "Target") -> None:

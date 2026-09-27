@@ -193,6 +193,50 @@ class _LLMProxyFault(Fault):
     def revert(self, target: "Target") -> None:  # noqa: ARG002
         pass  # stateless — stop() is sufficient
 
+    def verify_active(self, target: "Target") -> "VerificationResult":
+        from chaos_jungle.faults.base import VerificationResult
+        if self._managed_externally:
+            return VerificationResult(
+                verified=True,
+                reason=f"{self.__class__.__name__}: managed externally by ChaosRunner",
+            )
+        if self._proc is None:
+            return VerificationResult(
+                verified=False,
+                reason=f"{self.__class__.__name__}: proxy process not started",
+            )
+        if self._proc.poll() is not None:
+            return VerificationResult(
+                verified=False,
+                reason=f"{self.__class__.__name__}: proxy exited (rc={self._proc.returncode})",
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: proxy running (pid={self._proc.pid})",
+            observed={"pid": self._proc.pid, "port": self.port},
+        )
+
+    def verify_recovered(self, target: "Target") -> "VerificationResult":
+        from chaos_jungle.faults.base import VerificationResult
+        if self._proc is not None and self._proc.poll() is None:
+            return VerificationResult(
+                verified=False,
+                reason=f"{self.__class__.__name__}: proxy still running (pid={self._proc.pid})",
+            )
+        env_val = os.environ.get(self.base_url_env, "")
+        if f"127.0.0.1:{self.port}" in env_val:
+            return VerificationResult(
+                verified=False,
+                reason=(
+                    f"{self.__class__.__name__}: {self.base_url_env} still points to proxy "
+                    f"({env_val!r})"
+                ),
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.__class__.__name__}: proxy stopped and env var restored",
+        )
+
     def _parameters(self) -> dict:
         return {
             "fault": self._fault_name,
