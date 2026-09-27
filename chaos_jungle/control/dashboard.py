@@ -6,7 +6,7 @@ across every fault category (network, resource, process, storage, state, LLM,
 MCP, skill, semantic, GPU).
 
 Launch via:  chaos-jungle dashboard
-Or programmatically:  from chaos_jungle.dashboard import run; run()
+Or programmatically:  from chaos_jungle.control.dashboard import run; run()
 """
 
 from __future__ import annotations

@@ -49,14 +49,18 @@ dev = [
 ]
 
 [project.scripts]
-chaos-jungle = "chaos_jungle.cli:main"
-cj-daemon    = "chaos_jungle.daemon:run"
+chaos-jungle = "chaos_jungle.control.cli:main"
+cj-daemon    = "chaos_jungle.control.daemon:run"
 
 [project.entry-points."pytest11"]
 chaos-jungle = "chaos_jungle.pytest_plugin"
 
 [tool.hatch.build.targets.wheel]
 packages = ["chaos_jungle"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
 
 [tool.black]
 line-length = 100

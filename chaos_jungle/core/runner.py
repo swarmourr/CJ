@@ -6,10 +6,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, TYPE_CHECKING
 
-from chaos_jungle._duration import parse_duration
+from chaos_jungle.core._duration import parse_duration
 from chaos_jungle.db.session_db import SessionDB
-from chaos_jungle.guardrails import apply_guardrails, SafetyPolicy
-from chaos_jungle.scenario import Scenario
+from chaos_jungle.core.guardrails import apply_guardrails, SafetyPolicy
+from chaos_jungle.core.scenario import Scenario
 from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
 from chaos_jungle.targets.logging import LoggingTarget
@@ -79,12 +79,12 @@ def _collect_resources() -> dict:
     return snap
 
 if TYPE_CHECKING:
-    from chaos_jungle.judge import JudgeScore, LLMJudge
-    from chaos_jungle.oracles import Oracle, OracleResult
+    from chaos_jungle.analysis.judge import JudgeScore, LLMJudge
+    from chaos_jungle.analysis.oracles import Oracle, OracleResult
     from chaos_jungle.metrics.strategy import CollectStrategy
     from chaos_jungle.metrics.metric_set import MetricSet
     from chaos_jungle.metrics.schema import CollectedMetrics
-    from chaos_jungle.hypothesis import Hypothesis, HypothesisResult
+    from chaos_jungle.analysis.hypothesis import Hypothesis, HypothesisResult
 
 
 @dataclass
@@ -134,6 +134,14 @@ class MeasurementResult:
     collected_metrics: "CollectedMetrics | None" = field(default=None, repr=False)
     llm_calls: list = field(default_factory=list, repr=False)
     hypothesis_result: "HypothesisResult | None" = field(default=None, repr=False)
+    # Scientific statistics
+    baseline_std: dict = field(default_factory=dict)
+    fault_std: dict = field(default_factory=dict)
+    baseline_ci95: dict = field(default_factory=dict)
+    fault_ci95: dict = field(default_factory=dict)
+    # Injection validity: None = unchecked; True/False = verified
+    injection_valid: "bool | None" = field(default=None)
+    injection_valid_reason: str = field(default="")
 
     def passed(self, key: str, threshold: float) -> bool:
         """Return True if ``abs(delta[key]) <= threshold``."""
@@ -204,14 +212,28 @@ class MeasurementResult:
         lines = [
             f"Scenario : {self.scenario}",
             f"Trials   : {self.n_baseline} baseline / {self.n_fault} fault",
-            "",
         ]
+        if self.injection_valid is not None:
+            iv_str = "VALID" if self.injection_valid else "INVALID"
+            lines.append(f"Injection: {iv_str}  ({self.injection_valid_reason})")
+        lines.append("")
         for k in sorted(set(self.baseline) | set(self.fault)):
             b = self.baseline.get(k, "—")
             f = self.fault.get(k, "—")
             d = self.delta.get(k)
             d_str = f"  Δ {d:+.4g}" if d is not None else ""
-            lines.append(f"  {k:<30} baseline={b}  fault={f}{d_str}")
+            # Append ±CI if available
+            b_ci = self.baseline_ci95.get(k)
+            f_ci = self.fault_ci95.get(k)
+            b_std = self.baseline_std.get(k)
+            f_std = self.fault_std.get(k)
+            b_str = str(b)
+            f_str = str(f)
+            if b_ci is not None:
+                b_str = f"{b} ±{b_ci:.4g} (σ={b_std:.4g})"
+            if f_ci is not None:
+                f_str = f"{f} ±{f_ci:.4g} (σ={f_std:.4g})"
+            lines.append(f"  {k:<30} baseline={b_str}  fault={f_str}{d_str}")
 
         if self.judge_baseline is not None and self.judge_fault is not None:
             lines.append("")
@@ -327,6 +349,55 @@ def _avg_metrics(runs: list[dict]) -> dict:
     return result
 
 
+def _std_metrics(runs: list[dict]) -> dict:
+    """Sample standard deviation for each numeric metric across runs."""
+    import math
+    if len(runs) < 2:
+        return {}
+    result: dict[str, float] = {}
+    for k in runs[0]:
+        vals = [r[k] for r in runs if isinstance(r.get(k), (int, float))]
+        if len(vals) >= 2:
+            mean = sum(vals) / len(vals)
+            variance = sum((x - mean) ** 2 for x in vals) / (len(vals) - 1)
+            result[k] = round(math.sqrt(variance), 6)
+    return result
+
+
+# Two-sided t critical values for 95% CI (df = n-1, df >= 1)
+_T_TABLE: dict[int, float] = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776,
+    5: 2.571,  6: 2.447, 7: 2.365, 8: 2.306,
+    9: 2.262, 10: 2.228, 15: 2.131, 20: 2.086,
+    30: 2.042, 60: 2.000,
+}
+
+
+def _t_critical(n: int) -> float:
+    """Return the two-sided 95% t critical value for *n* observations."""
+    import math
+    df = n - 1
+    if df in _T_TABLE:
+        return _T_TABLE[df]
+    # For large df, use z=1.96 approximation
+    for threshold in sorted(_T_TABLE.keys(), reverse=True):
+        if df >= threshold:
+            return _T_TABLE[threshold]
+    return 12.706  # df=1 fallback
+
+
+def _confidence_interval_95(std: dict[str, float], n: int) -> dict[str, float]:
+    """Return 95% CI half-widths (margin of error) for each metric.
+
+    The CI for the mean is: mean ± t * (std / sqrt(n))
+    """
+    import math
+    if n < 2:
+        return {}
+    t = _t_critical(n)
+    return {k: round(t * s / math.sqrt(n), 6) for k, s in std.items()}
+
+
 def _extract_workload_metrics(runs: list[dict], names: list[str]) -> dict[str, float]:
     """Extract and average named metrics from a list of workload() return dicts."""
     result: dict[str, float] = {}
@@ -421,8 +492,8 @@ class ChaosRunner:
 
     Handles all four usage modes:
 
-    * **Decorator** — via :func:`chaos_jungle.decorators.chaos`
-    * **Context manager** — via :func:`chaos_jungle.decorators.chaos_session`
+    * **Decorator** — via :func:`chaos_jungle.inject.decorators.chaos`
+    * **Context manager** — via :func:`chaos_jungle.inject.decorators.chaos_session`
     * **Explicit** — ``runner.start()`` / ``runner.stop()``
     * **Separate** — ``runner.start()`` returns immediately; use
       :meth:`attach` from another process to stop
@@ -495,7 +566,7 @@ class ChaosRunner:
         # Auto-register scenario in registry with the correct type/target_ip
         # so the local DB always reflects where the scenario will run.
         try:
-            from chaos_jungle.registry import ScenarioRegistry
+            from chaos_jungle.control.registry import ScenarioRegistry
             _reg = ScenarioRegistry(db=self.db)
             if _reg.get(scenario.id) is None:
                 _ttype, _taddr = _target_info(self.target)
@@ -597,7 +668,7 @@ class ChaosRunner:
             )
             self.db.add_event(self._session_id, f"Session started: {self.scenario.name}")
             try:
-                from chaos_jungle.registry import ScenarioRegistry
+                from chaos_jungle.control.registry import ScenarioRegistry
                 ScenarioRegistry(db=self.db).set_running(self.scenario.id)
             except Exception:
                 pass
@@ -883,7 +954,7 @@ class ChaosRunner:
         self.db.close_session(self._session_id, status=final_status)
         self.db.add_event(self._session_id, f"Session closed ({final_status})")
         try:
-            from chaos_jungle.registry import ScenarioRegistry
+            from chaos_jungle.control.registry import ScenarioRegistry
             ScenarioRegistry(db=self.db).set_done(
                 self.scenario.id, session_id=self._session_id
             )
@@ -988,7 +1059,7 @@ class ChaosRunner:
 
         For AI quality evaluation, include ``"question"``, ``"context"``,
         and ``"response"`` keys in the returned dict and pass an
-        :class:`~chaos_jungle.judge.LLMJudge` as *evaluator*::
+        :class:`~chaos_jungle.analysis.judge.LLMJudge` as *evaluator*::
 
             judge = LLMJudge(model="gpt-4o-mini")
 
@@ -1015,7 +1086,7 @@ class ChaosRunner:
             How many times to run the workload *with* the fault active.
             Default ``1``.
         evaluator : LLMJudge, optional
-            An :class:`~chaos_jungle.judge.LLMJudge` instance. When provided,
+            An :class:`~chaos_jungle.analysis.judge.LLMJudge` instance. When provided,
             each workload result that contains ``"question"``, ``"context"``,
             and ``"response"`` keys is scored for faithfulness, hallucination,
             and coherence. Scores are averaged and included in
@@ -1023,11 +1094,11 @@ class ChaosRunner:
         oracles : list[Oracle], optional
             Oracle assertion instances to run against the fault runs. Each
             oracle inspects the raw fault workload results and returns a
-            pass/fail :class:`~chaos_jungle.oracles.OracleResult`.  Results
+            pass/fail :class:`~chaos_jungle.analysis.oracles.OracleResult`.  Results
             are stored in :attr:`MeasurementResult.oracle_results` and shown
             in :meth:`MeasurementResult.summary`::
 
-                from chaos_jungle.oracles import NoPIILeakage, MaxCost
+                from chaos_jungle.analysis.oracles import NoPIILeakage, MaxCost
                 result = runner.measure(
                     workload, n_fault=3,
                     oracles=[NoPIILeakage(), MaxCost(max_usd=0.05)],
@@ -1057,7 +1128,7 @@ class ChaosRunner:
             auto-collected metrics in ``result.collected_metrics`` when
             *strategy* is given.
         """
-        from chaos_jungle.judge import average_scores  # lazy import
+        from chaos_jungle.analysis.judge import average_scores  # lazy import
 
         # ── Resolve active metrics (if strategy provided) ──────────
         _active: list[str] = []
@@ -1181,13 +1252,18 @@ class ChaosRunner:
                 except Exception:
                     pass
 
-        # ── 3. Delta ──────────────────────────────────────────────
+        # ── 3. Delta + statistics ─────────────────────────────────
         delta = {
             k: round(fault[k] - baseline[k], 6)
             for k in baseline
             if k in fault and isinstance(fault.get(k), (int, float))
                          and isinstance(baseline.get(k), (int, float))
         }
+
+        baseline_std  = _std_metrics(raw_baseline)
+        fault_std     = _std_metrics(raw_fault)
+        baseline_ci95 = _confidence_interval_95(baseline_std, n_baseline)
+        fault_ci95    = _confidence_interval_95(fault_std, n_fault)
 
         # ── 4. LLM quality evaluation (optional) ──────────────────
         judge_baseline_score = None
@@ -1232,7 +1308,7 @@ class ChaosRunner:
         # ── 5. Oracle assertions (optional) ───────────────────────
         oracle_results: list = []
         if oracles:
-            from chaos_jungle.oracles import run_oracles
+            from chaos_jungle.analysis.oracles import run_oracles
             print(f"[chaos-jungle] Running {len(oracles)} oracle assertion(s) ...")
             baseline_oracle = run_oracles(oracles, raw_baseline, phase="baseline")
             fault_oracle    = run_oracles(oracles, raw_fault,    phase="fault")
@@ -1311,6 +1387,10 @@ class ChaosRunner:
             collected_metrics=collected_metrics,
             llm_calls=_llm_calls,
             hypothesis_result=hypothesis_result,
+            baseline_std=baseline_std,
+            fault_std=fault_std,
+            baseline_ci95=baseline_ci95,
+            fault_ci95=fault_ci95,
         )
 
         # ── 6. Persist to DB ──────────────────────────────────────
@@ -1419,7 +1499,7 @@ class ChaosRunner:
 
         With the intercept layer (no proxy setup needed)::
 
-            from chaos_jungle.intercept import door, Latency
+            from chaos_jungle.inject.intercept import door, Latency
 
             results = door(
                 Latency(3.0),

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from chaos_jungle.runner import MeasurementResult
+    from chaos_jungle.core.runner import MeasurementResult
 
 
 @dataclass
@@ -69,7 +69,7 @@ class Hypothesis:
 
     Build the hypothesis with chained assertion methods, then pass it to
     ``ChaosRunner.measure()`` via the ``hypothesis=`` parameter, or call
-    ``.check(result)`` manually on any :class:`~chaos_jungle.runner.MeasurementResult`.
+    ``.check(result)`` manually on any :class:`~chaos_jungle.core.runner.MeasurementResult`.
 
     Parameters
     ----------

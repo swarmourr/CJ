@@ -85,7 +85,7 @@ def metric(name_or_fn=None, *, name: str = ""):
     The decorated function must accept a single ``target`` argument and
     return a plain ``dict``.  The result is registered globally and can be
     passed directly to ``@chaos_measure(metrics=[...])`` or
-    :class:`~chaos_jungle.runner.ChaosRunner`.
+    :class:`~chaos_jungle.core.runner.ChaosRunner`.
 
     Parameters
     ----------
@@ -123,7 +123,7 @@ def metric(name_or_fn=None, *, name: str = ""):
 
     Use it with ``@chaos_measure``::
 
-        from chaos_jungle.decorators import chaos_measure
+        from chaos_jungle.inject.decorators import chaos_measure
         from chaos_jungle.faults import NetworkDelay
 
         @chaos_measure(NetworkDelay("100ms"), metrics=[measure_throughput])

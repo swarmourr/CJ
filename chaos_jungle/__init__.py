@@ -14,7 +14,7 @@ Quick start::
 
 Decorator style::
 
-    from chaos_jungle.decorators import chaos
+    from chaos_jungle.inject.decorators import chaos
     from chaos_jungle.faults import NetworkDelay
 
     @chaos(NetworkDelay("100ms"))
@@ -23,7 +23,7 @@ Decorator style::
 
 Context manager style::
 
-    from chaos_jungle.decorators import chaos_session
+    from chaos_jungle.inject.decorators import chaos_session
     from chaos_jungle.faults import NetworkLoss
 
     with chaos_session(NetworkLoss("5%")) as session:
@@ -31,7 +31,7 @@ Context manager style::
 
 Measure style (auto-records return dict as results)::
 
-    from chaos_jungle.decorators import chaos_measure
+    from chaos_jungle.inject.decorators import chaos_measure
     from chaos_jungle.faults import NetworkDelay
 
     @chaos_measure(NetworkDelay("100ms"), scenario_name="E1")
@@ -43,14 +43,14 @@ Measure style (auto-records return dict as results)::
     print(summary["duration_s"], "s of chaos")
 """
 
-from chaos_jungle.scenario import Scenario
-from chaos_jungle.runner import ChaosRunner, MeasurementResult
-from chaos_jungle.suite import ExperimentSuite
-from chaos_jungle.decorators import chaos, chaos_session, chaos_measure
+from chaos_jungle.core.scenario import Scenario
+from chaos_jungle.core.runner import ChaosRunner, MeasurementResult
+from chaos_jungle.core.suite import ExperimentSuite
+from chaos_jungle.inject.decorators import chaos, chaos_session, chaos_measure
 from chaos_jungle.metrics import Metric, PingLatency, CommandMetric, FileIntegrity, metric, ScriptMetric
-from chaos_jungle.guardrails import ConflictError, ConflictWarning, SafetyPolicy, DangerError
-from chaos_jungle.preflight import detect_pkg_manager, PKG_MAP
-from chaos_jungle.oracles import (
+from chaos_jungle.core.guardrails import ConflictError, ConflictWarning, SafetyPolicy, DangerError
+from chaos_jungle.core.preflight import detect_pkg_manager, PKG_MAP
+from chaos_jungle.analysis.oracles import (
     Oracle,
     OracleResult,
     run_oracles,
@@ -115,7 +115,7 @@ from chaos_jungle.faults import (
     SkillFilePermissionDenied,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
-from chaos_jungle.intercept import (
+from chaos_jungle.inject.intercept import (
     inject,
     InjectResult,
     door,
@@ -130,13 +130,13 @@ from chaos_jungle.intercept import (
     PromptInjection,
     DEFAULT_LLM_HOSTS,
 )
-from chaos_jungle.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
+from chaos_jungle.inject.fetch import fetch, collect_logs, export_db_to_csv, FetchResult
 from chaos_jungle.faults.bpf import iface_for_ip
-from chaos_jungle.judge import LLMJudge, JudgeScore, average_scores, Evaluator
-from chaos_jungle.fuzzing import ChaosFuzzer, fuzz_scenarios, summarise_fuzz
-from chaos_jungle.conversation import ConversationScenario, Turn, TurnResult
-from chaos_jungle.hypothesis import Hypothesis, HypothesisResult, AssertionResult
-from chaos_jungle.scheduler import ChaosScheduler
+from chaos_jungle.analysis.judge import LLMJudge, JudgeScore, average_scores, Evaluator
+from chaos_jungle.inject.fuzzing import ChaosFuzzer, fuzz_scenarios, summarise_fuzz
+from chaos_jungle.analysis.conversation import ConversationScenario, Turn, TurnResult
+from chaos_jungle.analysis.hypothesis import Hypothesis, HypothesisResult, AssertionResult
+from chaos_jungle.core.scheduler import ChaosScheduler
 from chaos_jungle.exporters import (
     Exporter,
     PrometheusExporter,

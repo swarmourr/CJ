@@ -8,7 +8,7 @@ Examples
 Basic fetch (DB only, auto-exports CSV)::
 
     from chaos_jungle import SSHTarget
-    from chaos_jungle.fetch import fetch
+    from chaos_jungle.inject.fetch import fetch
 
     result = fetch(
         SSHTarget("node1", user="ubuntu"),
@@ -30,7 +30,7 @@ Collect logs from multiple nodes in parallel::
 
     import concurrent.futures
     from chaos_jungle import SSHTarget
-    from chaos_jungle.fetch import collect_logs
+    from chaos_jungle.inject.fetch import collect_logs
 
     nodes = [
         SSHTarget("10.0.0.1", user="ubuntu"),
@@ -154,7 +154,7 @@ def fetch(
     ::
 
         from chaos_jungle import SSHTarget
-        from chaos_jungle.fetch import fetch
+        from chaos_jungle.inject.fetch import fetch
 
         # Basic — fetch DB and auto-export CSV
         result = fetch(SSHTarget("node1", user="ubuntu"))
@@ -257,7 +257,7 @@ def collect_logs(
     Collect IRIS-style transfer and corruption logs from a node::
 
         from chaos_jungle import SSHTarget
-        from chaos_jungle.fetch import collect_logs
+        from chaos_jungle.inject.fetch import collect_logs
 
         logs = collect_logs(
             SSHTarget("node1", user="ubuntu", key="~/.ssh/id_geni_ssh_rsa"),
@@ -270,7 +270,7 @@ def collect_logs(
 
         import concurrent.futures
         from chaos_jungle import SSHTarget
-        from chaos_jungle.fetch import collect_logs
+        from chaos_jungle.inject.fetch import collect_logs
 
         nodes = {
             "node1": SSHTarget("10.0.0.1", user="ubuntu"),
@@ -323,7 +323,7 @@ def export_db_to_csv(db_path: str, output_dir: str) -> str:
     --------
     ::
 
-        from chaos_jungle.fetch import export_db_to_csv
+        from chaos_jungle.inject.fetch import export_db_to_csv
 
         csv_path = export_db_to_csv(
             "./results/chaos_jungle.db",

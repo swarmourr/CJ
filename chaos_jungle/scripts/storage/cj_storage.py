@@ -1,120 +1,170 @@
 #! /usr/bin/env python3
-"""
+"""Storage corruption service — schedules cj_corrupt.py via crontab."""
 
-The script provides corruption service by running cj_corrupt.py
-
-"""
 import argparse
 import os
 import sys
-from crontab import CronTab
-from cj_corrupt import run_corrupt
+
+_VAR_RUN_FILE = "/var/run/chaosjungle"
 
 
-var_run_file = '/var/run/chaosjungle'
+class StorageChaosService:
+    """Manage the cj_corrupt crontab service lifecycle.
+
+    Parameters
+    ----------
+    target_directory : str
+        Directory to corrupt files under.
+    target_files : list[str]
+        File patterns to target.
+    frequency : str
+        Schedule string: ``"Nh"`` for every N hours, ``"Nm"`` for every N minutes.
+    recursive : bool
+        Whether to recurse into subdirectories.
+    probability : float or None
+        Corruption probability (0–1).
+    quiet : bool
+        Suppress non-essential output.
+    """
+
+    def __init__(
+        self,
+        target_directory: str = "",
+        target_files: list | None = None,
+        frequency: str = "",
+        recursive: bool = False,
+        probability: float | None = None,
+        quiet: bool = False,
+    ) -> None:
+        self.target_directory = target_directory
+        self.target_files = target_files or []
+        self.frequency = frequency
+        self.recursive = recursive
+        self.probability = probability
+        self.quiet = quiet
+
+    # ── State helpers ─────────────────────────────────────────────
+
+    @staticmethod
+    def is_running() -> bool:
+        return os.path.isfile(_VAR_RUN_FILE)
+
+    def _mark_running(self) -> None:
+        with open(_VAR_RUN_FILE, "w") as f:
+            f.write(
+                f"uid {os.getuid()} -d {self.target_directory} "
+                f"-f {self.target_files}"
+            )
+
+    @staticmethod
+    def _unmark_running() -> None:
+        if os.path.isfile(_VAR_RUN_FILE):
+            try:
+                os.remove(_VAR_RUN_FILE)
+            except OSError:
+                pass
+
+    # ── Lifecycle ─────────────────────────────────────────────────
+
+    def start(self, cron) -> None:
+        """Register a crontab job to run the corruption service."""
+        if self.is_running():
+            sys.exit("StorageChaosService is already running — use stop() first.")
+        if not self.target_directory or not self.target_files or not self.frequency:
+            sys.exit("Provide target_directory, target_files, and frequency before calling start().")
+
+        if not self.quiet:
+            print(f"RECURSIVE is {'ON' if self.recursive else 'OFF'}")
+
+        filepath = os.path.realpath(__file__)
+        extra = []
+        if self.target_directory:
+            extra += ["-d", f"'{self.target_directory}'"]
+        if self.target_files:
+            extra += ["-f", f"'{' '.join(self.target_files)}'"]
+        if self.recursive:
+            extra.append("-r")
+        if self.probability is not None:
+            extra += ["-p", str(self.probability)]
+
+        cmd = " ".join(["python3", filepath, "--onetime"] + extra + [">/dev/null", "2>&1"])
+        job = cron.new(command=cmd, comment="cj_corrupt")
+
+        freq = self.frequency
+        if "h" in freq:
+            hour = int(freq[: freq.find("h")])
+            if hour < 24:
+                self._mark_running()
+                job.every(hour).hours()
+                cron.write()
+                print(f"Started — every {hour} hour(s)")
+                return
+        elif "m" in freq:
+            mins = int(freq[: freq.find("m")])
+            if mins < 60:
+                self._mark_running()
+                job.minute.every(mins)
+                cron.write()
+                print(f"Started — every {mins} minute(s)")
+                return
+        sys.exit(f"Invalid frequency: {freq!r}. Use e.g. '2h' or '10m'.")
+
+    def stop(self, cron) -> None:
+        """Remove the crontab job."""
+        print("Stopping storage chaos service")
+        self._unmark_running()
+        cron.remove_all(comment="cj_corrupt")
+        cron.write()
+
+    def run_once(self, args) -> None:
+        """Run a single corruption pass (called by the crontab job)."""
+        from cj_corrupt import run_corrupt  # noqa: PLC0415 (script context)
+        run_corrupt(args)
 
 
-def is_cj_running():
-    return os.path.isfile(var_run_file)
+# ── CLI entry-point ───────────────────────────────────────────────
 
-def mark_cj_running(args):
-    with open(var_run_file, 'w') as f:
-        f.write('uid {} -d {} -f {}'.format(os.getuid(), args.target_directory, args.target_files))
-
-def unmark_cj_running():
-    if os.path.isfile(var_run_file):
-        try:
-            os.remove(var_run_file)
-        except:
-            return
-
-def start(mycron, args):
-
-    if is_cj_running():
-        sys.exit('exit(): Chaos jungle service is already running. use --stop first')
-
-    if not args.target_directory or not args.target_files or not args.frequency:
-        sys.exit('exit(): please provide -d, -f and -F <frequency> when using --start')
-
-    if not args.recursive:
-        print('RECURSIVE is OFF')
-    else:
-        print('RECURSIVE is ON')
-
-    filepath = os.path.realpath(__file__)
-
-    for i in range(0, len(sys.argv)-1):
-        if sys.argv[i] == '-f' or sys.argv[i] == '-d':
-            sys.argv[i+1] = '\'' + sys.argv[i+1] + '\''
-            i += 1
-
-    sys.argv.remove('--start')
-    cmdlist = (['python3'] + [filepath] + ['--onetime'] + sys.argv[1:] + ['>/dev/null'] + ['2>&1'])
-    cmdstr = ' '.join(cmdlist)
-    job = mycron.new(command=cmdstr, comment='cj_corrupt')
-
-    if args.frequency.find('h') >= 0:
-        hour = int(args.frequency[:args.frequency.find('h')])
-        if hour < 24:
-            mark_cj_running(args)
-            job.every(hour).hours()
-            mycron.write()
-            print('start chaos jungle service every {} hour'.format(hour))
-            return
-    elif args.frequency.find('m') >= 0:
-        mins = int(args.frequency[:args.frequency.find('m')])
-        if mins < 60:
-            mark_cj_running(args)
-            job.minute.every(mins)
-            mycron.write()
-            print('start chaos jungle service every {} min'.format(mins))
-            return
-    sys.exit('exit(): invalid -F frequency')
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="[WARNING] Corrupts files — use with CAUTION!"
+    )
+    parser.add_argument("--onetime", action="store_true")
+    parser.add_argument("--filelist", dest="inputfile")
+    parser.add_argument("--revert", action="store_true")
+    parser.add_argument("--start", action="store_true")
+    parser.add_argument("--stop", action="store_true")
+    parser.add_argument("--wait", action="store_true")
+    parser.add_argument("-f", dest="target_files", nargs="*")
+    parser.add_argument("-d", dest="target_directory")
+    parser.add_argument("-r", "--recursive", action="store_true", default=False)
+    parser.add_argument("-p", dest="probability", type=float)
+    parser.add_argument("-F", dest="frequency")
+    parser.add_argument("-i", dest="index")
+    parser.add_argument("-q", "--quiet", action="store_true")
+    return parser.parse_args()
 
 
-def stop(mycron):
-    print('stop chaos jungle service')
-    unmark_cj_running()
-    mycron.remove_all(comment='cj_corrupt')
-    mycron.write()
-
-
-def run(args):
-    mycron = CronTab(user=True)
+def main() -> None:
+    args = _parse_args()
+    svc = StorageChaosService(
+        target_directory=args.target_directory or "",
+        target_files=args.target_files or [],
+        frequency=args.frequency or "",
+        recursive=args.recursive,
+        probability=args.probability,
+        quiet=args.quiet,
+    )
 
     if args.onetime or args.wait or args.revert or args.inputfile:
-        run_corrupt(args)
+        svc.run_once(args)
     elif args.stop:
-        stop(mycron)
+        from crontab import CronTab  # noqa: PLC0415
+        svc.stop(CronTab(user=True))
     elif args.start:
-        start(mycron, args)
+        from crontab import CronTab  # noqa: PLC0415
+        svc.start(CronTab(user=True))
     else:
-        sys.exit('exit(): please specify your action ( --onetime / --start / --stop / --filelist / --wait/ --revert)')
-
-
-def main():
-
-    parser = argparse.ArgumentParser(description='[WARNING!] The program corrupts file(s), please use it with CAUTION!')
-    parser.add_argument('--onetime', action='store_true', help='just to corrupt once')
-    parser.add_argument('--filelist', dest="inputfile", help='a file of file lists to corrupt')
-    parser.add_argument('--revert', action='store_true', help='revert the specified corrupted file [-f <file>] or all files if -f is omitted')
-    parser.add_argument('--start', action='store_true', help='start the chaos jungle')
-    parser.add_argument('--stop', action='store_true', help='stop the chaos jungle')
-    parser.add_argument('--wait', action='store_true', help='wait and corrupt a single file [-f "pattern"] under folder [-d <directory>]')
-
-    parser.add_argument('-f', dest="target_files", nargs='*',
-                        help='the path of target file or the pattern of filename (pattern should be wrapped by "") to corrupt. e.g.: -f /tmp/abc.txt, -f "*.txt", -f "*"')
-    parser.add_argument('-d', dest="target_directory",
-                        help='the directory, under which the files will randomly selected to be corrupted ')
-    parser.add_argument('-r', '--recursive', action='store_true', default=False, help='match the files within the directory and its entire subtree (default: False)')
-    parser.add_argument('-p', dest='probability', type=float, help='the probability of corruption (default: 1.0)')
-    parser.add_argument('-F', dest="frequency", help='-F 2h means every 2 hrs, -F 10m means every 10 mins')
-    parser.add_argument('-i', dest="index", help='the index of byte number to corrupt')
-    parser.add_argument('-q', '--quiet', action='store_true', help='Be quiet')
-
-    parser.set_defaults(func=run)
-    args = parser.parse_args()
-    args.func(args)
+        sys.exit("Specify an action: --onetime / --start / --stop / --wait / --revert")
 
 
 if __name__ == "__main__":

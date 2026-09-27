@@ -281,6 +281,10 @@ class SessionDB:
             ("verification_output", "TEXT NOT NULL DEFAULT ''"),
             ("snapshot_before",     "TEXT NOT NULL DEFAULT '{}'"),
             ("snapshot_after",      "TEXT NOT NULL DEFAULT '{}'"),
+            ("status",              "TEXT NOT NULL DEFAULT 'pending'"),
+            ("verified_active",     "INTEGER NOT NULL DEFAULT 0"),
+            ("verified_recovered",  "INTEGER NOT NULL DEFAULT 0"),
+            ("verification_note",   "TEXT"),
         ]
         for col, defn in _fault_cols:
             try:

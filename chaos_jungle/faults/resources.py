@@ -1,13 +1,74 @@
 """Resource exhaustion fault implementations."""
 from __future__ import annotations
 
+import time
 import uuid
 from typing import TYPE_CHECKING
 
-from chaos_jungle.faults.base import Fault
+from chaos_jungle.faults.base import Fault, VerificationResult
 
 if TYPE_CHECKING:
     from chaos_jungle.targets.base import Target
+
+
+def _verify_pid_file(
+    target: "Target",
+    pid_file: str,
+    *,
+    expect_running: bool,
+) -> VerificationResult:
+    """Verify whether the background process tracked by *pid_file* is alive."""
+    # Check if the pid file exists
+    code, _, _ = target.run(f"test -f {pid_file}")
+    if code != 0:
+        if expect_running:
+            return VerificationResult(
+                verified=False,
+                reason=f"PID file {pid_file!r} does not exist — process may have exited",
+                timestamp_s=time.time(),
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"PID file {pid_file!r} removed — process is gone",
+            timestamp_s=time.time(),
+        )
+
+    # File exists — read the PID and check if process is alive
+    _, pid_str, _ = target.run(f"cat {pid_file} 2>/dev/null")
+    pid = pid_str.strip()
+    if not pid.isdigit():
+        return VerificationResult(
+            verified=not expect_running,
+            reason=f"PID file {pid_file!r} contains non-numeric value {pid!r}",
+            observed={"pid_file": pid_file, "content": pid},
+            timestamp_s=time.time(),
+        )
+
+    alive_code, _, _ = target.run(f"kill -0 {pid} 2>/dev/null")
+    process_alive = alive_code == 0
+
+    if expect_running and not process_alive:
+        return VerificationResult(
+            verified=False,
+            reason=f"PID {pid} from {pid_file!r} is no longer running",
+            observed={"pid": pid},
+            timestamp_s=time.time(),
+        )
+    if not expect_running and process_alive:
+        return VerificationResult(
+            verified=False,
+            reason=f"PID {pid} from {pid_file!r} is still running",
+            observed={"pid": pid},
+            timestamp_s=time.time(),
+        )
+
+    state = "alive" if process_alive else "gone"
+    return VerificationResult(
+        verified=True,
+        reason=f"Process {pid} is {state} (expected={'running' if expect_running else 'stopped'})",
+        observed={"pid": pid, "alive": process_alive},
+        timestamp_s=time.time(),
+    )
 
 _FILL_FILENAME = ".cj_diskfill"
 
@@ -51,6 +112,26 @@ class DiskFull(Fault):
 
     def revert(self, target: "Target") -> None:
         self.stop(target)
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        code, _, _ = target.run(f"test -f {self._fill_file}")
+        exists = code == 0
+        return VerificationResult(
+            verified=exists,
+            reason=f"Fill file {self._fill_file!r} {'exists' if exists else 'missing'}",
+            observed={"fill_file": self._fill_file, "exists": exists},
+            timestamp_s=time.time(),
+        )
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        code, _, _ = target.run(f"test -f {self._fill_file}")
+        gone = code != 0
+        return VerificationResult(
+            verified=gone,
+            reason=f"Fill file {self._fill_file!r} {'removed' if gone else 'still present'}",
+            observed={"fill_file": self._fill_file, "exists": not gone},
+            timestamp_s=time.time(),
+        )
 
     def _parameters(self) -> dict:
         return {"path": self.path, "size_mb": self.size_mb}
@@ -100,6 +181,12 @@ class CPUStress(Fault):
     def revert(self, target: "Target") -> None:
         self.stop(target)
 
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=False)
+
     def _parameters(self) -> dict:
         return {"cores": self.cores, "duration_s": self.duration_s}
 
@@ -147,6 +234,12 @@ class MemoryStress(Fault):
 
     def revert(self, target: "Target") -> None:
         self.stop(target)
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=False)
 
     def _parameters(self) -> dict:
         return {"mb": self.mb, "duration_s": self.duration_s}
@@ -200,6 +293,12 @@ class IOStress(Fault):
     def revert(self, target: "Target") -> None:
         self.stop(target)
 
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=False)
+
     def _parameters(self) -> dict:
         return {"workers": self.workers, "duration_s": self.duration_s, "path": self.path}
 
@@ -252,6 +351,26 @@ class InodeFull(Fault):
     def revert(self, target: "Target") -> None:
         self.stop(target)
 
+    def verify_active(self, target: "Target") -> VerificationResult:
+        code, _, _ = target.run(f"test -d {self._fill_dir}")
+        exists = code == 0
+        return VerificationResult(
+            verified=exists,
+            reason=f"Inode fill dir {self._fill_dir!r} {'exists' if exists else 'missing'}",
+            observed={"fill_dir": self._fill_dir, "exists": exists},
+            timestamp_s=time.time(),
+        )
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        code, _, _ = target.run(f"test -d {self._fill_dir}")
+        gone = code != 0
+        return VerificationResult(
+            verified=gone,
+            reason=f"Inode fill dir {self._fill_dir!r} {'removed' if gone else 'still present'}",
+            observed={"fill_dir": self._fill_dir, "exists": not gone},
+            timestamp_s=time.time(),
+        )
+
     def _parameters(self) -> dict:
         return {"path": self.path, "count": self.count}
 
@@ -302,6 +421,12 @@ class FDExhaust(Fault):
 
     def revert(self, target: "Target") -> None:
         self.stop(target)
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=False)
 
     def _parameters(self) -> dict:
         return {"count": self.count}
@@ -356,6 +481,12 @@ class ProcessExhaust(Fault):
 
     def revert(self, target: "Target") -> None:
         self.stop(target)
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_pid_file(target, self._pid_file, expect_running=False)
 
     def _parameters(self) -> dict:
         return {"count": self.count}

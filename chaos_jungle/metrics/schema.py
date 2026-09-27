@@ -75,7 +75,7 @@ class MetricSummary:
 
 @dataclass
 class CollectedMetrics:
-    """All metric data gathered during a :meth:`~chaos_jungle.runner.ChaosRunner.measure` run.
+    """All metric data gathered during a :meth:`~chaos_jungle.core.runner.ChaosRunner.measure` run.
 
     Attributes
     ----------

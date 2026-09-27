@@ -9,7 +9,7 @@ import requests
 from chaos_jungle.targets.base import Target
 
 if TYPE_CHECKING:
-    from chaos_jungle.scenario import Scenario
+    from chaos_jungle.core.scenario import Scenario
 
 
 class HTTPTarget(Target):
@@ -133,7 +133,7 @@ class HTTPTarget(Target):
         str
             The scenario UUID.
         """
-        from chaos_jungle.registry import ScenarioRegistry
+        from chaos_jungle.control.registry import ScenarioRegistry
         from urllib.parse import urlparse
 
         if self._session is None:

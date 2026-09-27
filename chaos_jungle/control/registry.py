@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from chaos_jungle.db.session_db import SessionDB
 
 if TYPE_CHECKING:
-    from chaos_jungle.scenario import Scenario
+    from chaos_jungle.core.scenario import Scenario
     from chaos_jungle.targets.base import Target
 
 
@@ -26,7 +26,7 @@ class ScenarioRegistry:
     Examples
     --------
     >>> from chaos_jungle import Scenario, NetworkDelay
-    >>> from chaos_jungle.registry import ScenarioRegistry
+    >>> from chaos_jungle.control.registry import ScenarioRegistry
     >>>
     >>> registry = ScenarioRegistry()
     >>> scenario = Scenario("wan-test", [NetworkDelay("100ms")])

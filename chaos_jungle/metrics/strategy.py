@@ -143,7 +143,7 @@ def collect_recovery_samples(
 
 
 class CollectStrategy:
-    """Defines how often metrics are sampled during a :meth:`~chaos_jungle.runner.ChaosRunner.measure` run.
+    """Defines how often metrics are sampled during a :meth:`~chaos_jungle.core.runner.ChaosRunner.measure` run.
 
     Two built-in strategies are provided as class attributes:
 

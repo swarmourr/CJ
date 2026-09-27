@@ -5,7 +5,7 @@ Example (Python API)::
     from chaos_jungle import Scenario
     from chaos_jungle.faults import NetworkDelay, NetworkLoss
     from chaos_jungle.targets import SSHTarget, LocalTarget
-    from chaos_jungle.suite import ExperimentSuite
+    from chaos_jungle.core.suite import ExperimentSuite
 
     suite = ExperimentSuite(duration="10m")
     suite.add(Scenario("baseline", []), LocalTarget())
@@ -18,7 +18,7 @@ Example (Python API)::
 
 Example (YAML config)::
 
-    from chaos_jungle.suite import ExperimentSuite
+    from chaos_jungle.core.suite import ExperimentSuite
 
     suite = ExperimentSuite.from_yaml("my-suite.yml")
     results = suite.run()
@@ -48,13 +48,14 @@ YAML schema::
 
 from __future__ import annotations
 import concurrent.futures
+import threading
 import time
 from typing import Any
 
-from chaos_jungle._duration import parse_duration
-from chaos_jungle.guardrails import SuiteValidator, apply_guardrails, ConflictError, ConflictWarning
-from chaos_jungle.runner import ChaosRunner
-from chaos_jungle.scenario import Scenario
+from chaos_jungle.core._duration import parse_duration
+from chaos_jungle.core.guardrails import SuiteValidator, apply_guardrails, ConflictError, ConflictWarning
+from chaos_jungle.core.runner import ChaosRunner
+from chaos_jungle.core.scenario import Scenario
 from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
 
@@ -126,6 +127,9 @@ class ExperimentSuite:
         self.conflict = conflict
         self.auto_install = auto_install
         self._experiments: list[tuple[Scenario, Target, str | int | float | None]] = []
+        # Runners started without a duration that need explicit stop()
+        self._open_runners: list[ChaosRunner] = []
+        self._open_runners_lock = threading.Lock()
 
     # ── Building the suite ────────────────────────────────────────
 
@@ -173,7 +177,7 @@ class ExperimentSuite:
             If ``True`` (default) all experiments start simultaneously in
             separate threads — useful for injecting faults on multiple nodes
             at the same time. Each experiment targets a *different* machine
-            (enforced by :class:`~chaos_jungle.guardrails.SuiteValidator`).
+            (enforced by :class:`~chaos_jungle.core.guardrails.SuiteValidator`).
 
             If ``False`` experiments run one after the other.
         max_workers : int, optional
@@ -238,7 +242,10 @@ class ExperimentSuite:
                 runner.run(effective_duration)
             else:
                 runner.start()
-                # no duration — run until manually stopped; we start and return
+                # No duration — track this runner so stop_all() can clean it up.
+                # Caller is responsible for calling suite.stop_all() when done.
+                with self._open_runners_lock:
+                    self._open_runners.append(runner)
             result.session_id = runner._session_id
         except Exception as exc:
             result.status = "error"
@@ -248,6 +255,31 @@ class ExperimentSuite:
             result.duration_s = time.monotonic() - t0
 
         return result
+
+    def stop_all(self) -> dict[str, Exception | None]:
+        """Stop all runners that were started without a duration.
+
+        Call this when the suite is used without per-experiment durations.
+        Returns a mapping of scenario name → exception (or None if clean).
+
+        Example::
+
+            results = suite.run()
+            # ... run your workload ...
+            errors = suite.stop_all()
+        """
+        with self._open_runners_lock:
+            runners, self._open_runners = self._open_runners, []
+
+        errors: dict[str, Exception | None] = {}
+        for runner in runners:
+            name = runner.scenario.name
+            try:
+                runner.stop()
+                errors[name] = None
+            except Exception as exc:
+                errors[name] = exc
+        return errors
 
     def _run_parallel(self, max_workers: int | None) -> dict[str, ExperimentResult]:
         workers = max_workers or len(self._experiments)

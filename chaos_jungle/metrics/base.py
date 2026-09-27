@@ -49,7 +49,7 @@ class Metric(ABC):
 
     .. code-block:: python
 
-        from chaos_jungle.decorators import chaos_measure
+        from chaos_jungle.inject.decorators import chaos_measure
         from chaos_jungle.faults import NetworkDelay
 
         @chaos_measure(

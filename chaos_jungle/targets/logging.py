@@ -13,7 +13,7 @@ class LoggingTarget(Target):
     """Transparent proxy around any Target that saves every command and its
     output to the chaos-jungle session database.
 
-    Used internally by :class:`~chaos_jungle.runner.ChaosRunner` so that
+    Used internally by :class:`~chaos_jungle.core.runner.ChaosRunner` so that
     every ``tc``, ``dd``, ``python3 cj_storage.py …`` command is visible
     in the dashboard's session event log.
 

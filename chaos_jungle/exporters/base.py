@@ -5,14 +5,14 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from chaos_jungle.runner import MeasurementResult
+    from chaos_jungle.core.runner import MeasurementResult
 
 
 class Exporter(ABC):
     """Base class for all observability exporters.
 
     Subclass and implement :meth:`export` to push
-    :class:`~chaos_jungle.runner.MeasurementResult` data to any external system.
+    :class:`~chaos_jungle.core.runner.MeasurementResult` data to any external system.
     """
 
     @abstractmethod

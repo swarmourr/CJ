@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 import re
+import time
 import uuid
 from typing import TYPE_CHECKING
 
-from chaos_jungle.faults.base import Fault
+from chaos_jungle.faults.base import Fault, VerificationResult
 
 if TYPE_CHECKING:
     from chaos_jungle.targets.base import Target
@@ -37,6 +38,45 @@ def _require_bandwidth(value: str, name: str) -> None:
         raise ValueError(
             f"{name!r} must be a bandwidth like '1mbit', '512kbit', '10mbps' — got {value!r}"
         )
+
+
+def _verify_tc_netem(
+    target: "Target",
+    ifaces: list[str],
+    *,
+    expect_present: bool,
+) -> VerificationResult:
+    """Check whether tc netem is active on all *ifaces*.
+
+    When *expect_present* is ``True`` we verify the fault is active.
+    When ``False`` we verify it has been removed (recovered).
+    """
+    observed: dict = {}
+    for iface in ifaces:
+        code, stdout, _ = target.run(f"tc qdisc show dev {iface} 2>/dev/null")
+        observed[iface] = stdout.strip()
+        has_netem = "netem" in stdout.lower()
+        if expect_present and not has_netem:
+            return VerificationResult(
+                verified=False,
+                reason=f"Expected netem on {iface!r} but got: {stdout.strip()!r}",
+                observed=observed,
+                timestamp_s=time.time(),
+            )
+        if not expect_present and has_netem:
+            return VerificationResult(
+                verified=False,
+                reason=f"netem still present on {iface!r}: {stdout.strip()!r}",
+                observed=observed,
+                timestamp_s=time.time(),
+            )
+    action = "active" if expect_present else "absent"
+    return VerificationResult(
+        verified=True,
+        reason=f"tc netem {action} on {ifaces}",
+        observed=observed,
+        timestamp_s=time.time(),
+    )
 
 
 def _all_ifaces(target: "Target") -> list[str]:
@@ -105,6 +145,12 @@ class NetworkDelay(Fault):
     def revert(self, target: "Target") -> None:
         pass
 
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=False)
+
     def _parameters(self) -> dict:
         return {"delay": self.delay, "jitter": self.jitter, "iface": ",".join(self._resolved_ifaces) or self.iface}
 
@@ -148,6 +194,12 @@ class NetworkLoss(Fault):
 
     def revert(self, target: "Target") -> None:
         pass
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=False)
 
     def _parameters(self) -> dict:
         return {"rate": self.rate, "iface": ",".join(self._resolved_ifaces) or self.iface}
@@ -193,6 +245,12 @@ class NetworkCorrupt(Fault):
     def revert(self, target: "Target") -> None:
         pass
 
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=False)
+
     def _parameters(self) -> dict:
         return {"rate": self.rate, "iface": ",".join(self._resolved_ifaces) or self.iface}
 
@@ -236,6 +294,12 @@ class NetworkDuplicate(Fault):
 
     def revert(self, target: "Target") -> None:
         pass
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=False)
 
     def _parameters(self) -> dict:
         return {"rate": self.rate, "iface": ",".join(self._resolved_ifaces) or self.iface}
@@ -285,6 +349,12 @@ class NetworkBandwidthLimit(Fault):
 
     def revert(self, target: "Target") -> None:
         pass
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=False)
 
     def _parameters(self) -> dict:
         return {"rate": self.rate, "iface": ",".join(self._resolved_ifaces) or self.iface}
@@ -342,6 +412,12 @@ class NetworkReorder(Fault):
 
     def revert(self, target: "Target") -> None:
         pass
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=True)
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        return _verify_tc_netem(target, self._ifaces(target), expect_present=False)
 
     def _parameters(self) -> dict:
         return {
@@ -441,6 +517,30 @@ class NetworkReset(Fault):
     def revert(self, target: "Target") -> None:
         self.stop(target)
 
+    def verify_active(self, target: "Target") -> VerificationResult:
+        code, stdout, _ = target.run(
+            f"iptables -S 2>/dev/null | grep -q {self._comment!r} && echo FOUND || echo CLEAR"
+        )
+        found = "FOUND" in stdout
+        return VerificationResult(
+            verified=found,
+            reason=f"iptables rule {'found' if found else 'not found'} for {self._comment!r}",
+            observed={"iptables_grep": stdout.strip()},
+            timestamp_s=time.time(),
+        )
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        code, stdout, _ = target.run(
+            f"iptables -S 2>/dev/null | grep -q {self._comment!r} && echo FOUND || echo CLEAR"
+        )
+        gone = "CLEAR" in stdout
+        return VerificationResult(
+            verified=gone,
+            reason=f"iptables rule {'removed' if gone else 'still present'} for {self._comment!r}",
+            observed={"iptables_grep": stdout.strip()},
+            timestamp_s=time.time(),
+        )
+
     def _parameters(self) -> dict:
         return {
             "dport": self.dport,
@@ -511,6 +611,30 @@ class NetworkPartition(Fault):
 
     def revert(self, target: "Target") -> None:
         self.stop(target)
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        code, stdout, _ = target.run(
+            f"iptables -S 2>/dev/null | grep -q {self._comment!r} && echo FOUND || echo CLEAR"
+        )
+        found = "FOUND" in stdout
+        return VerificationResult(
+            verified=found,
+            reason=f"iptables partition rule {'found' if found else 'not found'} for {self.dest_ip!r}",
+            observed={"iptables_grep": stdout.strip()},
+            timestamp_s=time.time(),
+        )
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        code, stdout, _ = target.run(
+            f"iptables -S 2>/dev/null | grep -q {self._comment!r} && echo FOUND || echo CLEAR"
+        )
+        gone = "CLEAR" in stdout
+        return VerificationResult(
+            verified=gone,
+            reason=f"iptables partition rule {'removed' if gone else 'still present'} for {self.dest_ip!r}",
+            observed={"iptables_grep": stdout.strip()},
+            timestamp_s=time.time(),
+        )
 
     def _parameters(self) -> dict:
         return {

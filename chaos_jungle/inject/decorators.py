@@ -8,8 +8,8 @@ from contextlib import contextmanager
 from typing import Callable
 
 from chaos_jungle.faults.base import Fault
-from chaos_jungle.runner import ChaosRunner
-from chaos_jungle.scenario import Scenario
+from chaos_jungle.core.runner import ChaosRunner
+from chaos_jungle.core.scenario import Scenario
 from chaos_jungle.targets.base import Target
 from chaos_jungle.targets.local import LocalTarget
 
@@ -35,7 +35,7 @@ def chaos(
         Name stored in the database. Defaults to the function name.
     conflict : str
         Guardrail conflict mode: ``"raise"`` (default), ``"warn"``, or
-        ``"force"``. See :func:`~chaos_jungle.guardrails.apply_guardrails`.
+        ``"force"``. See :func:`~chaos_jungle.core.guardrails.apply_guardrails`.
 
     Examples
     --------
@@ -80,7 +80,7 @@ def chaos_session(
         Name stored in the database.
     conflict : str
         Guardrail conflict mode: ``"raise"`` (default), ``"warn"``, or
-        ``"force"``. See :func:`~chaos_jungle.guardrails.apply_guardrails`.
+        ``"force"``. See :func:`~chaos_jungle.core.guardrails.apply_guardrails`.
 
     Yields
     ------
@@ -139,7 +139,7 @@ def chaos_measure(
        metrics are collected again. Keys are prefixed ``chaos_``.
 
     Both sets are merged with any dict returned by the function and
-    stored via :meth:`~chaos_jungle.runner.ChaosRunner.record_result`.
+    stored via :meth:`~chaos_jungle.core.runner.ChaosRunner.record_result`.
 
     Parameters
     ----------
@@ -163,7 +163,7 @@ def chaos_measure(
         printed normally, and returned in
         ``summary["captured_output"]``. Default ``False``.
     auto_install : bool or str, optional
-        Passed to :class:`~chaos_jungle.runner.ChaosRunner`. Use
+        Passed to :class:`~chaos_jungle.core.runner.ChaosRunner`. Use
         ``"prompt"`` to ask before installing missing deps.
     conflict : str
         Guardrail conflict mode: ``"raise"``, ``"warn"`` (default), or
@@ -173,7 +173,7 @@ def chaos_measure(
     -------
     Callable
         The wrapper returns a dict with all keys from
-        :meth:`~chaos_jungle.runner.ChaosRunner.summary` plus:
+        :meth:`~chaos_jungle.core.runner.ChaosRunner.summary` plus:
 
         * ``fn_result``        — raw return value of the function
         * ``metrics``          — ``{"baseline": {...}, "chaos": {...}}``

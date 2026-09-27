@@ -94,7 +94,7 @@ class Fault(ABC):
           or require manual cleanup (e.g. process kill, disk fill, storage
           corruption).
 
-        :class:`~chaos_jungle.guardrails.SafetyPolicy` uses this to gate
+        :class:`~chaos_jungle.core.guardrails.SafetyPolicy` uses this to gate
         which faults are allowed to run.
     """
 
@@ -182,9 +182,9 @@ class Fault(ABC):
     def dry_run(self, target: "Target") -> None:
         """Print what this fault *would* do without actually doing it.
 
-        Called by :class:`~chaos_jungle.runner.ChaosRunner` when
+        Called by :class:`~chaos_jungle.core.runner.ChaosRunner` when
         ``dry_run=True`` is set on the runner or when a
-        :class:`~chaos_jungle.guardrails.SafetyPolicy` with ``dry_run=True``
+        :class:`~chaos_jungle.core.guardrails.SafetyPolicy` with ``dry_run=True``
         is enforced.
 
         The default implementation prints the fault name and parameters.
@@ -236,7 +236,7 @@ class Fault(ABC):
             fault.preflight(target, auto_install="prompt")
 
         """
-        from chaos_jungle.preflight import run_preflight
+        from chaos_jungle.core.preflight import run_preflight
 
         run_preflight(
             target=target,

@@ -55,7 +55,7 @@ from typing import Generator
 
 import pytest
 
-from chaos_jungle.intercept import inject, Behavior
+from chaos_jungle.inject.intercept import inject, Behavior
 
 
 # ── Plugin registration ───────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ def pytest_configure(config: pytest.Config) -> None:
         (
             "chaos(*behaviors, urls=None): "
             "inject HTTP-level LLM faults for the duration of this test. "
-            "Accepts any chaos_jungle.intercept.Behavior instance "
+            "Accepts any chaos_jungle.inject.intercept.Behavior instance "
             "(Latency, RateLimit, Unavailable, Timeout, CorruptResponse, …). "
             "Pass urls=[...] to restrict interception to specific hostnames."
         ),

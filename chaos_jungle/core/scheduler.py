@@ -43,11 +43,11 @@ import time
 from datetime import datetime
 from typing import Callable, TYPE_CHECKING
 
-from chaos_jungle._duration import parse_duration
+from chaos_jungle.core._duration import parse_duration
 
 if TYPE_CHECKING:
-    from chaos_jungle.runner import MeasurementResult
-    from chaos_jungle.scenario import Scenario
+    from chaos_jungle.core.runner import MeasurementResult
+    from chaos_jungle.core.scenario import Scenario
     from chaos_jungle.targets.base import Target
 
 
@@ -140,7 +140,7 @@ class ChaosScheduler:
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def on_result(self, callback: Callable) -> "ChaosScheduler":
-        """Register a callback called with each :class:`~chaos_jungle.runner.MeasurementResult`.
+        """Register a callback called with each :class:`~chaos_jungle.core.runner.MeasurementResult`.
 
         Parameters
         ----------
@@ -204,7 +204,7 @@ class ChaosScheduler:
 
     @property
     def results(self) -> list["MeasurementResult"]:
-        """All :class:`~chaos_jungle.runner.MeasurementResult` collected so far."""
+        """All :class:`~chaos_jungle.core.runner.MeasurementResult` collected so far."""
         return list(self._results)
 
     # ── Internal loop ─────────────────────────────────────────────────────────
@@ -239,7 +239,7 @@ class ChaosScheduler:
             self._stop_event.wait(timeout=30)
 
     def _run_once(self) -> None:
-        from chaos_jungle.runner import ChaosRunner
+        from chaos_jungle.core.runner import ChaosRunner
         from chaos_jungle.targets.local import LocalTarget
 
         target = self.target or LocalTarget()

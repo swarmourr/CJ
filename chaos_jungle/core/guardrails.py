@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from chaos_jungle.scenario import Scenario
+    from chaos_jungle.core.scenario import Scenario
     from chaos_jungle.targets.base import Target
 
 
@@ -60,6 +60,8 @@ def _is_path_allowed(path: str, allowed_paths: list[str]) -> bool:
     - Relative paths and ``..`` segments cannot bypass the policy
     - Symlinks are resolved before comparison
     """
+    if not allowed_paths:
+        return True
     try:
         real = os.path.realpath(os.path.abspath(path))
     except Exception:
@@ -81,7 +83,7 @@ class SafetyPolicy:
     """Define safety constraints enforced before and during fault injection.
 
     Pass a :class:`SafetyPolicy` instance as the ``policy=`` argument to
-    :class:`~chaos_jungle.runner.ChaosRunner` to control what faults are
+    :class:`~chaos_jungle.core.runner.ChaosRunner` to control what faults are
     permitted to run and when a running experiment should be aborted.
 
     Attributes

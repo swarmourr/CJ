@@ -7,7 +7,7 @@ isolation failures.
 
 Every fault extends both :class:`~chaos_jungle.faults.base.Fault` (works
 with ``ChaosRunner`` / ``Scenario``) and
-:class:`~chaos_jungle.intercept.Behavior` (works directly with
+:class:`~chaos_jungle.inject.intercept.Behavior` (works directly with
 ``inject()``).  No subprocess, no proxy, no Linux required.
 
 Quick start::
@@ -28,7 +28,7 @@ Quick start::
 
 Or with inject() directly::
 
-    from chaos_jungle.intercept import inject
+    from chaos_jungle.inject.intercept import inject
     from chaos_jungle.faults.gateway import GatewayRouteMisconfig
 
     with inject(GatewayRouteMisconfig(to_model="gpt-3.5-turbo")):
@@ -44,7 +44,7 @@ import threading
 from typing import Any
 
 from chaos_jungle.faults.base import Fault
-from chaos_jungle.intercept import (
+from chaos_jungle.inject.intercept import (
     Behavior,
     DEFAULT_LLM_HOSTS,
     _mock_response,
@@ -109,9 +109,9 @@ class _GatewayFault(Fault, Behavior):
     """
     Base for all AI gateway faults.
 
-    Subclasses override :meth:`~chaos_jungle.intercept.Behavior.modify_request`
-    and/or :meth:`~chaos_jungle.intercept.Behavior.after` exactly like any
-    intercept :class:`~chaos_jungle.intercept.Behavior`.  The ``start`` /
+    Subclasses override :meth:`~chaos_jungle.inject.intercept.Behavior.modify_request`
+    and/or :meth:`~chaos_jungle.inject.intercept.Behavior.after` exactly like any
+    intercept :class:`~chaos_jungle.inject.intercept.Behavior`.  The ``start`` /
     ``stop`` methods install and remove the fault from the intercept stack so
     the same class works with ``ChaosRunner``.
     """
@@ -124,12 +124,12 @@ class _GatewayFault(Fault, Behavior):
     # ── Fault protocol ──────────────────────────────────────────────────────
 
     def start(self, target: Any) -> None:
-        from chaos_jungle.intercept import _patch, _Stack
+        from chaos_jungle.inject.intercept import _patch, _Stack
         _patch()
         _Stack.push([self], self.urls or DEFAULT_LLM_HOSTS)
 
     def stop(self, target: Any) -> None:
-        from chaos_jungle.intercept import _unpatch, _Stack
+        from chaos_jungle.inject.intercept import _unpatch, _Stack
         _Stack.pop()
         _unpatch()
 
@@ -526,7 +526,7 @@ class GatewayCachePoison(_GatewayFault):
 
     Default metrics: ``hallucination``, ``faithfulness``, ``error_rate``, ``duration_s``
 
-    Use with :class:`~chaos_jungle.judge.LLMJudge` to measure the
+    Use with :class:`~chaos_jungle.analysis.judge.LLMJudge` to measure the
     faithfulness drop caused by the poisoned cache hit.
     """
 
@@ -574,7 +574,7 @@ class GatewayTenantLeak(_GatewayFault):
     2. Appended to the assistant message content so that agents and
        downstream parsers actually encounter it.
 
-    Pair with :class:`~chaos_jungle.oracles.TenantIsolationOracle` to assert
+    Pair with :class:`~chaos_jungle.analysis.oracles.TenantIsolationOracle` to assert
     that your application never exposes foreign data::
 
         oracle = TenantIsolationOracle(

@@ -56,3 +56,8 @@ results/
 FAULTS.md
 SCENARIOS.md
 scenarios/
+
+# Local architecture / presentation files (not part of published docs)
+docs/c4.rst
+docs/c4.html
+docs/chaos-principles.md

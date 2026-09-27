@@ -9,8 +9,8 @@ Usage
 -----
 ::
 
-    from chaos_jungle.conversation import ConversationScenario, Turn, TurnResult
-    from chaos_jungle.intercept import Latency, RateLimit, ToolMutate
+    from chaos_jungle.analysis.conversation import ConversationScenario, Turn, TurnResult
+    from chaos_jungle.inject.intercept import Latency, RateLimit, ToolMutate
 
     def my_agent(message: str, history: list[dict]) -> str:
         # call your agent here — receives the current message and full history
@@ -48,7 +48,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Any
 
-from chaos_jungle.intercept import inject, Behavior
+from chaos_jungle.inject.intercept import inject, Behavior
 
 
 # ---------------------------------------------------------------------------
@@ -68,11 +68,11 @@ class Turn:
         and returns a string — useful for dynamic follow-up questions.
     chaos : list[Behavior], optional
         Fault behaviors to inject during THIS turn only.  The behaviors
-        are activated via :func:`~chaos_jungle.intercept.inject` for the
+        are activated via :func:`~chaos_jungle.inject.intercept.inject` for the
         duration of the turn's agent call, then automatically removed.
     chaos_after_n : int, optional
         Skip the first *n* LLM calls within this turn before activating
-        *chaos*.  Maps directly to ``after_n_calls`` in :func:`~chaos_jungle.intercept.inject`.
+        *chaos*.  Maps directly to ``after_n_calls`` in :func:`~chaos_jungle.inject.intercept.inject`.
         Default ``0`` = activate from the very first call.
     expected : str | None, optional
         Optional substring check on the turn response.  Used by
@@ -158,7 +158,7 @@ class ConversationScenario:
     """Run a multi-turn agent conversation with per-turn fault injection.
 
     Manages turn-by-turn conversation flow.  Each :class:`Turn` can
-    optionally inject its own set of :class:`~chaos_jungle.intercept.Behavior`
+    optionally inject its own set of :class:`~chaos_jungle.inject.intercept.Behavior`
     faults, scoped to that turn alone.
 
     Parameters

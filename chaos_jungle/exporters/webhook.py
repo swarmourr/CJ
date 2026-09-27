@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING
 from chaos_jungle.exporters.base import Exporter
 
 if TYPE_CHECKING:
-    from chaos_jungle.runner import MeasurementResult
+    from chaos_jungle.core.runner import MeasurementResult
 
 
 class WebhookExporter(Exporter):

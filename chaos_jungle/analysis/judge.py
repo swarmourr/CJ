@@ -9,7 +9,7 @@ Usage
 -----
 Standalone scoring::
 
-    from chaos_jungle.judge import LLMJudge
+    from chaos_jungle.analysis.judge import LLMJudge
 
     judge = LLMJudge(model="gpt-4o-mini")
     score = judge.score(
@@ -27,7 +27,7 @@ Integrated with ChaosRunner.measure()::
     from chaos_jungle import Scenario, ChaosRunner
     from chaos_jungle.faults.llm import SemanticCorrupt
     from chaos_jungle.targets import LocalTarget
-    from chaos_jungle.judge import LLMJudge
+    from chaos_jungle.analysis.judge import LLMJudge
 
     judge = LLMJudge(model="gpt-4o-mini")
 
@@ -75,12 +75,12 @@ class Evaluator(Protocol):
     --------
     Using the built-in judge::
 
-        from chaos_jungle.judge import LLMJudge
+        from chaos_jungle.analysis.judge import LLMJudge
         evaluator = LLMJudge(model="gpt-4o-mini")
 
     Wrapping a custom evaluator::
 
-        from chaos_jungle.judge import Evaluator, JudgeScore
+        from chaos_jungle.analysis.judge import Evaluator, JudgeScore
 
         class MyEval:
             def score(self, question: str, context: str = "", response: str = "") -> JudgeScore:
@@ -93,7 +93,7 @@ class Evaluator(Protocol):
     Wrapping DeepEval (example)::
 
         from deepeval.metrics import FaithfulnessMetric, HallucinationMetric
-        from chaos_jungle.judge import JudgeScore
+        from chaos_jungle.analysis.judge import JudgeScore
 
         class DeepEvalAdapter:
             def score(self, question, context="", response="") -> JudgeScore:

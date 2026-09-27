@@ -15,7 +15,7 @@ Works out of the box with:
 
 Usage::
 
-    from chaos_jungle.intercept import inject, Latency, RateLimit, Unavailable
+    from chaos_jungle.inject.intercept import inject, Latency, RateLimit, Unavailable
 
     with inject(Latency(3.0)):
         openai_client.chat.completions.create(...)   # affected
@@ -132,6 +132,35 @@ def _get_trace() -> "_TraceCtx | None":
 
 def _set_trace(ctx: "_TraceCtx | None") -> None:
     _trace_local.ctx = ctx
+
+
+# ── Lightweight metrics counter (used by inject(measure=True)) ────────────────
+
+class _MetricsCtx:
+    """Counts HTTP calls and errors for one inject() scope."""
+    __slots__ = ("_lock", "http_calls", "http_errors")
+
+    def __init__(self) -> None:
+        self._lock      = threading.Lock()
+        self.http_calls = 0
+        self.http_errors = 0
+
+    def record(self, status_code: int) -> None:
+        with self._lock:
+            self.http_calls += 1
+            if status_code == 0 or status_code >= 400:
+                self.http_errors += 1
+
+
+_metrics_local: threading.local = threading.local()
+
+
+def _get_metrics_ctx() -> "_MetricsCtx | None":
+    return getattr(_metrics_local, "ctx", None)
+
+
+def _set_metrics_ctx(ctx: "_MetricsCtx | None") -> None:
+    _metrics_local.ctx = ctx
 
 
 def _trace_record(
@@ -338,6 +367,10 @@ class Behavior:
 
     probability: float = 1.0
 
+    #: Metrics automatically collected when inject(measure=True) is used.
+    #: Subclasses declare which metrics are meaningful for this behavior.
+    default_metrics: list[str] = []
+
     def before(self, url: str) -> None:
         """
         Called before the request is sent.
@@ -398,6 +431,8 @@ class Latency(Behavior):
             client.chat.completions.create(...)
     """
 
+    default_metrics: list[str] = ["duration_s", "http_calls"]
+
     def __init__(self, seconds: float, probability: float = 1.0) -> None:
         self.seconds = seconds
         self.probability = probability
@@ -428,6 +463,8 @@ class Jitter(Behavior):
         with inject(Jitter(0.5, 4.0)):
             client.chat.completions.create(...)
     """
+
+    default_metrics: list[str] = ["duration_s", "http_calls"]
 
     def __init__(self, min_s: float, max_s: float, probability: float = 1.0) -> None:
         self.min_s = min_s
@@ -465,6 +502,8 @@ class RateLimit(Behavior):
             for _ in range(10):
                 client.chat.completions.create(...)
     """
+
+    default_metrics: list[str] = ["http_calls", "http_errors"]
 
     def __init__(self, after_n: int = 0, retry_after_s: int = 60, probability: float = 1.0) -> None:
         self.after_n = after_n
@@ -530,6 +569,8 @@ class Unavailable(Behavior):
             result = agent.run("question")
     """
 
+    default_metrics: list[str] = ["http_errors"]
+
     def __init__(self, probability: float = 1.0) -> None:
         self.probability = probability
 
@@ -571,6 +612,8 @@ class Timeout(Behavior):
         with inject(Timeout(probability=0.15)):
             client.chat.completions.create(...)
     """
+
+    default_metrics: list[str] = ["http_errors"]
 
     def __init__(self, probability: float = 1.0) -> None:
         self.probability = probability
@@ -616,6 +659,8 @@ class CorruptResponse(Behavior):
         with inject(CorruptResponse(probability=0.05)):
             reply = client.chat.completions.create(...)
     """
+
+    default_metrics: list[str] = ["http_calls", "http_errors"]
 
     def __init__(self, probability: float = 1.0) -> None:
         self.probability = probability
@@ -697,6 +742,8 @@ class ToolMutate(Behavior):
     """
 
     MODES = ("garble", "empty", "null", "wrong_type")
+
+    default_metrics: list[str] = ["http_calls"]
 
     def __init__(
         self,
@@ -805,6 +852,8 @@ class PromptInjection(Behavior):
     """
 
     TARGETS = ("user", "system", "all")
+
+    default_metrics: list[str] = ["http_calls"]
 
     def __init__(
         self,
@@ -932,15 +981,23 @@ def _run(
     tracing     = _get_trace() is not None
 
     if not layer_pairs:
-        if not tracing:
+        _mctx0 = _get_metrics_ctx()
+        if not tracing and _mctx0 is None:
             return call_factory(request)()
         t0 = time.time()
         try:
             resp = call_factory(request)()
-            _trace_record(url, request, resp, time.time() - t0)
+            lat  = time.time() - t0
+            if _mctx0 is not None:
+                _mctx0.record(getattr(resp, "status_code", 200))
+            if tracing:
+                _trace_record(url, request, resp, lat)
             return resp
         except Exception:
-            _trace_record(url, request, None, time.time() - t0, was_blocked=True)
+            if _mctx0 is not None:
+                _mctx0.record(0)
+            if tracing:
+                _trace_record(url, request, None, time.time() - t0, was_blocked=True)
             raise
 
     # ── Filter by call count / model / tool ────────────────────────────────
@@ -973,6 +1030,9 @@ def _run(
             for b in layer:
                 response = b.after(url, response)
 
+        _mctx1 = _get_metrics_ctx()
+        if _mctx1 is not None:
+            _mctx1.record(getattr(response, "status_code", 200))
         if tracing:
             final_status = getattr(response, "status_code", 200)
             _trace_record(
@@ -982,6 +1042,9 @@ def _run(
             )
         return response
     except Exception:
+        _mctx1 = _get_metrics_ctx()
+        if _mctx1 is not None:
+            _mctx1.record(0)
         if tracing:
             _trace_record(url, request, None, time.time() - t0, was_blocked=True)
         raise
@@ -997,15 +1060,23 @@ async def _run_async(
     tracing     = _get_trace() is not None
 
     if not layer_pairs:
-        if not tracing:
+        _mctx0 = _get_metrics_ctx()
+        if not tracing and _mctx0 is None:
             return await coro_factory(request)
         t0 = time.time()
         try:
             resp = await coro_factory(request)
-            _trace_record(url, request, resp, time.time() - t0)
+            lat  = time.time() - t0
+            if _mctx0 is not None:
+                _mctx0.record(getattr(resp, "status_code", 200))
+            if tracing:
+                _trace_record(url, request, resp, lat)
             return resp
         except Exception:
-            _trace_record(url, request, None, time.time() - t0, was_blocked=True)
+            if _mctx0 is not None:
+                _mctx0.record(0)
+            if tracing:
+                _trace_record(url, request, None, time.time() - t0, was_blocked=True)
             raise
 
     req_model, req_tool = "", ""
@@ -1034,6 +1105,9 @@ async def _run_async(
             for b in layer:
                 response = b.after(url, response)
 
+        _mctx1 = _get_metrics_ctx()
+        if _mctx1 is not None:
+            _mctx1.record(getattr(response, "status_code", 200))
         if tracing:
             final_status = getattr(response, "status_code", 200)
             _trace_record(
@@ -1043,6 +1117,9 @@ async def _run_async(
             )
         return response
     except Exception:
+        _mctx1 = _get_metrics_ctx()
+        if _mctx1 is not None:
+            _mctx1.record(0)
         if tracing:
             _trace_record(url, request, None, time.time() - t0, was_blocked=True)
         raise
@@ -1100,6 +1177,57 @@ def _unpatch() -> None:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+class InjectResult:
+    """Measurements collected by ``inject(measure=True)``.
+
+    Attributes
+    ----------
+    duration_s : float
+        Wall-clock seconds the ``with inject(...)`` block ran for.
+    http_calls : int
+        Number of intercepted HTTP requests made inside the block.
+    http_errors : int
+        Number of requests that received a 4xx/5xx response or raised
+        an exception (connection error, timeout, etc.).
+    memory_mb : float or None
+        RSS memory delta in MiB (requires ``psutil``).  ``None`` if not
+        collected or ``psutil`` is unavailable.
+    cpu_percent : float or None
+        CPU usage % sampled at the end of the block (requires ``psutil``).
+        ``None`` if not collected.
+
+    Examples
+    --------
+    ::
+
+        with inject(RateLimit(after_n=2), measure=True) as m:
+            agent.run("Book a flight")
+
+        print(m.duration_s, m.http_calls, m.http_errors)
+    """
+
+    __slots__ = ("duration_s", "http_calls", "http_errors", "memory_mb", "cpu_percent")
+
+    def __init__(self) -> None:
+        self.duration_s:  float        = 0.0
+        self.http_calls:  int          = 0
+        self.http_errors: int          = 0
+        self.memory_mb:   float | None = None
+        self.cpu_percent: float | None = None
+
+    def __repr__(self) -> str:
+        parts = [f"duration_s={self.duration_s}"]
+        if self.http_calls:
+            parts.append(f"http_calls={self.http_calls}")
+        if self.http_errors:
+            parts.append(f"http_errors={self.http_errors}")
+        if self.memory_mb is not None:
+            parts.append(f"memory_mb={self.memory_mb}")
+        if self.cpu_percent is not None:
+            parts.append(f"cpu_percent={self.cpu_percent}")
+        return f"InjectResult({', '.join(parts)})"
+
+
 @contextmanager
 def inject(
     *behaviors: Behavior,
@@ -1110,7 +1238,8 @@ def inject(
     after_n_calls: int = 0,
     only_model: str = "",
     only_tool: str = "",
-) -> Generator[None, None, None]:
+    measure: "bool | list[str]" = False,
+) -> "Generator[InjectResult | None, None, None]":
     """
     Context manager that injects HTTP-level faults into all LLM SDK calls.
 
@@ -1143,7 +1272,7 @@ def inject(
     --------
     Single fault::
 
-        from chaos_jungle.intercept import inject, Latency
+        from chaos_jungle.inject.intercept import inject, Latency
 
         with inject(Latency(3.0)):
             openai_client.chat.completions.create(...)
@@ -1178,9 +1307,37 @@ def inject(
         if (after_n_calls or only_model or only_tool)
         else None
     )
+
+    # ── Resolve active metrics ──────────────────────────────────────────────
+    _active: list[str] | None = None
+    _mctx:   _MetricsCtx | None = None
+    if measure is not False:
+        if isinstance(measure, list):
+            _active = list(measure)
+        else:
+            _seen_m: set[str] = set()
+            _active = []
+            for _b in behaviors:
+                for _m in getattr(_b, "default_metrics", []):
+                    if _m not in _seen_m:
+                        _seen_m.add(_m)
+                        _active.append(_m)
+        _mctx = _MetricsCtx()
+
+    result = InjectResult() if _active is not None else None
+    _t0    = time.time() if _active is not None else 0.0
+    _mem_before: float | None = None
+    if _active and "memory_mb" in _active:
+        try:
+            import psutil as _psu
+            _mem_before = _psu.Process().memory_info().rss / 1_048_576
+        except Exception:
+            pass
+
     _patch()
     _Stack.push(list(behaviors), patterns, call_filter)
     old_trace = _get_trace()
+    old_mctx  = _get_metrics_ctx()
     if session_id is not None:
         from chaos_jungle.db.session_db import _DEFAULT_DB
         _set_trace(_TraceCtx(
@@ -1188,12 +1345,36 @@ def inject(
             session_id=session_id,
             phase=phase,
         ))
+    if _mctx is not None:
+        _set_metrics_ctx(_mctx)
     try:
-        yield
+        yield result
     finally:
         _Stack.pop()
         _unpatch()
         _set_trace(old_trace)
+        _set_metrics_ctx(old_mctx)
+        if result is not None and _mctx is not None and _active is not None:
+            if "duration_s" in _active:
+                result.duration_s = round(time.time() - _t0, 4)
+            if "http_calls" in _active:
+                result.http_calls = _mctx.http_calls
+            if "http_errors" in _active:
+                result.http_errors = _mctx.http_errors
+            if "memory_mb" in _active and _mem_before is not None:
+                try:
+                    import psutil as _psu
+                    result.memory_mb = round(
+                        _psu.Process().memory_info().rss / 1_048_576 - _mem_before, 1
+                    )
+                except Exception:
+                    pass
+            if "cpu_percent" in _active:
+                try:
+                    import psutil as _psu
+                    result.cpu_percent = _psu.cpu_percent()
+                except Exception:
+                    pass
 
 
 def door(
@@ -1249,7 +1430,7 @@ def door(
     --------
     Pure timing (no workload)::
 
-        from chaos_jungle.intercept import door, Latency
+        from chaos_jungle.inject.intercept import door, Latency
 
         door(Latency(3.0), fault_duration=30, rest_duration=30, cycles=5)
 
@@ -1347,6 +1528,8 @@ class Unauthorized(Behavior):
                 client.chat.completions.create(...)
     """
 
+    default_metrics: list[str] = ["http_errors"]
+
     def __init__(
         self,
         after_n: int = 0,
@@ -1409,6 +1592,8 @@ class Forbidden(Behavior):
             client.chat.completions.create(...)
     """
 
+    default_metrics: list[str] = ["http_errors"]
+
     def __init__(
         self,
         response_delay_s: float = 0.1,
@@ -1466,6 +1651,8 @@ class AuthExpiry(Behavior):
                 client.chat.completions.create(...)   # calls 6-10 get 401
     """
 
+    default_metrics: list[str] = ["http_calls", "http_errors"]
+
     def __init__(
         self,
         valid_calls: int = 5,
@@ -1509,6 +1696,7 @@ class AuthExpiry(Behavior):
 
 __all__ = [
     "inject",
+    "InjectResult",
     "door",
     "DEFAULT_LLM_HOSTS",
     "Behavior",

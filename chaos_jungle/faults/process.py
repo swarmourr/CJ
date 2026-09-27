@@ -1,5 +1,6 @@
 """Process, service, and container fault implementations.
 
+
 These faults operate at the OS/runtime layer — killing processes,
 stopping/crashing systemd services, and killing Docker containers.
 All require an SSHTarget (or a LocalTarget with appropriate permissions).
@@ -12,9 +13,10 @@ ContainerKill   — kill, stop, pause, or remove a Docker container
 """
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
-from chaos_jungle.faults.base import Fault
+from chaos_jungle.faults.base import Fault, VerificationResult
 
 if TYPE_CHECKING:
     from chaos_jungle.targets.base import Target
@@ -73,6 +75,32 @@ class ProcessKill(Fault):
 
     def revert(self, target: "Target") -> None:
         pass
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        """Verify the target process is no longer running (kill succeeded)."""
+        code, stdout, _ = target.run(
+            f"pgrep -f '{self.pattern}' 2>/dev/null || true"
+        )
+        pids = [p.strip() for p in stdout.splitlines() if p.strip()]
+        process_gone = len(pids) == 0
+        return VerificationResult(
+            verified=process_gone,
+            reason=(
+                f"Process matching {self.pattern!r} is gone"
+                if process_gone
+                else f"Process still running: PIDs {pids}"
+            ),
+            observed={"remaining_pids": pids},
+            timestamp_s=time.time(),
+        )
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        """ProcessKill is irreversible — recovery means accepting the process is gone."""
+        return VerificationResult(
+            verified=True,
+            reason="ProcessKill is irreversible — no automatic recovery expected",
+            timestamp_s=time.time(),
+        )
 
     def _parameters(self) -> dict:
         return {
@@ -136,6 +164,52 @@ class ServiceFault(Fault):
     def revert(self, target: "Target") -> None:
         self.stop(target)
 
+    def verify_active(self, target: "Target") -> VerificationResult:
+        """Verify the service is in the expected fault state."""
+        code, stdout, _ = target.run(
+            f"systemctl is-active {self.service} 2>/dev/null || true"
+        )
+        current_state = stdout.strip()
+        if self.action in ("stop", "kill", "mask"):
+            # Fault is active when service is NOT running
+            is_down = current_state not in ("active", "activating")
+            return VerificationResult(
+                verified=is_down,
+                reason=f"{self.service!r} state={current_state!r} "
+                       f"({'down as expected' if is_down else 'still running'})",
+                observed={"state": current_state},
+                timestamp_s=time.time(),
+            )
+        # action=restart: always transient; consider active=ok
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.service!r} restart action applied, state={current_state!r}",
+            observed={"state": current_state},
+            timestamp_s=time.time(),
+        )
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        """Verify the service has been restored to its pre-fault state."""
+        code, stdout, _ = target.run(
+            f"systemctl is-active {self.service} 2>/dev/null || true"
+        )
+        current_state = stdout.strip()
+        if self._was_active:
+            recovered = current_state == "active"
+            return VerificationResult(
+                verified=recovered,
+                reason=f"{self.service!r} is {'active (recovered)' if recovered else f'not active: {current_state!r}'}",
+                observed={"state": current_state},
+                timestamp_s=time.time(),
+            )
+        # Service was not active before — anything is acceptable
+        return VerificationResult(
+            verified=True,
+            reason=f"{self.service!r} was not active before fault; current={current_state!r}",
+            observed={"state": current_state},
+            timestamp_s=time.time(),
+        )
+
     def _parameters(self) -> dict:
         return {
             "service":    self.service,
@@ -198,6 +272,73 @@ class ContainerKill(Fault):
 
     def revert(self, target: "Target") -> None:
         self.stop(target)
+
+    def verify_active(self, target: "Target") -> VerificationResult:
+        """Verify the container is in the fault state."""
+        _, out, _ = target.run(
+            f"docker inspect --format='{{{{.State.Status}}}}' {self.container} 2>/dev/null || echo missing"
+        )
+        status = out.strip().strip("'\"")
+        if self.action == "kill":
+            expected_down = status in ("exited", "dead", "missing")
+            return VerificationResult(
+                verified=expected_down,
+                reason=f"Container {self.container!r} status={status!r}",
+                observed={"status": status},
+                timestamp_s=time.time(),
+            )
+        if self.action == "stop":
+            expected_down = status in ("exited", "missing")
+            return VerificationResult(
+                verified=expected_down,
+                reason=f"Container {self.container!r} status={status!r}",
+                observed={"status": status},
+                timestamp_s=time.time(),
+            )
+        if self.action == "pause":
+            paused = status == "paused"
+            return VerificationResult(
+                verified=paused,
+                reason=f"Container {self.container!r} status={status!r}",
+                observed={"status": status},
+                timestamp_s=time.time(),
+            )
+        if self.action == "rm":
+            gone = status == "missing"
+            return VerificationResult(
+                verified=gone,
+                reason=f"Container {self.container!r} {'removed' if gone else f'still present: {status!r}'}",
+                observed={"status": status},
+                timestamp_s=time.time(),
+            )
+        return VerificationResult(verified=True, reason="Unknown action", timestamp_s=time.time())
+
+    def verify_recovered(self, target: "Target") -> VerificationResult:
+        """Verify the container has been restored."""
+        if self.action == "rm":
+            return VerificationResult(
+                verified=True,
+                reason="ContainerKill rm is irreversible — no automatic recovery",
+                timestamp_s=time.time(),
+            )
+        _, out, _ = target.run(
+            f"docker inspect --format='{{{{.State.Status}}}}' {self.container} 2>/dev/null || echo missing"
+        )
+        status = out.strip().strip("'\"")
+        if self._was_running:
+            recovered = status == "running"
+            return VerificationResult(
+                verified=recovered,
+                reason=f"Container {self.container!r} is {'running (recovered)' if recovered else f'{status!r}'}",
+                observed={"status": status},
+                timestamp_s=time.time(),
+            )
+        return VerificationResult(
+            verified=True,
+            reason=f"Container was not running before; current={status!r}",
+            observed={"status": status},
+            timestamp_s=time.time(),
+        )
 
     def _parameters(self) -> dict:
         return {

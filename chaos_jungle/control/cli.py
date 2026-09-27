@@ -68,8 +68,8 @@ def start(scenario, target, delay, jitter, loss, corrupt, duplicate,
     from chaos_jungle.faults.storage import StorageCorrupt
     from chaos_jungle.faults.bpf import SilentNetworkCorrupt
     from chaos_jungle.faults.base import PreflightError
-    from chaos_jungle.runner import ChaosRunner
-    from chaos_jungle.scenario import Scenario
+    from chaos_jungle.core.runner import ChaosRunner
+    from chaos_jungle.core.scenario import Scenario
 
     faults = []
     if delay:
@@ -119,7 +119,7 @@ def start(scenario, target, delay, jitter, loss, corrupt, duplicate,
 @click.option("--target", "-t", default="", help="Target (must match where chaos was started)")
 def stop(session, target):
     """Stop and revert the active chaos session."""
-    from chaos_jungle.runner import ChaosRunner
+    from chaos_jungle.core.runner import ChaosRunner
 
     db = SessionDB()
     if session:
@@ -446,7 +446,7 @@ def fetch(target, output_dir, remote_dir, files, glob_patterns, export_csv):
       # fetch without auto-exporting to CSV
       chaos-jungle fetch --target ssh://ubuntu@10.0.0.5 --no-export-csv
     """
-    from chaos_jungle.fetch import fetch as _fetch
+    from chaos_jungle.inject.fetch import fetch as _fetch
 
     file_list = [f.strip() for f in files.split(",") if f.strip()]
     pattern_list = [p.strip() for p in glob_patterns.split(",") if p.strip()]
@@ -505,7 +505,7 @@ def suite(config, parallel, max_workers):
                 delay: 100ms
     """
     from chaos_jungle.config import load_suite
-    from chaos_jungle.suite import ExperimentSuite
+    from chaos_jungle.core.suite import ExperimentSuite
 
     try:
         exp_suite = load_suite(config)
@@ -538,7 +538,7 @@ def scenarios_group():
 @click.option("--json", "as_json", is_flag=True, default=False, help="Output as JSON")
 def scenarios_list(status, type_, as_json):
     """List all scenarios in the local registry."""
-    from chaos_jungle.registry import ScenarioRegistry
+    from chaos_jungle.control.registry import ScenarioRegistry
 
     entries = ScenarioRegistry().list(
         status=status or None,
@@ -565,7 +565,7 @@ def scenarios_list(status, type_, as_json):
 @click.option("--json", "as_json", is_flag=True, default=False, help="Output as JSON")
 def scenarios_status(scenario_id, target, as_json):
     """Check status of a scenario (local or remote)."""
-    from chaos_jungle.registry import ScenarioRegistry
+    from chaos_jungle.control.registry import ScenarioRegistry
 
     if target:
         tgt = _make_target(target)
@@ -606,7 +606,7 @@ def scenarios_watch(scenario_ids, target, interval, timeout):
       chaos-jungle scenarios watch abc123 --target ssh://ubuntu@10.0.0.5
     """
     import time
-    from chaos_jungle.registry import ScenarioRegistry
+    from chaos_jungle.control.registry import ScenarioRegistry
 
     tgt = _make_target(target) if target else None
     registry = ScenarioRegistry()
@@ -647,7 +647,7 @@ def scenarios_watch(scenario_ids, target, interval, timeout):
 @click.option("--port", default=8050, help="Port. Default: 8050")
 def dashboard(host, port):
     """Open the experiment tracking dashboard in your browser."""
-    from chaos_jungle.dashboard import run as dash_run
+    from chaos_jungle.control.dashboard import run as dash_run
     import webbrowser, threading
     url = f"http://{host}:{port}"
     threading.Timer(1.2, lambda: webbrowser.open(url)).start()
@@ -663,6 +663,6 @@ def dashboard(host, port):
 @click.option("--token", default="", help="Bearer token for auth (optional)")
 def daemon(host, port, token):
     """Start the chaos daemon on this machine (for HTTP target mode)."""
-    from chaos_jungle.daemon import run as daemon_run
+    from chaos_jungle.control.daemon import run as daemon_run
     click.echo(f"[chaos-jungle] Starting daemon on {host}:{port}")
     daemon_run(host=host, port=port, token=token)

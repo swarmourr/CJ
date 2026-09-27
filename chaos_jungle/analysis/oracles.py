@@ -7,7 +7,7 @@ regardless of the fault.
 
 Usage — pass oracles to :meth:`ChaosRunner.measure`::
 
-    from chaos_jungle.oracles import (
+    from chaos_jungle.analysis.oracles import (
         NoSecretLeakage, NoPIILeakage, ValidJSONSchema,
         MaxCost, MaxRetries, NoPromptInjectionFollowed, MaxAgentSteps,
     )
@@ -34,7 +34,7 @@ Usage — pass oracles to :meth:`ChaosRunner.measure`::
 
 Oracles vs quality scores
 -------------------------
-:class:`~chaos_jungle.judge.LLMJudge` gives *continuous* quality scores
+:class:`~chaos_jungle.analysis.judge.LLMJudge` gives *continuous* quality scores
 (faithfulness, hallucination) using a second model.  Oracles give *binary*
 pass/fail assertions that do not require an LLM call — regex patterns, JSON
 schema validation, token budget checks, etc.  Both can be used together.
@@ -43,7 +43,7 @@ Writing a custom oracle
 -----------------------
 Subclass :class:`Oracle` and implement :meth:`check`::
 
-    from chaos_jungle.oracles import Oracle, OracleResult
+    from chaos_jungle.analysis.oracles import Oracle, OracleResult
 
     class RequiredCitation(Oracle):
         name = "RequiredCitation"

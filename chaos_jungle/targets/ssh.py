@@ -10,7 +10,7 @@ import paramiko
 from chaos_jungle.targets.base import Target
 
 if TYPE_CHECKING:
-    from chaos_jungle.scenario import Scenario
+    from chaos_jungle.core.scenario import Scenario
 
 
 class SSHTarget(Target):
@@ -84,7 +84,28 @@ class SSHTarget(Target):
         password: str | None = None,
         allow_agent: bool = True,
         look_for_keys: bool = True,
+        host_key_verify: str = "strict",
+        known_hosts_file: str | None = None,
     ) -> None:
+        """
+        Parameters
+        ----------
+        host_key_verify : str
+            Host key policy. One of:
+
+            * ``"strict"`` (default) — load ``~/.ssh/known_hosts`` and reject
+              unknown hosts. This is the same behavior as the OpenSSH client.
+              Add the target to your known_hosts file before using CJ, or pass
+              ``known_hosts_file`` to a custom file.
+            * ``"warn"`` — warn when the host key is unknown but connect anyway.
+              Suitable for controlled lab environments.
+            * ``"auto_add"`` — silently accept and cache any host key.
+              **Insecure.** Only use in isolated test environments.
+
+        known_hosts_file : str, optional
+            Path to a known_hosts file to use instead of ``~/.ssh/known_hosts``.
+            Only effective when ``host_key_verify="strict"``.
+        """
         if not host or not host.strip():
             raise ValueError(
                 "SSHTarget requires 'host' — hostname or IP of the target machine.\n"
@@ -105,6 +126,11 @@ class SSHTarget(Target):
                 f"  Fix A: check the path\n"
                 f"  Fix B: omit 'key' to use ssh-agent or default ~/.ssh/ keys"
             )
+        if host_key_verify not in ("strict", "warn", "auto_add"):
+            raise ValueError(
+                f"SSHTarget 'host_key_verify' must be 'strict', 'warn', or 'auto_add', "
+                f"got {host_key_verify!r}."
+            )
         self.host = host.strip()
         self.user = user.strip()
         self.key = os.path.expanduser(key) if key else None
@@ -113,11 +139,31 @@ class SSHTarget(Target):
         self.password = password
         self.allow_agent = allow_agent
         self.look_for_keys = look_for_keys
+        self.host_key_verify = host_key_verify
+        self.known_hosts_file = known_hosts_file
         self._client: paramiko.SSHClient | None = None
 
     def connect(self) -> None:
         self._client = paramiko.SSHClient()
-        self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        # Apply host key verification policy
+        if self.host_key_verify == "strict":
+            self._client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            # Load the known_hosts file so legitimate hosts are accepted
+            khf = self.known_hosts_file or os.path.expanduser("~/.ssh/known_hosts")
+            if os.path.isfile(khf):
+                self._client.load_host_keys(khf)
+            # Also load system-level known_hosts if available
+            system_khf = "/etc/ssh/ssh_known_hosts"
+            if os.path.isfile(system_khf):
+                try:
+                    self._client.load_system_host_keys(system_khf)
+                except Exception:
+                    pass
+        elif self.host_key_verify == "warn":
+            self._client.set_missing_host_key_policy(paramiko.WarningPolicy())
+        else:  # "auto_add" — explicitly requested by the caller, documented as insecure
+            self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         # Only pass key_filename if the file actually exists
         key_filename = None
@@ -182,7 +228,7 @@ class SSHTarget(Target):
         str
             The scenario UUID (same on both sides).
         """
-        from chaos_jungle.registry import ScenarioRegistry
+        from chaos_jungle.control.registry import ScenarioRegistry
 
         # Register locally as type=ssh (we sent it to a remote)
         local_registry = ScenarioRegistry()
@@ -194,8 +240,8 @@ class SSHTarget(Target):
         rc, out, err = self.run(
             f"python3 -c \""
             f"import json, sys; "
-            f"from chaos_jungle.scenario import Scenario; "
-            f"from chaos_jungle.registry import ScenarioRegistry; "
+            f"from chaos_jungle.core.scenario import Scenario; "
+            f"from chaos_jungle.control.registry import ScenarioRegistry; "
             f"d = json.loads(sys.argv[1]); "
             f"s = Scenario.from_dict(d); "
             f"ScenarioRegistry().register(s, type='local', source_ip=sys.argv[2])"
@@ -212,7 +258,7 @@ class SSHTarget(Target):
 
         The SSH exec channel returns immediately after the remote process
         is started in the background.  Use :meth:`scenario_status` or
-        :class:`~chaos_jungle.registry.ScenarioRegistry` to poll for
+        :class:`~chaos_jungle.control.registry.ScenarioRegistry` to poll for
         completion.
 
         Parameters
@@ -248,7 +294,7 @@ class SSHTarget(Target):
         rc, out, _ = self.run(
             f"python3 -c \""
             f"import json; "
-            f"from chaos_jungle.registry import ScenarioRegistry; "
+            f"from chaos_jungle.control.registry import ScenarioRegistry; "
             f"e = ScenarioRegistry().get('{scenario_id}'); "
             f"print(json.dumps(e))"
             f"\""
