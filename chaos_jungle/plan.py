@@ -200,6 +200,56 @@ class FaultLifecycleRecord:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class InjectionMemberSpec:
+    """One member inside an InjectionGroupSpec."""
+    id: str
+    target: TargetSpec = field(default_factory=TargetSpec)
+    fault: FaultSpec = field(default_factory=lambda: FaultSpec(fault_class=""))
+
+
+@dataclass
+class InjectionGroupSpec:
+    """IR for a coordinated multi-target fault group (kind: InjectionGroup)."""
+    name: str
+    injections: list[InjectionMemberSpec] = field(default_factory=list)
+    synchronization: str = "scheduled"       # best_effort | barrier | scheduled
+    atomic: bool = True
+    maximum_skew_ms: float = 100.0
+    start_after: float = 5.0
+    require_all_ready: bool = True
+    on_prepare_failure: str = "cancel"       # cancel | best_effort
+    on_activation_failure: str = "rollback_all"  # rollback_all | continue
+    on_skew_violation: str = "mark_invalid"  # rollback_all | mark_invalid | continue
+    safety_maximum_duration: float = 90.0
+    watchdog: bool = True
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "synchronization": self.synchronization,
+            "atomic": self.atomic,
+            "maximum_skew_ms": self.maximum_skew_ms,
+            "start_after": self.start_after,
+            "require_all_ready": self.require_all_ready,
+            "on_prepare_failure": self.on_prepare_failure,
+            "on_activation_failure": self.on_activation_failure,
+            "on_skew_violation": self.on_skew_violation,
+            "safety_maximum_duration": self.safety_maximum_duration,
+            "watchdog": self.watchdog,
+            "injections": [
+                {
+                    "id": m.id,
+                    "target": {"kind": m.target.kind, "host": m.target.host,
+                               "user": m.target.user, "port": m.target.port},
+                    "fault": {"fault_class": m.fault.fault_class,
+                              "parameters": m.fault.parameters},
+                }
+                for m in self.injections
+            ],
+        }
+
+
+@dataclass
 class ExperimentPlan:
     """Canonical intermediate representation for one CJ experiment.
 
@@ -219,6 +269,7 @@ class ExperimentPlan:
     observations: ObservationSpec = field(default_factory=ObservationSpec)
     safety: SafetySpec = field(default_factory=SafetySpec)
     cleanup: CleanupSpec = field(default_factory=CleanupSpec)
+    groups: list[InjectionGroupSpec] = field(default_factory=list)
 
     # Metadata
     schema_version: str = SCHEMA_VERSION
@@ -333,6 +384,7 @@ class ExperimentPlan:
             "plan_hash": self.plan_hash,
             "cj_version": self.cj_version,
             "git_commit": self.git_commit,
+            "groups": [g.to_dict() for g in self.groups],
         }
         return d
 

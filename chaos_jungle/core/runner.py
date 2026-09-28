@@ -616,6 +616,9 @@ class ChaosRunner:
             pass
         self._shared_llm_env_var: str | None = None
         self._shared_llm_saved_env: str | None = None
+        # InjectionGroup runners started alongside this scenario
+        self._group_runners: list = []
+        self._group_evidence: list = []
 
     # ── Plan compilation ──────────────────────────────────────────
 
@@ -901,6 +904,27 @@ class ChaosRunner:
             )
             self._resource_thread.start()
 
+        # Start injection groups (multi-target coordinated injection)
+        self._group_runners = []
+        for group in getattr(self.scenario, "groups", []):
+            from chaos_jungle.inject.group import InjectionGroupRunner as _IGR
+            gr = _IGR(group)
+            try:
+                print(f"[chaos-jungle] Starting InjectionGroup {group.name!r}  "
+                      f"(mode={group.synchronization}  members={len(group.injections)})")
+                gr.start()
+                self._group_runners.append(gr)
+            except RuntimeError as _grp_exc:
+                for _started in self._group_runners:
+                    try:
+                        _started.stop()
+                    except Exception:
+                        pass
+                self._rollback(logged)
+                raise RuntimeError(
+                    f"InjectionGroup {group.name!r} failed to activate: {_grp_exc}"
+                ) from _grp_exc
+
         self.db.update_session_status(self._session_id, "active")
         print(f"[chaos-jungle] Chaos ON  — scenario '{self.scenario.name}'  "
               f"(session id: {self._session_id})")
@@ -1131,6 +1155,16 @@ class ChaosRunner:
         logged = LoggingTarget(self.target, self.db, self._session_id)
         errors: list[Exception] = []
         reverted_count = 0
+
+        # ── Revert injection groups (reverse order, before individual faults) ──
+        for gr in reversed(self._group_runners):
+            try:
+                ev = gr.stop()
+                self._group_evidence.append(ev)
+            except Exception as exc:
+                errors.append(exc)
+                print(f"[chaos-jungle] ERROR reverting InjectionGroup: {exc}")
+        self._group_runners = []
 
         # ── Phase 1: stop + revert all faults ────────────────────────────────
         # Collect faults that completed phase 1 successfully for phase 2.

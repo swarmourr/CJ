@@ -15,6 +15,7 @@ class MemberEvidence:
     active_at: datetime | None = None
     reverted_at: datetime | None = None
     clock_offset_ms: float | None = None
+    manifested: bool | None = None
     error: str | None = None
 
     def to_dict(self) -> dict:
@@ -28,6 +29,7 @@ class MemberEvidence:
             "active_at": _fmt(self.active_at),
             "reverted_at": _fmt(self.reverted_at),
             "clock_offset_ms": self.clock_offset_ms,
+            "manifested": self.manifested,
             "error": self.error,
         }
 
@@ -52,6 +54,31 @@ class GroupActivationEvidence:
     synchronization_valid: bool | None = None
     strict_skew: bool = True
     verdict: str = "pending"
+
+    @property
+    def group_valid(self) -> bool:
+        """Evaluate the compound group validity formula.
+
+        .. math::
+
+            Valid(G) = Ready(G) \\land Skew(G) \\leq \\varepsilon
+                       \\land \\bigwedge_{i=1}^{n} Manifested(F_i)
+
+        ``Manifested(F_i)`` is ``True`` or ``None`` (unknown, treated as
+        valid for the formula).  A value of ``False`` fails the gate.
+
+        Returns ``False`` if the verdict is ``cancelled`` or
+        ``recovery_invalid``, even if skew and manifestation would pass.
+        """
+        if self.verdict in {"cancelled", "recovery_invalid", "pending"}:
+            return False
+        # Ready(G): no member failed during prepare
+        ready = all(m.error is None for m in self.members)
+        # Skew(G) ≤ ε: synchronization_valid is True or None (unset = unknown = ok)
+        skew_ok = self.synchronization_valid is not False
+        # ∧ Manifested(F_i): manifested is True or None for each member
+        manifested_ok = all(m.manifested is not False for m in self.members)
+        return ready and skew_ok and manifested_ok
 
     def compute_skew(self) -> float | None:
         """Return observed activation skew in milliseconds, or None."""
@@ -110,6 +137,7 @@ class GroupActivationEvidence:
                 active_at=_parse_dt(m.get("active_at")),
                 reverted_at=_parse_dt(m.get("reverted_at")),
                 clock_offset_ms=m.get("clock_offset_ms"),
+                manifested=m.get("manifested"),
                 error=m.get("error"),
             )
             for m in d.get("members", [])

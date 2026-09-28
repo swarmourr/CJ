@@ -384,9 +384,9 @@ class ConfigLoader:
         kind = data.get("kind", "")
         if api and api != "cj.io/v1":
             errors.append(f"apiVersion must be 'cj.io/v1', got {api!r}")
-        if kind and kind not in {"ExperimentSuite", "Experiment", "DistributedScenario"}:
+        if kind and kind not in {"ExperimentSuite", "Experiment", "DistributedScenario", "InjectionGroup"}:
             errors.append(
-                f"kind must be 'ExperimentSuite', 'Experiment', or 'DistributedScenario', got {kind!r}"
+                f"kind must be 'ExperimentSuite', 'Experiment', 'DistributedScenario', or 'InjectionGroup', got {kind!r}"
             )
 
         # conflict policy
@@ -454,6 +454,8 @@ class ConfigLoader:
 
         if data.get("kind") == "DistributedScenario":
             return cls.validate_distributed_dict(data, path=path)
+        if data.get("kind") == "InjectionGroup":
+            return cls.validate_injection_group_dict(data, path=path)
         return cls.validate_suite_dict(data, path=path)
 
     _DISTRIBUTED_KNOWN_KEYS = frozenset({
@@ -469,6 +471,15 @@ class ConfigLoader:
         "prepare", "activation_failure", "recovery_failure",
     })
     _INJECTION_KNOWN_KEYS = frozenset({"id", "target", "fault"})
+
+    _INJECTION_GROUP_KNOWN_KEYS = frozenset({
+        "apiVersion", "kind", "metadata",
+        "name", "synchronization", "atomic", "maximum_skew_ms", "start_after",
+        "require_all_ready", "on_prepare_failure", "on_activation_failure",
+        "on_skew_violation", "safety_maximum_duration", "watchdog",
+        "injections",
+    })
+    _INJECTION_GROUP_INJECTION_KNOWN_KEYS = frozenset({"id", "target", "fault"})
 
     @classmethod
     def validate_distributed_dict(cls, data: dict, path: str = "<yaml>") -> list[str]:
@@ -533,6 +544,132 @@ class ConfigLoader:
                 errors.append(f"{prefix}: unknown keys {sorted(unknown_inj)}")
 
         return errors
+
+    @classmethod
+    def validate_injection_group_dict(cls, data: dict, path: str = "<yaml>") -> list[str]:
+        """Validate a ``kind: InjectionGroup`` YAML dict; return list of error strings."""
+        cls._register_faults()
+        errors: list[str] = []
+
+        unknown = set(data) - cls._INJECTION_GROUP_KNOWN_KEYS
+        if unknown:
+            errors.append(f"Unknown top-level keys: {sorted(unknown)}")
+
+        api = data.get("apiVersion", "")
+        if api and api != "cj.io/v1":
+            errors.append(f"apiVersion must be 'cj.io/v1', got {api!r}")
+
+        name = data.get("name") or (data.get("metadata") or {}).get("name")
+        if not name:
+            errors.append("'name' (or metadata.name) is required")
+
+        sync = data.get("synchronization", "scheduled")
+        if isinstance(sync, str) and sync not in {"best_effort", "barrier", "scheduled"}:
+            errors.append(
+                f"synchronization must be best_effort|barrier|scheduled, got {sync!r}"
+            )
+
+        on_prep = data.get("on_prepare_failure", "cancel")
+        if on_prep not in {"cancel", "best_effort"}:
+            errors.append(f"on_prepare_failure must be cancel|best_effort, got {on_prep!r}")
+
+        on_act = data.get("on_activation_failure", "rollback_all")
+        if on_act not in {"rollback_all", "continue"}:
+            errors.append(f"on_activation_failure must be rollback_all|continue, got {on_act!r}")
+
+        on_skew = data.get("on_skew_violation", "mark_invalid")
+        if on_skew not in {"rollback_all", "mark_invalid", "continue"}:
+            errors.append(
+                f"on_skew_violation must be rollback_all|mark_invalid|continue, got {on_skew!r}"
+            )
+
+        injections = data.get("injections", [])
+        if not injections:
+            errors.append("injections list is empty or missing")
+        for idx, inj in enumerate(injections or []):
+            prefix = f"injections[{idx}]"
+            if not isinstance(inj, dict):
+                errors.append(f"{prefix}: must be a mapping")
+                continue
+            if not inj.get("id"):
+                errors.append(f"{prefix}: missing required field 'id'")
+            if not inj.get("target"):
+                errors.append(f"{prefix}: missing required field 'target'")
+            fault_spec = inj.get("fault")
+            if not fault_spec:
+                errors.append(f"{prefix}: missing required field 'fault'")
+            elif isinstance(fault_spec, dict):
+                fkind = fault_spec.get("kind")
+                if not fkind:
+                    errors.append(f"{prefix}.fault: missing required field 'kind'")
+                elif fkind not in cls._FAULT_REGISTRY:
+                    errors.append(f"{prefix}.fault: unsupported fault kind {fkind!r}")
+            unknown_inj = set(inj) - cls._INJECTION_GROUP_INJECTION_KNOWN_KEYS
+            if unknown_inj:
+                errors.append(f"{prefix}: unknown keys {sorted(unknown_inj)}")
+
+        return errors
+
+    @classmethod
+    def build_injection_group(cls, path: str) -> "InjectionGroup":
+        """Load a ``kind: InjectionGroup`` YAML file and return an
+        :class:`~chaos_jungle.inject.group.InjectionGroup`.
+
+        Parameters
+        ----------
+        path :
+            Path to the YAML file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the file does not exist.
+        ValueError
+            If the file fails validation.
+        """
+        try:
+            import yaml
+        except ImportError as exc:
+            raise ImportError("PyYAML is not installed: pip install pyyaml") from exc
+
+        from chaos_jungle.inject.group import InjectionGroup
+        from chaos_jungle.distributed.scenario import Injection
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"InjectionGroup config not found: {path}")
+
+        with open(path) as fh:
+            data = yaml.safe_load(fh) or {}
+
+        errors = cls.validate_injection_group_dict(data, path=path)
+        if errors:
+            raise ValueError(
+                f"InjectionGroup config {path!r} has {len(errors)} error(s):\n"
+                + "\n".join(f"  • {e}" for e in errors)
+            )
+
+        name = data.get("name") or (data.get("metadata") or {}).get("name")
+        members: list = []
+        for inj in data.get("injections", []):
+            inj_id = inj["id"]
+            target = cls.build_target(inj["target"])
+            fault = cls.build_fault(dict(inj["fault"]))
+            members.append(Injection(id=inj_id, target=target, fault=fault))
+
+        return InjectionGroup(
+            name=name,
+            injections=members,
+            synchronization=data.get("synchronization", "scheduled"),
+            atomic=data.get("atomic", True),
+            maximum_skew_ms=float(data.get("maximum_skew_ms", 100.0)),
+            start_after=float(data.get("start_after", 5.0)),
+            require_all_ready=data.get("require_all_ready", True),
+            on_prepare_failure=data.get("on_prepare_failure", "cancel"),
+            on_activation_failure=data.get("on_activation_failure", "rollback_all"),
+            on_skew_violation=data.get("on_skew_violation", "mark_invalid"),
+            safety_maximum_duration=float(data.get("safety_maximum_duration", 90.0)),
+            watchdog=data.get("watchdog", True),
+        )
 
     @classmethod
     def build_distributed_scenario(cls, path: str) -> "DistributedScenario":
@@ -785,3 +922,6 @@ def load_suite(path: str):
 
 def build_distributed_scenario(path: str):
     return ConfigLoader.build_distributed_scenario(path)
+
+def build_injection_group(path: str):
+    return ConfigLoader.build_injection_group(path)

@@ -1,4 +1,4 @@
-"""Scenario — a named group of faults."""
+"""Scenario — a named group of faults and/or injection groups."""
 
 from __future__ import annotations
 import uuid
@@ -6,7 +6,7 @@ from chaos_jungle.faults.base import Fault
 
 
 class Scenario:
-    """A named collection of faults to inject together.
+    """A named collection of faults / injection groups to inject together.
 
     A scenario is a pure data container. It has no knowledge of
     targets, workloads, or the database.
@@ -16,23 +16,56 @@ class Scenario:
     name : str
         Human-readable name used in the database and CLI output.
     faults : list[Fault]
-        Faults to inject when this scenario is started.
+        Individual faults to inject (all share the ChaosRunner's single
+        target). For multi-target injection use ``groups`` instead.
+    groups : list[InjectionGroup], optional
+        Coordinated injection groups. Each group carries its own targets
+        and runs via the two-phase prepare/commit protocol. Groups are
+        started after the individual ``faults`` and stopped before them
+        during rollback.
 
     Examples
     --------
-    >>> from chaos_jungle.faults.network import NetworkDelay, NetworkLoss
-    >>> scenario = Scenario("net-chaos", faults=[
-    ...     NetworkDelay("100ms", jitter="10ms"),
-    ...     NetworkLoss("5%"),
-    ... ])
+    Single-target (existing API, unchanged)::
+
+        scenario = Scenario("net-chaos", faults=[
+            NetworkDelay("100ms"),
+            NetworkLoss("5%"),
+        ])
+
+    Multi-target group injection::
+
+        from chaos_jungle.inject.group import InjectionGroup
+        from chaos_jungle.distributed import Injection
+        scenario = Scenario(
+            "distributed-agent-failure",
+            faults=[],
+            groups=[
+                InjectionGroup(
+                    name="cross-layer",
+                    injections=[
+                        Injection("llm", HTTPTarget("http://agent:8080"), LLMLatency(delay_s=1.0)),
+                        Injection("net", SSHTarget("tool-node", user="ubuntu"), NetworkLoss("5%")),
+                    ],
+                )
+            ],
+        )
     """
 
-    def __init__(self, name: str, faults: list[Fault]) -> None:
+    def __init__(
+        self,
+        name: str,
+        faults: "list[Fault] | None" = None,
+        groups: "list | None" = None,
+    ) -> None:
         if not name or not str(name).strip():
             raise ValueError(
                 "Scenario requires a non-empty 'name'.\n"
                 "  Example: Scenario('my-experiment', faults=[NetworkDelay('100ms')])"
             )
+        faults = list(faults or [])
+        groups = list(groups or [])
+
         if not isinstance(faults, (list, tuple)):
             raise TypeError(
                 f"Scenario 'faults' must be a list of Fault instances, got {type(faults).__name__}.\n"
@@ -46,11 +79,12 @@ class Scenario:
                 )
         self.id = str(uuid.uuid4())
         self.name = str(name).strip()
-        self.faults = list(faults)
+        self.faults = faults
+        self.groups = groups
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-compatible dict (used by ScenarioRegistry)."""
-        return {
+        d: dict = {
             "id": self.id,
             "name": self.name,
             "faults": [
@@ -58,6 +92,12 @@ class Scenario:
                 for f in self.faults
             ],
         }
+        if self.groups:
+            d["groups"] = [
+                {"name": g.name, "group_id": g.group_id, "n_injections": len(g.injections)}
+                for g in self.groups
+            ]
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "Scenario":

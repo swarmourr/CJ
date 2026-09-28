@@ -125,6 +125,7 @@ from chaos_jungle.distributed import (
     GroupActivationEvidence,
     MemberEvidence,
 )
+from chaos_jungle.inject.group import InjectionGroup, InjectionGroupRunner
 from chaos_jungle.inject.intercept import (
     inject,
     InjectResult,
@@ -205,6 +206,9 @@ __all__ = [
     "DistributedSafetyConfig",
     "GroupActivationEvidence",
     "MemberEvidence",
+    # Injection groups
+    "InjectionGroup",
+    "InjectionGroupRunner",
     # Guardrails
     "ConflictError",
     "ConflictWarning",
