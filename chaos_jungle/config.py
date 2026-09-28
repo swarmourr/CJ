@@ -905,7 +905,11 @@ class ConfigLoader:
             faults.append(cls.build_fault(fspec, model_registry=model_registry))
 
         duration = spec.get("duration", None)
-        return Scenario(name, faults), target, duration
+        scenario = Scenario(name, faults)
+        evaluator_role = spec.get("evaluator_model")
+        if evaluator_role:
+            scenario.evaluator_model = evaluator_role
+        return scenario, target, duration
 
     @classmethod
     def load_suite(cls, path: str, validate: bool = False):

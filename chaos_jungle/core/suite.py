@@ -84,12 +84,14 @@ class ExperimentResult:
         error: Exception | None = None,
         duration_s: float = 0.0,
         session_id: int | None = None,
+        judge=None,
     ) -> None:
         self.name = name
         self.status = status
         self.error = error
         self.duration_s = duration_s
         self.session_id = session_id
+        self.judge = judge  # LLMJudge | None — built from evaluator_model if declared
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -230,7 +232,19 @@ class ExperimentSuite:
         duration: str | int | float | None,
     ) -> ExperimentResult:
         effective_duration = duration if duration is not None else self.duration
-        result = ExperimentResult(name=scenario.name)
+
+        # Build judge from evaluator_model if declared and registry is present
+        judge = None
+        evaluator_role = getattr(scenario, "evaluator_model", None)
+        if evaluator_role and self.models is not None:
+            model_cfg = self.models.get(evaluator_role)
+            if model_cfg is not None:
+                try:
+                    judge = model_cfg.as_judge()
+                except Exception:
+                    pass
+
+        result = ExperimentResult(name=scenario.name, judge=judge)
         t0 = time.monotonic()
 
         runner = ChaosRunner(

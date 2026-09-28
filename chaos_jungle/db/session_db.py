@@ -241,6 +241,19 @@ class SessionDB:
 
             CREATE INDEX IF NOT EXISTS idx_scenarios_status
                 ON scenarios(status);
+
+            CREATE TABLE IF NOT EXISTS group_evidence (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id   INTEGER NOT NULL REFERENCES sessions(id),
+                group_id     TEXT    NOT NULL,
+                verdict      TEXT    NOT NULL DEFAULT 'pending',
+                skew_ms      REAL,
+                members_json TEXT    NOT NULL DEFAULT '[]',
+                recorded_at  TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_group_evidence_session
+                ON group_evidence(session_id);
         """)
         # Migrate existing llm_calls tables that are missing the new columns
         _new_cols = [
@@ -783,6 +796,7 @@ class SessionDB:
             "commands": self.get_commands(session_id),
             "results": self.get_results(session_id),
             "llm_calls": self.get_llm_calls(session_id),
+            "group_evidence": self.get_group_evidence(session_id),
         }
 
     # ── Results ───────────────────────────────────────────────────
@@ -1132,6 +1146,54 @@ class SessionDB:
                 (session_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Group Evidence ────────────────────────────────────────────
+
+    def store_group_evidence(self, session_id: int, evidence) -> int:
+        """Persist a GroupActivationEvidence record for a session.
+
+        Parameters
+        ----------
+        session_id : int
+        evidence : GroupActivationEvidence
+            The evidence object from InjectionGroupRunner.stop().
+
+        Returns
+        -------
+        int
+            Row id of the inserted record.
+        """
+        d = evidence.to_dict()
+        cur = self._conn.execute(
+            "INSERT INTO group_evidence (session_id, group_id, verdict, skew_ms, members_json, recorded_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                session_id,
+                d["group_id"],
+                d["verdict"],
+                d.get("activation_skew_ms"),
+                json.dumps(d.get("members", [])),
+                _now(),
+            ),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_group_evidence(self, session_id: int) -> list[dict]:
+        """Return all group evidence records for a session."""
+        rows = self._conn.execute(
+            "SELECT * FROM group_evidence WHERE session_id=? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            row = dict(r)
+            try:
+                row["members_json"] = json.loads(row["members_json"])
+            except (TypeError, ValueError):
+                pass
+            out.append(row)
+        return out
 
     # ── Scenario Registry ─────────────────────────────────────────
 

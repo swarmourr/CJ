@@ -1161,6 +1161,10 @@ class ChaosRunner:
             try:
                 ev = gr.stop()
                 self._group_evidence.append(ev)
+                try:
+                    self.db.store_group_evidence(self._session_id, ev)
+                except Exception as dexc:
+                    print(f"[chaos-jungle] WARNING: could not persist group evidence: {dexc}")
             except Exception as exc:
                 errors.append(exc)
                 print(f"[chaos-jungle] ERROR reverting InjectionGroup: {exc}")

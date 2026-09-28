@@ -5,6 +5,37 @@ import uuid
 from chaos_jungle.faults.base import Fault
 
 
+def _serialize_group(g) -> dict:
+    """Serialize an InjectionGroup to a JSON-compatible dict."""
+    def _target_dict(t) -> dict:
+        cls = type(t).__name__
+        if cls == "SSHTarget":
+            return {"kind": "ssh", "host": getattr(t, "host", ""),
+                    "user": getattr(t, "user", ""), "port": getattr(t, "port", 22)}
+        if cls == "HTTPTarget":
+            return {"kind": "http", "url": getattr(t, "url", "")}
+        return {"kind": "local"}
+
+    return {
+        "name": g.name,
+        "group_id": g.group_id,
+        "synchronization": getattr(g, "synchronization", "scheduled"),
+        "atomic": getattr(g, "atomic", True),
+        "start_after": getattr(g, "start_after", 5.0),
+        "cancel_on_prepare_failure": getattr(g, "cancel_on_prepare_failure", True),
+        "on_activation_failure": getattr(g, "on_activation_failure", "rollback_all"),
+        "injections": [
+            {
+                "id": inj.id,
+                "target": _target_dict(inj.target),
+                "fault": {"kind": inj.fault.__class__.__name__,
+                          "params": inj.fault._parameters()},
+            }
+            for inj in g.injections
+        ],
+    }
+
+
 class Scenario:
     """A named collection of faults / injection groups to inject together.
 
@@ -81,6 +112,8 @@ class Scenario:
         self.name = str(name).strip()
         self.faults = faults
         self.groups = groups
+        # Set by ConfigLoader when evaluator_model: <role> is declared in YAML
+        self.evaluator_model: str | None = None
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-compatible dict (used by ScenarioRegistry)."""
@@ -93,10 +126,9 @@ class Scenario:
             ],
         }
         if self.groups:
-            d["groups"] = [
-                {"name": g.name, "group_id": g.group_id, "n_injections": len(g.injections)}
-                for g in self.groups
-            ]
+            d["groups"] = [_serialize_group(g) for g in self.groups]
+        if self.evaluator_model:
+            d["evaluator_model"] = self.evaluator_model
         return d
 
     @classmethod
@@ -124,6 +156,8 @@ class Scenario:
         scenario.id = data["id"]
         scenario.name = data["name"]
         scenario.faults = faults
+        scenario.groups = []
+        scenario.evaluator_model = data.get("evaluator_model")
         return scenario
 
     def __repr__(self) -> str:

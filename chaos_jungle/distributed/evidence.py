@@ -64,19 +64,24 @@ class GroupActivationEvidence:
             Valid(G) = Ready(G) \\land Skew(G) \\leq \\varepsilon
                        \\land \\bigwedge_{i=1}^{n} Manifested(F_i)
 
-        ``Manifested(F_i)`` is ``True`` or ``None`` (unknown, treated as
-        valid for the formula).  A value of ``False`` fails the gate.
+        ``Manifested(F_i)`` semantics:
+
+        * ``True``  — fault manifested; passes the gate.
+        * ``False`` — fault did **not** manifest; fails the gate (returns ``False``).
+        * ``None``  — inconclusive (``verify_active`` not implemented or errored);
+          does **not** fail the boolean gate but the evidence verdict is
+          ``"inconclusive"`` rather than ``"valid"`` — see :meth:`finalize`.
 
         Returns ``False`` if the verdict is ``cancelled`` or
         ``recovery_invalid``, even if skew and manifestation would pass.
         """
         if self.verdict in {"cancelled", "recovery_invalid", "pending"}:
             return False
-        # Ready(G): no member failed during prepare
+        # Ready(G): no member failed during prepare or activation
         ready = all(m.error is None for m in self.members)
-        # Skew(G) ≤ ε: synchronization_valid is True or None (unset = unknown = ok)
+        # Skew(G) ≤ ε
         skew_ok = self.synchronization_valid is not False
-        # ∧ Manifested(F_i): manifested is True or None for each member
+        # Manifested(F_i): False fails; None is inconclusive (doesn't fail bool gate)
         manifested_ok = all(m.manifested is not False for m in self.members)
         return ready and skew_ok and manifested_ok
 
@@ -92,7 +97,16 @@ class GroupActivationEvidence:
         return (max(times) - min(times)) * 1000.0
 
     def finalize(self) -> None:
-        """Compute skew and set verdict. Call once, after all members finish."""
+        """Compute skew, manifestation, and set verdict.
+
+        Called once after all members finish.  Verdict priority (highest wins):
+
+        1. ``"cancelled"`` / ``"recovery_invalid"`` — already set, return immediately.
+        2. ``"invalid"``      — strict skew exceeded.
+        3. ``"inconclusive"`` — single member (no skew computable), non-strict
+           skew exceeded, or any member has ``manifested=None``.
+        4. ``"valid"``        — all gates pass and all members manifested ``True``.
+        """
         if self.verdict in {"cancelled", "recovery_invalid"}:
             return
 
@@ -103,7 +117,13 @@ class GroupActivationEvidence:
             self.synchronization_valid = None
         elif self.activation_skew_ms <= self.maximum_allowed_skew_ms:
             self.synchronization_valid = True
-            self.verdict = "valid"
+            # Check manifestation: any None → inconclusive; any False → invalid
+            if any(m.manifested is False for m in self.members):
+                self.verdict = "invalid"
+            elif any(m.manifested is None for m in self.members):
+                self.verdict = "inconclusive"
+            else:
+                self.verdict = "valid"
         else:
             self.synchronization_valid = False
             self.verdict = "invalid" if self.strict_skew else "inconclusive"
