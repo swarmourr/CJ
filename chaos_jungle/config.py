@@ -5,18 +5,27 @@ YAML Schema
 
 Suite config (``chaos-jungle suite --config my-suite.yml``)::
 
-    duration: 10m          # default duration for all experiments (optional)
-    conflict: raise        # raise | warn | force  (default: raise)
-    auto_install: false    # auto apt-get install missing deps (default: false)
+    apiVersion: cj.io/v1          # required — enables schema validation
+    kind: ExperimentSuite          # required
+    duration: 10m                  # default duration for all experiments (optional)
+    conflict: raise                # raise | warn | force  (default: raise)
+    auto_install: false            # auto apt-get install missing deps (default: false)
 
     experiments:
       - name: baseline
         target: local
         faults: []
 
+      - name: llm-latency
+        target: local
+        duration: 5m
+        faults:
+          - kind: LLMLatency
+            delay_s: 2.0
+
       - name: net-delay
         target: ssh://ubuntu@node1
-        duration: 5m       # per-experiment override
+        duration: 5m
         faults:
           - kind: NetworkDelay
             delay: 100ms
@@ -28,33 +37,59 @@ Suite config (``chaos-jungle suite --config my-suite.yml``)::
           - kind: NetworkLoss
             rate: 5%
 
-      - name: corruption
-        target: ssh://ubuntu@node3
-        faults:
-          - kind: NetworkCorrupt
-            rate: 1%
-
       - name: storage-corrupt
         target: ssh://ubuntu@node4
         faults:
           - kind: StorageCorrupt
             pattern: "*.pdb"
             directory: /scratch/data
-            interval: 10m
-            recursive: false
 
       - kind: SilentNetworkCorrupt
         rate: 5000
         hook: tc
 
-Fault ``kind`` values
----------------------
-* ``NetworkDelay``     — delay, jitter (optional), iface (optional)
-* ``NetworkLoss``      — rate, iface (optional)
-* ``NetworkCorrupt``   — rate, iface (optional)
-* ``NetworkDuplicate`` — rate, iface (optional)
-* ``StorageCorrupt``   — pattern, directory, interval (optional), recursive (optional)
-* ``SilentNetworkCorrupt`` — rate (int), hook (tc|xdp, optional), iface (optional)
+Supported fault ``kind`` values (allowlisted — no arbitrary imports)
+---------------------------------------------------------------------
+Network layer:
+  NetworkDelay, NetworkLoss, NetworkCorrupt, NetworkDuplicate,
+  NetworkBandwidthLimit, NetworkReorder, NetworkReset, NetworkPartition,
+  SilentNetworkCorrupt
+
+LLM layer (study faults):
+  LLMLatency, LLMTimeout, LLMRateLimit, LLMResponseCorrupt, LLMUnavailable,
+  LLMHallucination, LLMStreamInterrupt, LLMTokenStarvation,
+  LLMUnauthorized, LLMForbidden, LLMAuthExpiry, LLMContextLengthExceeded,
+  SemanticCorrupt, ToolFault, MCPFault
+
+Process / service / container:
+  ProcessKill, ServiceFault, ContainerKill
+
+Storage:
+  StorageCorrupt, StorageCorruptImmediate, SQLiteCorrupt
+
+State:
+  RedisStateCorrupt, JsonStateCorrupt, PostgresStateCorrupt
+
+Resource exhaustion:
+  DiskFull, CPUStress, MemoryStress, IOStress, InodeFull, FDExhaust,
+  ProcessExhaust
+
+AI Gateway:
+  GatewayRouteMisconfig, GatewayFallbackBroken, GatewayPolicyBlock,
+  GatewayPolicyBypass, GatewayCacheStale, GatewayCachePoison,
+  GatewayTenantLeak, GatewayHeaderStrip, GatewayToolSchemaDrop,
+  GatewayResponseRewrite, GatewayBudgetDesync, GatewayRetryStorm
+
+Skill / tool:
+  SkillUnavailable, SkillMisroute, SkillInstructionCorrupt,
+  SkillDependencyMissing, SkillTimeout, SkillBadOutput, SkillVersionSkew,
+  SkillPermissionDenied, SkillMemoryStale, ConflictingSkills,
+  SkillFileUnavailable, SkillFileInstructionCorrupt, SkillFileVersionSkew,
+  SkillFileBadOutput, SkillFileMemoryStale, SkillFileConflict,
+  SkillFilePermissionDenied, SkillJSONCorrupt
+
+GPU:
+  GPUThrottle, GPUMemoryPressure, GPUClockLock
 
 Target formats
 --------------
@@ -63,11 +98,55 @@ Target formats
 * ``ssh://user@host:port``   — SSH target with custom port
 * ``http://host:port``       — HTTP daemon target
 * ``https://host:port``      — HTTP daemon target (TLS)
+
+Schema validation
+-----------------
+Run ``chaos-jungle suite validate --config my-suite.yml`` before executing
+to catch unknown fields, unsupported fault types, invalid durations, etc.
+
+Dry-run plan output
+-------------------
+Run ``chaos-jungle suite plan --config my-suite.yml`` to see the resolved
+ExperimentPlan for each experiment without running anything.
 """
 
 from __future__ import annotations
 import os
 from typing import Any
+
+# Known YAML top-level keys — unknown keys trigger validation warnings.
+_SUITE_KNOWN_KEYS = frozenset({
+    "apiVersion", "kind", "duration", "conflict", "auto_install", "experiments",
+})
+_EXPERIMENT_KNOWN_KEYS = frozenset({
+    "name", "target", "faults", "duration", "description", "hypothesis",
+    "observations", "safety", "cleanup",
+})
+_FAULT_KNOWN_KEYS = frozenset({
+    "kind",
+    # Network
+    "delay", "jitter", "iface", "rate", "hook",
+    # LLM
+    "delay_s", "max_requests", "timeout_s", "mode", "text",
+    "after", "max_tokens", "tool_name", "error_type", "method",
+    "wrong_skill", "conflict_text", "upstream", "port",
+    "budget_input_price", "budget_output_price",
+    # Storage
+    "pattern", "directory", "interval", "recursive",
+    # Process
+    "service", "container", "signal",
+    # Resources
+    "size_mb", "percent", "workers", "read_bps", "write_bps",
+    "count", "path",
+    # State
+    "key_pattern", "table", "column",
+    # GPU
+    "clock_mhz", "mem_fraction",
+    # Skill
+    "skill_id", "target_skill",
+    # Gateway
+    "route", "header", "policy",
+})
 
 
 class ConfigLoader:
@@ -87,19 +166,144 @@ class ConfigLoader:
     def _register_faults(cls) -> None:
         if cls._FAULT_REGISTRY:
             return
+        # ── Network ────────────────────────────────────────────────────────
         from chaos_jungle.faults.network import (
             NetworkDelay, NetworkLoss, NetworkCorrupt, NetworkDuplicate,
+            NetworkBandwidthLimit, NetworkReorder, NetworkReset, NetworkPartition,
         )
-        from chaos_jungle.faults.storage import StorageCorrupt
         from chaos_jungle.faults.bpf import SilentNetworkCorrupt
+        # ── LLM / Tool / MCP ───────────────────────────────────────────────
+        from chaos_jungle.faults.llm import (
+            LLMLatency, LLMTimeout, LLMRateLimit, LLMResponseCorrupt,
+            LLMUnavailable, LLMHallucination, LLMStreamInterrupt,
+            LLMTokenStarvation, LLMUnauthorized, LLMForbidden,
+            LLMAuthExpiry, LLMContextLengthExceeded, SemanticCorrupt,
+            ToolFault, MCPFault,
+        )
+        # ── Storage ────────────────────────────────────────────────────────
+        from chaos_jungle.faults.storage import (
+            StorageCorrupt, StorageCorruptImmediate, SQLiteCorrupt,
+        )
+        # ── Process / service / container ─────────────────────────────────
+        from chaos_jungle.faults.process import (
+            ProcessKill, ServiceFault, ContainerKill,
+        )
+        # ── State ──────────────────────────────────────────────────────────
+        from chaos_jungle.faults.state import (
+            RedisStateCorrupt, JsonStateCorrupt, PostgresStateCorrupt,
+        )
+        # ── Resource exhaustion ────────────────────────────────────────────
+        from chaos_jungle.faults.resources import (
+            DiskFull, CPUStress, MemoryStress, IOStress,
+            InodeFull, FDExhaust, ProcessExhaust,
+        )
+        # ── GPU ────────────────────────────────────────────────────────────
+        from chaos_jungle.faults.gpu import (
+            GPUThrottle, GPUMemoryPressure, GPUClockLock,
+        )
+        # ── Skill / tool ───────────────────────────────────────────────────
+        from chaos_jungle.faults.skill import (
+            SkillUnavailable, SkillMisroute, SkillInstructionCorrupt,
+            SkillDependencyMissing, SkillTimeout, SkillBadOutput,
+            SkillVersionSkew, SkillPermissionDenied, SkillMemoryStale,
+            ConflictingSkills,
+        )
+        from chaos_jungle.faults.skill_file import (
+            SkillFileUnavailable, SkillFileInstructionCorrupt,
+            SkillFileVersionSkew, SkillFileBadOutput, SkillFileMemoryStale,
+            SkillFileConflict, SkillFilePermissionDenied, SkillJSONCorrupt,
+        )
+        # ── AI Gateway ─────────────────────────────────────────────────────
+        from chaos_jungle.faults.gateway import (
+            GatewayRouteMisconfig, GatewayFallbackBroken, GatewayPolicyBlock,
+            GatewayPolicyBypass, GatewayCacheStale, GatewayCachePoison,
+            GatewayTenantLeak, GatewayHeaderStrip, GatewayToolSchemaDrop,
+            GatewayResponseRewrite, GatewayBudgetDesync, GatewayRetryStorm,
+        )
 
         cls._FAULT_REGISTRY.update({
+            # Network
             "NetworkDelay": NetworkDelay,
             "NetworkLoss": NetworkLoss,
             "NetworkCorrupt": NetworkCorrupt,
             "NetworkDuplicate": NetworkDuplicate,
-            "StorageCorrupt": StorageCorrupt,
+            "NetworkBandwidthLimit": NetworkBandwidthLimit,
+            "NetworkReorder": NetworkReorder,
+            "NetworkReset": NetworkReset,
+            "NetworkPartition": NetworkPartition,
             "SilentNetworkCorrupt": SilentNetworkCorrupt,
+            # LLM / Tool / MCP
+            "LLMLatency": LLMLatency,
+            "LLMTimeout": LLMTimeout,
+            "LLMRateLimit": LLMRateLimit,
+            "LLMResponseCorrupt": LLMResponseCorrupt,
+            "LLMUnavailable": LLMUnavailable,
+            "LLMHallucination": LLMHallucination,
+            "LLMStreamInterrupt": LLMStreamInterrupt,
+            "LLMTokenStarvation": LLMTokenStarvation,
+            "LLMUnauthorized": LLMUnauthorized,
+            "LLMForbidden": LLMForbidden,
+            "LLMAuthExpiry": LLMAuthExpiry,
+            "LLMContextLengthExceeded": LLMContextLengthExceeded,
+            "SemanticCorrupt": SemanticCorrupt,
+            "ToolFault": ToolFault,
+            "MCPFault": MCPFault,
+            # Storage
+            "StorageCorrupt": StorageCorrupt,
+            "StorageCorruptImmediate": StorageCorruptImmediate,
+            "SQLiteCorrupt": SQLiteCorrupt,
+            # Process
+            "ProcessKill": ProcessKill,
+            "ServiceFault": ServiceFault,
+            "ContainerKill": ContainerKill,
+            # State
+            "RedisStateCorrupt": RedisStateCorrupt,
+            "JsonStateCorrupt": JsonStateCorrupt,
+            "PostgresStateCorrupt": PostgresStateCorrupt,
+            # Resources
+            "DiskFull": DiskFull,
+            "CPUStress": CPUStress,
+            "MemoryStress": MemoryStress,
+            "IOStress": IOStress,
+            "InodeFull": InodeFull,
+            "FDExhaust": FDExhaust,
+            "ProcessExhaust": ProcessExhaust,
+            # GPU
+            "GPUThrottle": GPUThrottle,
+            "GPUMemoryPressure": GPUMemoryPressure,
+            "GPUClockLock": GPUClockLock,
+            # Skill / tool
+            "SkillUnavailable": SkillUnavailable,
+            "SkillMisroute": SkillMisroute,
+            "SkillInstructionCorrupt": SkillInstructionCorrupt,
+            "SkillDependencyMissing": SkillDependencyMissing,
+            "SkillTimeout": SkillTimeout,
+            "SkillBadOutput": SkillBadOutput,
+            "SkillVersionSkew": SkillVersionSkew,
+            "SkillPermissionDenied": SkillPermissionDenied,
+            "SkillMemoryStale": SkillMemoryStale,
+            "ConflictingSkills": ConflictingSkills,
+            "SkillFileUnavailable": SkillFileUnavailable,
+            "SkillFileInstructionCorrupt": SkillFileInstructionCorrupt,
+            "SkillFileVersionSkew": SkillFileVersionSkew,
+            "SkillFileBadOutput": SkillFileBadOutput,
+            "SkillFileMemoryStale": SkillFileMemoryStale,
+            "SkillFileConflict": SkillFileConflict,
+            "SkillFilePermissionDenied": SkillFilePermissionDenied,
+            "SkillJSONCorrupt": SkillJSONCorrupt,
+            # Gateway
+            "GatewayRouteMisconfig": GatewayRouteMisconfig,
+            "GatewayFallbackBroken": GatewayFallbackBroken,
+            "GatewayPolicyBlock": GatewayPolicyBlock,
+            "GatewayPolicyBypass": GatewayPolicyBypass,
+            "GatewayCacheStale": GatewayCacheStale,
+            "GatewayCachePoison": GatewayCachePoison,
+            "GatewayTenantLeak": GatewayTenantLeak,
+            "GatewayHeaderStrip": GatewayHeaderStrip,
+            "GatewayToolSchemaDrop": GatewayToolSchemaDrop,
+            "GatewayResponseRewrite": GatewayResponseRewrite,
+            "GatewayBudgetDesync": GatewayBudgetDesync,
+            "GatewayRetryStorm": GatewayRetryStorm,
         })
 
     @classmethod
@@ -131,10 +335,133 @@ class ConfigLoader:
         return klass(**cls._rename_keys(kind, spec))
 
     @classmethod
+    def registered_kinds(cls) -> list[str]:
+        """Return sorted list of all YAML-supported fault kind names."""
+        cls._register_faults()
+        return sorted(cls._FAULT_REGISTRY)
+
+    @classmethod
     def _rename_keys(cls, kind: str, spec: dict[str, Any]) -> dict[str, Any]:
         if kind == "SilentNetworkCorrupt" and "rate" in spec:
             spec["rate"] = int(spec["rate"])
         return spec
+
+    # ── Schema validation ─────────────────────────────────────────────────
+
+    @classmethod
+    def validate_suite_dict(cls, data: dict, path: str = "<yaml>") -> list[str]:
+        """Validate a loaded YAML dict; return list of error strings.
+
+        Returns an empty list if valid.
+        """
+        cls._register_faults()
+        errors: list[str] = []
+
+        # Top-level unknown keys
+        unknown = set(data) - _SUITE_KNOWN_KEYS
+        if unknown:
+            errors.append(f"Unknown top-level keys: {sorted(unknown)}")
+
+        # apiVersion / kind check (warn, not error — backwards compat)
+        api = data.get("apiVersion", "")
+        kind = data.get("kind", "")
+        if api and api != "cj.io/v1":
+            errors.append(f"apiVersion must be 'cj.io/v1', got {api!r}")
+        if kind and kind not in {"ExperimentSuite", "Experiment"}:
+            errors.append(f"kind must be 'ExperimentSuite' or 'Experiment', got {kind!r}")
+
+        # conflict policy
+        conflict = data.get("conflict", "raise")
+        if conflict not in {"raise", "warn", "force"}:
+            errors.append(f"conflict must be raise|warn|force, got {conflict!r}")
+
+        experiments = data.get("experiments", [])
+        if not experiments:
+            errors.append("experiments list is empty or missing")
+        if not isinstance(experiments, list):
+            errors.append("experiments must be a list")
+            return errors
+
+        for idx, exp in enumerate(experiments):
+            prefix = f"experiments[{idx}]"
+            if not isinstance(exp, dict):
+                errors.append(f"{prefix}: must be a mapping")
+                continue
+            if not exp.get("name"):
+                errors.append(f"{prefix}: missing required field 'name'")
+
+            unknown_exp = set(exp) - _EXPERIMENT_KNOWN_KEYS
+            if unknown_exp:
+                errors.append(f"{prefix}: unknown keys {sorted(unknown_exp)}")
+
+            for fidx, fault_spec in enumerate(exp.get("faults", [])):
+                fprefix = f"{prefix}.faults[{fidx}]"
+                if not isinstance(fault_spec, dict):
+                    errors.append(f"{fprefix}: must be a mapping")
+                    continue
+                fkind = fault_spec.get("kind")
+                if not fkind:
+                    errors.append(f"{fprefix}: missing required field 'kind'")
+                    continue
+                if fkind not in cls._FAULT_REGISTRY:
+                    errors.append(
+                        f"{fprefix}: unsupported fault kind {fkind!r}. "
+                        f"Supported: {sorted(cls._FAULT_REGISTRY)[:5]}... "
+                        f"(run ConfigLoader.registered_kinds() for full list)"
+                    )
+
+                unknown_fault = set(fault_spec) - _FAULT_KNOWN_KEYS
+                if unknown_fault:
+                    errors.append(f"{fprefix}: unknown fault parameters {sorted(unknown_fault)}")
+
+        return errors
+
+    @classmethod
+    def validate_file(cls, path: str) -> list[str]:
+        """Load and validate a YAML suite file; return list of error strings."""
+        try:
+            import yaml
+        except ImportError:
+            return ["PyYAML is not installed: pip install pyyaml"]
+
+        if not os.path.exists(path):
+            return [f"File not found: {path}"]
+
+        with open(path) as fh:
+            try:
+                data = yaml.safe_load(fh) or {}
+            except Exception as exc:
+                return [f"YAML parse error: {exc}"]
+
+        return cls.validate_suite_dict(data, path=path)
+
+    # ── ExperimentPlan compilation ────────────────────────────────────────
+
+    @classmethod
+    def build_plans(cls, path: str) -> "list[ExperimentPlan]":
+        """Load a YAML suite file and return one ExperimentPlan per experiment.
+
+        Used by ``chaos-jungle suite plan`` and conformance tests.
+        """
+        from chaos_jungle.plan import ExperimentPlan
+
+        try:
+            import yaml
+        except ImportError as exc:
+            raise ImportError("PyYAML required: pip install pyyaml") from exc
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Suite config not found: {path}")
+
+        with open(path) as fh:
+            data = yaml.safe_load(fh) or {}
+
+        suite_defaults = {k: v for k, v in data.items() if k != "experiments"}
+        plans = []
+        for entry in data.get("experiments", []):
+            plan = ExperimentPlan.from_yaml_entry(entry, suite_defaults=suite_defaults, source="yaml")
+            plans.append(plan)
+        return plans
 
     @classmethod
     def build_target(cls, target_str: str | None):
@@ -193,13 +520,16 @@ class ConfigLoader:
         return Scenario(name, faults), target, duration
 
     @classmethod
-    def load_suite(cls, path: str):
+    def load_suite(cls, path: str, validate: bool = False):
         """Build an :class:`~chaos_jungle.core.suite.ExperimentSuite` from a YAML file.
 
         Parameters
         ----------
         path :
             Path to the YAML file.
+        validate : bool
+            If True, run schema validation before loading and raise
+            ``ValueError`` listing all errors if any are found.
 
         Raises
         ------
@@ -208,7 +538,8 @@ class ConfigLoader:
         ImportError
             If PyYAML is not installed.
         ValueError
-            If the YAML is missing required fields.
+            If the YAML is missing required fields or (when validate=True)
+            has schema errors.
         """
         try:
             import yaml
@@ -225,6 +556,14 @@ class ConfigLoader:
 
         with open(path) as fh:
             data = yaml.safe_load(fh) or {}
+
+        if validate:
+            errors = cls.validate_suite_dict(data, path=path)
+            if errors:
+                raise ValueError(
+                    f"Suite config {path!r} has {len(errors)} validation error(s):\n"
+                    + "\n".join(f"  • {e}" for e in errors)
+                )
 
         suite = ExperimentSuite(
             duration=data.get("duration", None),

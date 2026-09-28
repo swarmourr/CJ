@@ -525,6 +525,71 @@ def suite(config, parallel, max_workers):
         import sys; sys.exit(1)
 
 
+@main.command("suite-validate")
+@click.option("--config", "-c", required=True, help="Path to suite YAML config file")
+def suite_validate(config):
+    """Validate a suite YAML config without executing it.
+
+    Checks for unknown fields, unsupported fault types, invalid durations,
+    and missing required fields. Exits 0 if valid, 1 if errors found.
+
+    \b
+    Example:
+        chaos-jungle suite-validate --config my-suite.yml
+    """
+    from chaos_jungle.config import ConfigLoader
+    errors = ConfigLoader.validate_file(config)
+    if errors:
+        click.echo(f"[chaos-jungle] INVALID: {config} — {len(errors)} error(s):", err=True)
+        for e in errors:
+            click.echo(f"  • {e}", err=True)
+        import sys; sys.exit(1)
+    click.echo(f"[chaos-jungle] OK: {config} is valid.")
+
+
+@main.command("suite-plan")
+@click.option("--config", "-c", required=True, help="Path to suite YAML config file")
+@click.option("--output", "-o", default="", help="Directory to write resolved_plan_<n>.json files")
+def suite_plan(config, output):
+    """Show the resolved ExperimentPlan for each experiment in a YAML suite.
+
+    Compiles YAML → canonical ExperimentPlan IR and prints a dry-run summary.
+    No faults are started; no targets are contacted.
+
+    \b
+    Example:
+        chaos-jungle suite-plan --config my-suite.yml
+        chaos-jungle suite-plan --config my-suite.yml --output ./plans/
+    """
+    import json as _json
+    from chaos_jungle.config import ConfigLoader
+
+    try:
+        plans = ConfigLoader.build_plans(config)
+    except Exception as e:
+        click.echo(f"[chaos-jungle] ERROR: {e}", err=True)
+        import sys; sys.exit(1)
+
+    click.echo(f"[chaos-jungle] {len(plans)} experiment plan(s) from {config}:\n")
+    for i, plan in enumerate(plans):
+        plan.validate()
+        plan.compute_hash()
+        click.echo(f"  [{i+1}] {plan.scenario.name}")
+        click.echo(f"       target       : {plan.target.kind}"
+                   + (f"/{plan.target.host}" if plan.target.host else ""))
+        click.echo(f"       faults       : {[f.fault_class for f in plan.scenario.faults]}")
+        click.echo(f"       duration_s   : {plan.duration_s}")
+        click.echo(f"       evidence     : {plan.observations.evidence_method}")
+        click.echo(f"       plan_hash    : {plan.plan_hash[:16]}...")
+        if output:
+            import os, json as _json2
+            os.makedirs(output, exist_ok=True)
+            out_path = os.path.join(output, f"resolved_plan_{i+1}.json")
+            plan.save(out_path)
+            click.echo(f"       saved        : {out_path}")
+        click.echo("")
+
+
 # ── scenarios ─────────────────────────────────────────────────────
 
 @main.group("scenarios")

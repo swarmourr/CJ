@@ -617,6 +617,35 @@ class ChaosRunner:
         self._shared_llm_env_var: str | None = None
         self._shared_llm_saved_env: str | None = None
 
+    # ── Plan compilation ──────────────────────────────────────────
+
+    def to_plan(
+        self,
+        duration: "str | int | float | None" = None,
+        source: str = "python",
+    ) -> "ExperimentPlan":
+        """Compile this runner into a canonical :class:`~chaos_jungle.plan.ExperimentPlan`.
+
+        The plan can be saved alongside results for reproducibility::
+
+            plan = runner.to_plan(duration=30)
+            plan.save("results/resolved_plan.json")
+
+        Parameters
+        ----------
+        duration :
+            Fault duration (passed through to ``SafetySpec.max_duration_s``).
+            Accepts the same formats as :meth:`run`.
+        source :
+            Authoring interface label for provenance. Use ``"decorator"``
+            when called from the decorator interface, ``"context_manager"``
+            from a context manager, ``"python"`` otherwise.
+        """
+        from chaos_jungle.plan import ExperimentPlan
+        return ExperimentPlan.from_scenario(
+            self.scenario, self.target, duration=duration, source=source
+        )
+
     # ── Public API ────────────────────────────────────────────────
 
     def run(self, duration: str | int | float) -> None:
