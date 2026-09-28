@@ -72,6 +72,8 @@ Usage examples
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import sqlite3
 import sys
@@ -1000,7 +1002,8 @@ def _record_tool_calls(
 
 def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
                       headers: dict, body: bytes, interrupt_after: int,
-                      call_index: "int | None" = None) -> None:
+                      call_index: "int | None" = None,
+                      configured_faults_json: str = "[]") -> None:
     """Forward a streaming SSE response but close after interrupt_after data events.
 
     Also captures TTFT (time to first token) and records the call to the session DB.
@@ -1052,6 +1055,11 @@ def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
     # tokens_per_second: use chunk count as proxy (actual tokens unavailable from SSE)
     _tps = round(data_event_count / _latency_s, 2) if _latency_s > 0 and data_event_count > 0 else 0.0
 
+    _trg_json = json.dumps(["stream_interrupt"])
+    _ev_json  = json.dumps({"stream_interrupt": {
+        "interrupt_after": interrupt_after,
+        "events_forwarded": data_event_count,
+    }})
     _record_llm_call(
         model=_req["model"],
         prompt_tokens=0,            # SSE doesn't stream usage without special options
@@ -1080,6 +1088,9 @@ def _stream_interrupt(handler: "BaseHTTPRequestHandler", upstream_url: str,
         ttft_s=ttft_s,
         system_fingerprint="",
         call_index=call_index,
+        configured_faults_json=configured_faults_json,
+        triggered_faults_json=_trg_json,
+        fault_evidence_json=_ev_json,
     )
 
 
@@ -1172,64 +1183,84 @@ def _check_block(cfg: dict, count: int, req_body: "dict | None") -> "tuple[int, 
     return None
 
 
-def _mutate_request(cfg: dict, req_body: "dict | None", raw_body: bytes, triggered: list) -> "tuple[dict | None, bytes]":
+def _mutate_request(cfg: dict, req_body: "dict | None", raw_body: bytes,
+                    triggered: list, evidence: "dict | None" = None) -> "tuple[dict | None, bytes]":
+    if evidence is None:
+        evidence = {}
     """Apply request-modifying faults. Returns (modified_req_body, modified_raw_body).
 
-    For content-modifying faults, appends fault name to *triggered* only when
-    the serialised body actually changed after the mutation (proof of manifestation).
-    For latency, execution of the sleep is sufficient evidence.
+    Uses deep-copy semantic comparison (dict equality) to detect actual content
+    changes — avoids false positives from JSON re-serialisation whitespace differences.
+    For latency, sleep execution is the proof; no content changes to compare.
+    Evidence about each triggered fault is stored in *evidence*.
     """
     fault = cfg["fault"]
     if fault == "skill_bad_output" and _is_tool_request(req_body) and req_body:
         if _skill_name_matches(req_body, cfg.get("skill_name", "")):
-            _before = raw_body
-            req_body = _inject_skill_bad_output(req_body, cfg.get("bad_output_mode", "invalid_json"))
+            _before_dict = copy.deepcopy(req_body)
+            mode = cfg.get("bad_output_mode", "invalid_json")
+            req_body = _inject_skill_bad_output(req_body, mode)
             raw_body = json.dumps(req_body).encode()
-            if raw_body != _before:
+            if req_body != _before_dict:
                 triggered.append(fault)
+                evidence[fault] = {"bad_output_mode": mode}
     if fault == "skill_version_skew" and _is_tool_request(req_body) and req_body:
-        _before = raw_body
-        req_body = _inject_skill_version_skew(req_body, cfg.get("old_version", "0.1.0"))
+        _before_dict = copy.deepcopy(req_body)
+        old_ver = cfg.get("old_version", "0.1.0")
+        req_body = _inject_skill_version_skew(req_body, old_ver)
         raw_body = json.dumps(req_body).encode()
-        if raw_body != _before:
+        if req_body != _before_dict:
             triggered.append(fault)
+            evidence[fault] = {"injected_version": old_ver}
     if fault == "skill_memory_stale" and _is_tool_request(req_body) and req_body:
-        _before = raw_body
+        _before_dict = copy.deepcopy(req_body)
         req_body = _inject_skill_memory_stale(req_body, cfg.get("stale_data", ""))
         raw_body = json.dumps(req_body).encode()
-        if raw_body != _before:
+        if req_body != _before_dict:
             triggered.append(fault)
+            evidence[fault] = {"stale": True}
     if fault == "skill_instruction_corrupt" and req_body is not None:
-        _before = raw_body
+        _before_dict = copy.deepcopy(req_body)
         req_body = _inject_skill_instruction_corrupt(req_body, cfg.get("corrupt_instruction", ""))
         raw_body = json.dumps(req_body).encode()
-        if raw_body != _before:
+        if req_body != _before_dict:
             triggered.append(fault)
+            evidence[fault] = {"corrupted": True}
     if fault == "token_starve" and req_body is not None:
-        _before = raw_body
+        _orig = req_body.get("max_tokens")
         n = cfg.get("max_tokens", 5)
+        _before_dict = copy.deepcopy(req_body)
         req_body["max_tokens"] = n
         req_body["num_predict"] = n
         raw_body = json.dumps(req_body).encode()
-        if raw_body != _before:
+        if req_body != _before_dict:
             triggered.append(fault)
+            evidence[fault] = {"original_max_tokens": _orig, "injected_max_tokens": n}
     if fault == "semantic_corrupt" and req_body is not None:
-        _before = raw_body
-        req_body = _apply_semantic_corrupt(req_body, cfg.get("semantic_mode", "entity_swap"))
+        _before_dict = copy.deepcopy(req_body)
+        mode = cfg.get("semantic_mode", "entity_swap")
+        req_body = _apply_semantic_corrupt(req_body, mode)
         raw_body = json.dumps(req_body).encode()
-        if raw_body != _before:
+        if req_body != _before_dict:
             triggered.append(fault)
+            evidence[fault] = {"semantic_mode": mode}
     if fault == "latency":
-        time.sleep(cfg.get("delay_s", 2.0))
-        triggered.append(fault)  # sleep always executes — no body change to compare
+        _delay = cfg.get("delay_s", 2.0)
+        time.sleep(_delay)
+        triggered.append(fault)
+        evidence[fault] = {"delay_s": _delay}
     return req_body, raw_body
 
 
-def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None", triggered: list) -> bytes:
+def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
+                     triggered: list, evidence: "dict | None" = None) -> bytes:
+    if evidence is None:
+        evidence = {}
     """Apply response-modifying faults. Returns modified resp_body.
 
     Appends fault name to *triggered* only when the response body actually changed
-    after transformation (proof of manifestation).
+    after transformation (proof of manifestation). Evidence about each triggered
+    fault is stored in *evidence*.
     """
     global _cost_usd
     fault = cfg["fault"]
@@ -1244,6 +1275,11 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None", trigg
             resp_body = b"<<chaos-jungle: response corrupted>>"
         if resp_body != _before:
             triggered.append(fault)
+            evidence[fault] = {
+                "mode": mode,
+                "before_hash": hashlib.sha256(_before).hexdigest()[:16],
+                "after_hash": hashlib.sha256(resp_body).hexdigest()[:16],
+            }
     if fault == "hallucinate":
         _before = resp_body
         generator_url   = cfg.get("generator_url", "")
@@ -1256,16 +1292,22 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None", trigg
         resp_body = _inject_hallucination(resp_body, text)
         if resp_body != _before:
             triggered.append(fault)
+            evidence[fault] = {"injected_text_preview": text[:200]}
     if fault == "skill_misroute":
         _before = resp_body
-        resp_body = _inject_skill_misroute(resp_body, cfg.get("wrong_skill", ""))
+        wrong_skill = cfg.get("wrong_skill", "") or "deprecated_skill_v1"
+        resp_body = _inject_skill_misroute(resp_body, wrong_skill)
         if resp_body != _before:
             triggered.append(fault)
+            evidence[fault] = {"wrong_skill": wrong_skill}
     if fault == "skill_conflict":
         _before = resp_body
-        resp_body = _inject_skill_conflict(resp_body, cfg.get("conflict_text", ""))
+        conflict_text = cfg.get("conflict_text", "")
+        resp_body = _inject_skill_conflict(resp_body, conflict_text)
         if resp_body != _before:
             triggered.append(fault)
+            _preview = (conflict_text or "[CONFLICTING_SKILL]:")[:100]
+            evidence[fault] = {"conflict_text_preview": _preview}
     if fault == "budget_exceeded":
         try:
             data = json.loads(resp_body)
@@ -1364,6 +1406,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         # Track which faults actually fired during this request (for accurate DB recording).
         _triggered_faults: list = []
+        # Structured evidence for each triggered fault — feeds fault_evidence_json column.
+        _fault_evidence: dict = {}
 
         req_body = _parse_body(raw_body)
 
@@ -1382,6 +1426,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "")
             _cfg_json = json.dumps([c["fault"] for c in chain])
             _trg_json = json.dumps(_triggered_faults)
+            _ev_json  = json.dumps(_fault_evidence)
             _record_llm_call(
                 model=_req["model"], prompt_tokens=0, completion_tokens=0,
                 cost_usd=0.0, finish_reason="", prompt_text=_req["prompt_text"],
@@ -1398,6 +1443,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 call_index=_trace_id,
                 configured_faults_json=_cfg_json,
                 triggered_faults_json=_trg_json,
+                fault_evidence_json=_ev_json,
             )
 
         # ------------------------------------------------------------------
@@ -1409,6 +1455,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if block is not None:
                 _triggered_faults.append(cfg["fault"])
                 blk_status, blk_body = block
+                _fault_evidence[cfg["fault"]] = {"http_status": blk_status}
                 _blocked(blk_status)                              # DB first
                 self._reply(blk_status, blk_body, trace_id=_trace_id)  # header after
                 return
@@ -1418,7 +1465,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # ------------------------------------------------------------------
 
         for cfg in chain:
-            req_body, raw_body = _mutate_request(cfg, req_body, raw_body, _triggered_faults)
+            req_body, raw_body = _mutate_request(cfg, req_body, raw_body, _triggered_faults, _fault_evidence)
 
         # ------------------------------------------------------------------
         # 3. Stream interrupt — special line-by-line forwarding
@@ -1433,6 +1480,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self, upstream_url, fwd_hdrs, raw_body,
                 interrupt_after=stream_cfg.get("interrupt_after", 3),
                 call_index=_trace_id,
+                configured_faults_json=json.dumps([c["fault"] for c in chain]),
             )
             return
 
@@ -1449,7 +1497,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # ------------------------------------------------------------------
 
         for cfg in chain:
-            resp_body = _mutate_response(cfg, resp_body, req_body, _triggered_faults)
+            resp_body = _mutate_response(cfg, resp_body, req_body, _triggered_faults, _fault_evidence)
 
         # ------------------------------------------------------------------
         # Capture LLM call to session DB (best-effort, forwarded path)
@@ -1475,6 +1523,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "passthrough")
                 _cfg_json = json.dumps([c["fault"] for c in chain])
                 _trg_json = json.dumps(_triggered_faults)
+                _ev_json  = json.dumps(_fault_evidence)
                 _llm_call_id = _record_llm_call(
                     model=_req["model"],
                     prompt_tokens=_pt,
@@ -1514,6 +1563,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     call_index=_trace_id,
                     configured_faults_json=_cfg_json,
                     triggered_faults_json=_trg_json,
+                    fault_evidence_json=_ev_json,
                 )
                 _record_tool_calls(
                     _SESSION_ID, _llm_call_id, req_body, _PHASE,
