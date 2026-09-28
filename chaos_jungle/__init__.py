@@ -126,6 +126,7 @@ from chaos_jungle.distributed import (
     MemberEvidence,
 )
 from chaos_jungle.inject.group import InjectionGroup, InjectionGroupRunner
+from chaos_jungle.models import ModelConfig, ModelRegistry
 from chaos_jungle.inject.intercept import (
     inject,
     InjectResult,
@@ -209,6 +210,9 @@ __all__ = [
     # Injection groups
     "InjectionGroup",
     "InjectionGroupRunner",
+    # Model registry
+    "ModelConfig",
+    "ModelRegistry",
     # Guardrails
     "ConflictError",
     "ConflictWarning",

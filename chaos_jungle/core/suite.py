@@ -122,10 +122,12 @@ class ExperimentSuite:
         duration: str | int | float | None = None,
         conflict: str = "raise",
         auto_install: bool = False,
+        models=None,
     ) -> None:
         self.duration = duration
         self.conflict = conflict
         self.auto_install = auto_install
+        self.models = models  # ModelRegistry | None — populated from YAML models: section
         self._experiments: list[tuple[Scenario, Target, str | int | float | None]] = []
         # Runners started without a duration that need explicit stop()
         self._open_runners: list[ChaosRunner] = []

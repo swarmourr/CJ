@@ -134,13 +134,16 @@ def _parse_duration(value: "str | int | float") -> float:
 # Known YAML top-level keys — unknown keys trigger validation warnings.
 _SUITE_KNOWN_KEYS = frozenset({
     "apiVersion", "kind", "duration", "conflict", "auto_install", "experiments",
+    "models",
 })
 _EXPERIMENT_KNOWN_KEYS = frozenset({
     "name", "target", "faults", "duration", "description", "hypothesis",
     "observations", "safety", "cleanup",
+    "workload_model", "evaluator_model",
 })
 _FAULT_KNOWN_KEYS = frozenset({
     "kind",
+    "generator",    # model role name for LLMHallucination / SemanticCorrupt generators
     # Network
     "delay", "jitter", "iface", "rate", "hook",
     # LLM
@@ -324,7 +327,7 @@ class ConfigLoader:
         })
 
     @classmethod
-    def build_fault(cls, spec: dict[str, Any]):
+    def build_fault(cls, spec: dict[str, Any], model_registry=None):
         """Build a :class:`~chaos_jungle.faults.base.Fault` from a dict.
 
         Parameters
@@ -332,6 +335,12 @@ class ConfigLoader:
         spec :
             Dictionary with at least a ``kind`` key matching one of the
             supported fault class names.
+        model_registry :
+            Optional :class:`~chaos_jungle.models.ModelRegistry`. When
+            provided, a ``generator: <role>`` key in *spec* is resolved to
+            ``generator_url`` + ``generator_model`` on the fault. Similarly,
+            ``upstream`` / ``base_url_env`` are already pre-filled by
+            :meth:`load_scenario` when ``workload_model:`` is set.
 
         Raises
         ------
@@ -349,6 +358,15 @@ class ConfigLoader:
                 f"Unknown fault kind: {kind!r}. "
                 f"Valid kinds: {sorted(cls._FAULT_REGISTRY)}"
             )
+
+        # Resolve generator: role → generator_url + generator_model
+        gen_role = spec.pop("generator", None)
+        if gen_role and model_registry is not None:
+            cfg = model_registry.get(gen_role)
+            if cfg is not None:
+                spec.setdefault("generator_url", cfg.fault_upstream)
+                spec.setdefault("generator_model", cfg.model)
+
         return klass(**cls._rename_keys(kind, spec))
 
     @classmethod
@@ -394,6 +412,13 @@ class ConfigLoader:
         if conflict not in {"raise", "warn", "force"}:
             errors.append(f"conflict must be raise|warn|force, got {conflict!r}")
 
+        # models section (optional)
+        models_d = data.get("models")
+        if models_d is not None:
+            from chaos_jungle.models import ModelRegistry
+            errors.extend(ModelRegistry.validate_dict(models_d))
+        registered_roles = set(models_d or {})
+
         experiments = data.get("experiments", [])
         if not experiments:
             errors.append("experiments list is empty or missing")
@@ -412,6 +437,14 @@ class ConfigLoader:
             unknown_exp = set(exp) - _EXPERIMENT_KNOWN_KEYS
             if unknown_exp:
                 errors.append(f"{prefix}: unknown keys {sorted(unknown_exp)}")
+
+            for role_key in ("workload_model", "evaluator_model"):
+                role = exp.get(role_key)
+                if role and registered_roles and role not in registered_roles:
+                    errors.append(
+                        f"{prefix}.{role_key}: role {role!r} not found in models section "
+                        f"(defined: {sorted(registered_roles)})"
+                    )
 
             for fidx, fault_spec in enumerate(exp.get("faults", [])):
                 fprefix = f"{prefix}.faults[{fidx}]"
@@ -432,6 +465,13 @@ class ConfigLoader:
                 unknown_fault = set(fault_spec) - _FAULT_KNOWN_KEYS
                 if unknown_fault:
                     errors.append(f"{fprefix}: unknown fault parameters {sorted(unknown_fault)}")
+
+                gen_role = fault_spec.get("generator")
+                if gen_role and registered_roles and gen_role not in registered_roles:
+                    errors.append(
+                        f"{fprefix}.generator: role {gen_role!r} not found in models section "
+                        f"(defined: {sorted(registered_roles)})"
+                    )
 
         return errors
 
@@ -824,14 +864,20 @@ class ConfigLoader:
         )
 
     @classmethod
-    def load_scenario(cls, spec: dict[str, Any]) -> tuple:
+    def load_scenario(cls, spec: dict[str, Any], model_registry=None) -> tuple:
         """Build a ``(Scenario, Target, duration)`` tuple from a dict.
 
         Parameters
         ----------
         spec :
             Dict with keys: ``name``, ``target`` (optional), ``faults``,
-            ``duration`` (optional).
+            ``duration`` (optional), ``workload_model`` (optional),
+            ``evaluator_model`` (optional).
+        model_registry :
+            Optional :class:`~chaos_jungle.models.ModelRegistry`.
+            When provided, ``workload_model: <role>`` sets ``upstream``
+            and ``base_url_env`` on every LLM proxy fault in this
+            experiment so they route through the right provider.
         """
         from chaos_jungle.core.scenario import Scenario
 
@@ -840,7 +886,24 @@ class ConfigLoader:
             raise ValueError("Each experiment must have a 'name' field.")
 
         target = cls.build_target(spec.get("target", "local"))
-        faults = [cls.build_fault(f) for f in spec.get("faults", [])]
+
+        # Resolve workload_model → upstream/base_url_env defaults for LLM faults
+        fault_defaults: dict[str, Any] = {}
+        workload_role = spec.get("workload_model")
+        if workload_role and model_registry is not None:
+            wm = model_registry.get(workload_role)
+            if wm is not None:
+                fault_defaults["upstream"] = wm.fault_upstream
+                fault_defaults["base_url_env"] = wm.fault_base_url_env
+
+        faults = []
+        for f in spec.get("faults", []):
+            fspec = dict(f)
+            # Inject workload_model defaults only when the fault hasn't set them explicitly
+            for k, v in fault_defaults.items():
+                fspec.setdefault(k, v)
+            faults.append(cls.build_fault(fspec, model_registry=model_registry))
+
         duration = spec.get("duration", None)
         return Scenario(name, faults), target, duration
 
@@ -890,10 +953,18 @@ class ConfigLoader:
                     + "\n".join(f"  • {e}" for e in errors)
                 )
 
+        # Parse models: section into a ModelRegistry (optional)
+        model_registry = None
+        models_d = data.get("models")
+        if models_d:
+            from chaos_jungle.models import ModelRegistry
+            model_registry = ModelRegistry.from_dict(models_d)
+
         suite = ExperimentSuite(
             duration=data.get("duration", None),
             conflict=data.get("conflict", "raise"),
             auto_install=bool(data.get("auto_install", False)),
+            models=model_registry,
         )
 
         experiments = data.get("experiments", [])
@@ -901,7 +972,7 @@ class ConfigLoader:
             raise ValueError(f"Suite config {path!r} has no 'experiments' entries.")
 
         for exp_spec in experiments:
-            scenario, target, duration = cls.load_scenario(exp_spec)
+            scenario, target, duration = cls.load_scenario(exp_spec, model_registry=model_registry)
             suite.add(scenario, target, duration=duration)
 
         return suite
