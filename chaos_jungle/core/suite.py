@@ -84,14 +84,18 @@ class ExperimentResult:
         error: Exception | None = None,
         duration_s: float = 0.0,
         session_id: int | None = None,
-        judge=None,
+        configured_judge=None,
     ) -> None:
         self.name = name
         self.status = status
         self.error = error
         self.duration_s = duration_s
         self.session_id = session_id
-        self.judge = judge  # LLMJudge | None — built from evaluator_model if declared
+        # LLMJudge | None — constructed from evaluator_model role at run time.
+        # Construction-only: the judge object is ready to call but the suite
+        # does NOT automatically invoke it.  Pass result.configured_judge to
+        # runner.measure(..., evaluator=result.configured_judge) to evaluate.
+        self.configured_judge = configured_judge
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -244,7 +248,7 @@ class ExperimentSuite:
                 except Exception:
                     pass
 
-        result = ExperimentResult(name=scenario.name, judge=judge)
+        result = ExperimentResult(name=scenario.name, configured_judge=judge)
         t0 = time.monotonic()
 
         runner = ChaosRunner(

@@ -1,4 +1,4 @@
-"""Tests for the refactoring items:
+"""Tests for the five blockers and associated round-trip / concurrency safety:
 - session_db group_evidence table
 - DistributedCoordinator delegation to InjectionGroupRunner
 - Scenario serialization with groups and evaluator_model
@@ -374,8 +374,8 @@ class TestSuiteEvaluatorModel:
         results = suite.run(parallel=False)
         result = results["e1"]
         from chaos_jungle.analysis.judge import LLMJudge
-        assert isinstance(result.judge, LLMJudge)
-        assert result.judge.model == "gpt-4o-mini"
+        assert isinstance(result.configured_judge, LLMJudge)
+        assert result.configured_judge.model == "gpt-4o-mini"
 
     def test_run_one_no_judge_when_no_models(self, tmp_path):
         from chaos_jungle.core.suite import ExperimentSuite
@@ -386,7 +386,7 @@ class TestSuiteEvaluatorModel:
         suite.add(scenario, LocalTarget(), duration=0)
 
         results = suite.run(parallel=False)
-        assert results["e1"].judge is None
+        assert results["e1"].configured_judge is None
 
     def test_run_one_no_judge_when_role_missing(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -401,7 +401,7 @@ class TestSuiteEvaluatorModel:
         suite.add(scenario, LocalTarget(), duration=0)
 
         results = suite.run(parallel=False)
-        assert results["e1"].judge is None
+        assert results["e1"].configured_judge is None
 
 
 # ── Activation failure detection fix ─────────────────────────────────────────
@@ -471,7 +471,7 @@ class TestActivationFailureDetection:
         with pytest.raises(RuntimeError, match="activation failed"):
             runner.start()
 
-    def test_prepare_failure_not_counted_as_activation_failure(self):
+    def test_prepare_failure_not_counted_as_activation_failure_in_best_effort(self):
         """A prepare-only failure in best_effort mode should not trigger rollback."""
         group = InjectionGroup(
             name="prep-only-fail",
@@ -491,3 +491,330 @@ class TestActivationFailureDetection:
         ev = runner.stop()
         # Verdict should reflect what happened — not "cancelled" due to prepare failure
         assert ev.verdict != "cancelled"
+
+
+# ── Scenario group round-trip (blocker 1) ────────────────────────────────────
+
+class TestScenarioGroupRoundTrip:
+    def _group_with_local_faults(self):
+        from chaos_jungle.faults import NetworkDelay
+        return InjectionGroup(
+            name="rt-grp",
+            injections=[
+                Injection(id="m1", target=LocalTarget(), fault=NetworkDelay("50ms")),
+                Injection(id="m2", target=LocalTarget(), fault=NetworkDelay("100ms")),
+            ],
+            synchronization="barrier",
+            atomic=False,
+            maximum_skew_ms=200.0,
+            start_after=3.0,
+            on_prepare_failure="best_effort",
+            on_activation_failure="continue",
+            on_skew_violation="continue",
+            safety_maximum_duration=45.0,
+            watchdog=False,
+        )
+
+    def test_round_trip_restores_group(self):
+        from chaos_jungle.core.scenario import Scenario
+        s = Scenario("s1", faults=[], groups=[self._group_with_local_faults()])
+        d = s.to_dict()
+        s2 = Scenario.from_dict(d)
+
+        assert len(s2.groups) == 1
+        g2 = s2.groups[0]
+        g1 = s.groups[0]
+        assert g2.name == g1.name
+        assert g2.synchronization == "barrier"
+        assert g2.start_after == 3.0
+        assert g2.maximum_skew_ms == 200.0
+        assert g2.on_prepare_failure == "best_effort"
+        assert g2.on_activation_failure == "continue"
+        assert g2.on_skew_violation == "continue"
+        assert g2.safety_maximum_duration == 45.0
+        assert len(g2.injections) == 2
+
+    def test_round_trip_restores_injection_ids(self):
+        from chaos_jungle.core.scenario import Scenario
+        s = Scenario("s1", faults=[], groups=[self._group_with_local_faults()])
+        s2 = Scenario.from_dict(s.to_dict())
+        ids = {inj.id for inj in s2.groups[0].injections}
+        assert ids == {"m1", "m2"}
+
+    def test_round_trip_restores_fault_class(self):
+        from chaos_jungle.faults import NetworkDelay
+        from chaos_jungle.core.scenario import Scenario
+        s = Scenario("s1", faults=[], groups=[self._group_with_local_faults()])
+        s2 = Scenario.from_dict(s.to_dict())
+        for inj in s2.groups[0].injections:
+            assert isinstance(inj.fault, NetworkDelay)
+
+    def test_round_trip_group_is_runnable(self):
+        from chaos_jungle.core.scenario import Scenario
+        s = Scenario("s1", faults=[], groups=[self._group_with_local_faults()])
+        s2 = Scenario.from_dict(s.to_dict())
+        runner = InjectionGroupRunner(s2.groups[0])
+        runner.start()
+        ev = runner.stop()
+        assert ev.verdict in {"valid", "inconclusive", "invalid"}
+
+    def test_round_trip_preserves_evaluator_model(self):
+        from chaos_jungle.core.scenario import Scenario
+        s = Scenario("s1", faults=[], groups=[self._group_with_local_faults()])
+        s.evaluator_model = "judge"
+        s2 = Scenario.from_dict(s.to_dict())
+        assert s2.evaluator_model == "judge"
+
+    def test_empty_groups_round_trip(self):
+        from chaos_jungle.core.scenario import Scenario
+        s = Scenario("s1", faults=[])
+        s2 = Scenario.from_dict(s.to_dict())
+        assert s2.groups == []
+
+    def test_unknown_fault_class_raises(self):
+        from chaos_jungle.core.scenario import Scenario
+        d = {
+            "id": "x", "name": "s",
+            "faults": [],
+            "groups": [{
+                "name": "g", "group_id": "abc",
+                "injections": [{"id": "m1", "target": {"kind": "local"},
+                                "fault": {"kind": "NonExistentFaultXYZ", "params": {}}}],
+            }],
+        }
+        with pytest.raises(ValueError, match="NonExistentFaultXYZ"):
+            Scenario.from_dict(d)
+
+
+# ── ExperimentPlan group round-trip (blocker 2) ───────────────────────────────
+
+class TestExperimentPlanGroupRoundTrip:
+    def _scenario_with_group(self):
+        from chaos_jungle.core.scenario import Scenario
+        from chaos_jungle.faults import NetworkDelay
+        group = InjectionGroup(
+            name="plan-grp",
+            injections=[Injection(id="m1", target=LocalTarget(), fault=NetworkDelay("30ms"))],
+            synchronization="scheduled",
+            start_after=2.0,
+            maximum_skew_ms=150.0,
+        )
+        return Scenario("e1", faults=[], groups=[group])
+
+    def test_from_scenario_includes_groups(self):
+        from chaos_jungle.plan import ExperimentPlan
+        s = self._scenario_with_group()
+        plan = ExperimentPlan.from_scenario(s, LocalTarget())
+        assert len(plan.groups) == 1
+        g = plan.groups[0]
+        assert g.name == "plan-grp"
+        assert g.start_after == 2.0
+        assert g.maximum_skew_ms == 150.0
+        assert len(g.injections) == 1
+
+    def test_from_scenario_injection_target_kind(self):
+        from chaos_jungle.plan import ExperimentPlan
+        s = self._scenario_with_group()
+        plan = ExperimentPlan.from_scenario(s, LocalTarget())
+        assert plan.groups[0].injections[0].target.kind == "local"
+
+    def test_from_scenario_injection_fault_class(self):
+        from chaos_jungle.plan import ExperimentPlan
+        s = self._scenario_with_group()
+        plan = ExperimentPlan.from_scenario(s, LocalTarget())
+        assert plan.groups[0].injections[0].fault.fault_class == "NetworkDelay"
+
+    def test_plan_round_trip_preserves_groups(self):
+        from chaos_jungle.plan import ExperimentPlan
+        s = self._scenario_with_group()
+        plan = ExperimentPlan.from_scenario(s, LocalTarget())
+        d = plan.to_dict()
+        plan2 = ExperimentPlan.from_dict(d)
+        assert len(plan2.groups) == 1
+        g2 = plan2.groups[0]
+        assert g2.name == "plan-grp"
+        assert g2.start_after == 2.0
+        assert g2.maximum_skew_ms == 150.0
+
+    def test_plan_round_trip_preserves_injection_id(self):
+        from chaos_jungle.plan import ExperimentPlan
+        s = self._scenario_with_group()
+        plan = ExperimentPlan.from_scenario(s, LocalTarget())
+        plan2 = ExperimentPlan.from_dict(plan.to_dict())
+        assert plan2.groups[0].injections[0].id == "m1"
+
+    def test_plan_to_dict_round_trip_invariant(self):
+        from chaos_jungle.plan import ExperimentPlan
+        s = self._scenario_with_group()
+        plan = ExperimentPlan.from_scenario(s, LocalTarget())
+        d1 = plan.to_dict()["groups"]
+        d2 = ExperimentPlan.from_dict(plan.to_dict()).to_dict()["groups"]
+        assert d1 == d2
+
+    def test_no_groups_round_trip(self):
+        from chaos_jungle.core.scenario import Scenario
+        from chaos_jungle.plan import ExperimentPlan
+        s = Scenario("e1", faults=[])
+        plan = ExperimentPlan.from_scenario(s, LocalTarget())
+        plan2 = ExperimentPlan.from_dict(plan.to_dict())
+        assert plan2.groups == []
+
+
+# ── group_valid consistency (blocker 3) ──────────────────────────────────────
+
+class TestGroupValidConsistency:
+    def _finalized(self, manifested, skew_us=10_000, skew_limit=100.0):
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        t1 = datetime(2026, 1, 1, 0, 0, 0, skew_us, tzinfo=timezone.utc)
+        ev = GroupActivationEvidence(group_id="g", maximum_allowed_skew_ms=skew_limit)
+        ev.members = [
+            MemberEvidence(host="a", injection_id="m0", active_at=t0, manifested=manifested[0]),
+            MemberEvidence(host="b", injection_id="m1", active_at=t1, manifested=manifested[1]),
+        ]
+        ev.finalize()
+        return ev
+
+    def test_all_true_manifested_is_valid(self):
+        ev = self._finalized((True, True))
+        assert ev.verdict == "valid"
+        assert ev.group_valid is True
+
+    def test_none_manifested_is_inconclusive_not_valid(self):
+        ev = self._finalized((None, None))
+        assert ev.verdict == "inconclusive"
+        assert ev.group_valid is False
+
+    def test_false_manifested_is_invalid_not_valid(self):
+        ev = self._finalized((True, False))
+        assert ev.verdict == "invalid"
+        assert ev.group_valid is False
+
+    def test_no_contradiction_between_verdict_and_group_valid(self):
+        for manifested in [(True, True), (None, True), (False, True), (None, None)]:
+            ev = self._finalized(manifested)
+            if ev.verdict == "valid":
+                assert ev.group_valid is True, f"manifested={manifested}: verdict=valid but group_valid=False"
+            else:
+                assert ev.group_valid is False, f"manifested={manifested}: verdict={ev.verdict!r} but group_valid=True"
+
+    def test_pending_verdict_gives_false(self):
+        ev = GroupActivationEvidence(group_id="g")
+        assert ev.verdict == "pending"
+        assert ev.group_valid is False
+
+    def test_cancelled_gives_false(self):
+        ev = GroupActivationEvidence(group_id="g")
+        ev.verdict = "cancelled"
+        assert ev.group_valid is False
+
+    def test_recovery_invalid_gives_false(self):
+        ev = GroupActivationEvidence(group_id="g")
+        ev.verdict = "recovery_invalid"
+        assert ev.group_valid is False
+
+
+# ── emergency_stop race (blocker 4) ──────────────────────────────────────────
+
+class TestEmergencyStopRace:
+    def _running_group(self):
+        group = InjectionGroup(
+            name="race-grp",
+            injections=[Injection(id="m1", target=LocalTarget(), fault=_OkFault())],
+            synchronization="best_effort",
+            atomic=False,
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        runner.start()
+        return runner
+
+    def test_emergency_stop_and_stop_are_idempotent(self):
+        runner = self._running_group()
+        # Call both concurrently — only one should perform revert
+        t1 = threading.Thread(target=runner.emergency_stop, daemon=True)
+        t2 = threading.Thread(target=runner.stop, daemon=True)
+        t1.start(); t2.start()
+        t1.join(timeout=5); t2.join(timeout=5)
+        assert not t1.is_alive() and not t2.is_alive()
+
+    def test_multiple_emergency_stops_safe(self):
+        runner = self._running_group()
+        threads = [threading.Thread(target=runner.emergency_stop, daemon=True) for _ in range(5)]
+        for t in threads: t.start()
+        for t in threads: t.join(timeout=5)
+        assert all(not t.is_alive() for t in threads)
+
+    def test_evidence_finalized_after_concurrent_stops(self):
+        import time
+        runner = self._running_group()
+        t1 = threading.Thread(target=runner.emergency_stop, daemon=True)
+        t2 = threading.Thread(target=runner.stop, daemon=True)
+        t1.start(); t2.start()
+        t1.join(timeout=5); t2.join(timeout=5)
+        # After both have run, evidence must be finalized (not pending)
+        ev = runner.evidence
+        assert ev is not None
+        assert ev.verdict != "pending"
+
+    def test_stop_after_emergency_stop_returns_same_evidence(self):
+        runner = self._running_group()
+        runner.emergency_stop()
+        import time; time.sleep(0.15)  # let worker complete
+        ev1 = runner.evidence
+        ev2 = runner.stop()
+        assert ev1 is ev2
+
+
+# ── verify_recovered exception → recovery_invalid (blocker 5) ────────────────
+
+class TestVerifyRecoveredExceptionHandling:
+    def test_exception_in_verify_recovered_sets_recovery_invalid(self):
+        class _ExcOnVerify(_OkFault):
+            def verify_recovered(self, t):
+                raise RuntimeError("verify probe exploded")
+
+        group = InjectionGroup(
+            name="vr-exc",
+            injections=[Injection(id="m1", target=LocalTarget(), fault=_ExcOnVerify())],
+            synchronization="best_effort",
+            atomic=False,
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        runner.start()
+        ev = runner.stop()
+        assert ev.verdict == "recovery_invalid"
+
+    def test_failed_verify_recovered_sets_recovery_invalid(self):
+        class _FailVerify(_OkFault):
+            def verify_recovered(self, t):
+                r = MagicMock()
+                r.not_implemented = False
+                r.verified = False
+                r.reason = "still running"
+                return r
+
+        group = InjectionGroup(
+            name="vr-fail",
+            injections=[Injection(id="m1", target=LocalTarget(), fault=_FailVerify())],
+            synchronization="best_effort",
+            atomic=False,
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        runner.start()
+        ev = runner.stop()
+        assert ev.verdict == "recovery_invalid"
+
+    def test_not_implemented_verify_recovered_leaves_verdict_intact(self):
+        group = InjectionGroup(
+            name="vr-ni",
+            injections=[Injection(id="m1", target=LocalTarget(), fault=_OkFault())],
+            synchronization="best_effort",
+            atomic=False,
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        runner.start()
+        ev = runner.stop()
+        assert ev.verdict != "recovery_invalid"

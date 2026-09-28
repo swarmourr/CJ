@@ -225,10 +225,12 @@ class TestGroupValid:
         ev.finalize()
         assert ev.group_valid is False
 
-    def test_valid_when_manifested_unknown(self):
+    def test_invalid_when_manifested_unknown(self):
         ev = self._ev(manifested=(None, None))
         ev.finalize()
-        assert ev.group_valid is True
+        # Unknown manifestation → verdict="inconclusive" → group_valid must be False
+        assert ev.verdict == "inconclusive"
+        assert ev.group_valid is False
 
     def test_invalid_when_cancelled(self):
         ev = GroupActivationEvidence(group_id="g")

@@ -21,9 +21,14 @@ def _serialize_group(g) -> dict:
         "group_id": g.group_id,
         "synchronization": getattr(g, "synchronization", "scheduled"),
         "atomic": getattr(g, "atomic", True),
+        "maximum_skew_ms": getattr(g, "maximum_skew_ms", 100.0),
         "start_after": getattr(g, "start_after", 5.0),
-        "cancel_on_prepare_failure": getattr(g, "cancel_on_prepare_failure", True),
+        "require_all_ready": getattr(g, "require_all_ready", True),
+        "on_prepare_failure": getattr(g, "on_prepare_failure", "cancel"),
         "on_activation_failure": getattr(g, "on_activation_failure", "rollback_all"),
+        "on_skew_violation": getattr(g, "on_skew_violation", "mark_invalid"),
+        "safety_maximum_duration": getattr(g, "safety_maximum_duration", 90.0),
+        "watchdog": getattr(g, "watchdog", True),
         "injections": [
             {
                 "id": inj.id,
@@ -34,6 +39,56 @@ def _serialize_group(g) -> dict:
             for inj in g.injections
         ],
     }
+
+
+def _deserialize_group(d: dict):
+    """Reconstruct an InjectionGroup from a serialized dict."""
+    import chaos_jungle.faults as _faults_mod
+    from chaos_jungle.inject.group import InjectionGroup
+    from chaos_jungle.distributed.scenario import Injection
+
+    def _build_target(td: dict):
+        kind = td.get("kind", "local")
+        if kind == "ssh":
+            from chaos_jungle.targets.ssh import SSHTarget
+            return SSHTarget(td.get("host", ""), user=td.get("user", ""),
+                             port=td.get("port", 22))
+        if kind == "http":
+            from chaos_jungle.targets.http import HTTPTarget
+            return HTTPTarget(td.get("url", ""))
+        from chaos_jungle.targets.local import LocalTarget
+        return LocalTarget()
+
+    injections = []
+    for inj_d in d.get("injections", []):
+        fault_d = inj_d.get("fault", {})
+        kind = fault_d.get("kind", "")
+        params = fault_d.get("params", {})
+        fault_cls = getattr(_faults_mod, kind, None)
+        if fault_cls is None:
+            raise ValueError(
+                f"Unknown fault class {kind!r} in group {d.get('name')!r}. "
+                "Make sure the same version of chaos-jungle is installed."
+            )
+        fault = fault_cls(**params)
+        target = _build_target(inj_d.get("target", {}))
+        injections.append(Injection(id=inj_d["id"], target=target, fault=fault))
+
+    return InjectionGroup(
+        name=d["name"],
+        injections=injections,
+        synchronization=d.get("synchronization", "scheduled"),
+        atomic=d.get("atomic", True),
+        maximum_skew_ms=d.get("maximum_skew_ms", 100.0),
+        start_after=d.get("start_after", 5.0),
+        require_all_ready=d.get("require_all_ready", True),
+        on_prepare_failure=d.get("on_prepare_failure", "cancel"),
+        on_activation_failure=d.get("on_activation_failure", "rollback_all"),
+        on_skew_violation=d.get("on_skew_violation", "mark_invalid"),
+        safety_maximum_duration=d.get("safety_maximum_duration", 90.0),
+        watchdog=d.get("watchdog", True),
+        group_id=d.get("group_id", ""),
+    )
 
 
 class Scenario:
@@ -152,11 +207,20 @@ class Scenario:
                 )
             faults.append(fault_cls(**params))
 
+        groups = []
+        for gd in data.get("groups", []):
+            try:
+                groups.append(_deserialize_group(gd))
+            except Exception as exc:
+                raise ValueError(
+                    f"Cannot reconstruct group {gd.get('name')!r}: {exc}"
+                ) from exc
+
         scenario = cls.__new__(cls)
         scenario.id = data["id"]
         scenario.name = data["name"]
         scenario.faults = faults
-        scenario.groups = []
+        scenario.groups = groups
         scenario.evaluator_model = data.get("evaluator_model")
         return scenario
 

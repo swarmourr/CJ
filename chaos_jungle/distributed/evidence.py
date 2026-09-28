@@ -57,33 +57,36 @@ class GroupActivationEvidence:
 
     @property
     def group_valid(self) -> bool:
-        """Evaluate the compound group validity formula.
+        """Return ``True`` iff the experiment is scientifically valid.
 
-        .. math::
+        A group is valid when *every* required validity condition has been
+        **proven**, not merely not disproven:
 
-            Valid(G) = Ready(G) \\land Skew(G) \\leq \\varepsilon
-                       \\land \\bigwedge_{i=1}^{n} Manifested(F_i)
+        * ``verdict == "valid"`` — the only verdict that implies full validity.
+        * No member error.
+        * Skew within tolerance (``synchronization_valid is True``).
+        * Every member manifested (``manifested is True``).
 
-        ``Manifested(F_i)`` semantics:
+        Any unknown condition (``manifested=None``, skew not computable,
+        unfinalized evidence) produces ``False``, because validity is a
+        positive claim that requires affirmative evidence.  This is
+        consistent with ``finalize()``, which sets ``verdict="inconclusive"``
+        rather than ``"valid"`` when any condition is unknown.
 
-        * ``True``  — fault manifested; passes the gate.
-        * ``False`` — fault did **not** manifest; fails the gate (returns ``False``).
-        * ``None``  — inconclusive (``verify_active`` not implemented or errored);
-          does **not** fail the boolean gate but the evidence verdict is
-          ``"inconclusive"`` rather than ``"valid"`` — see :meth:`finalize`.
-
-        Returns ``False`` if the verdict is ``cancelled`` or
-        ``recovery_invalid``, even if skew and manifestation would pass.
+        Returns
+        -------
+        bool
+            ``True`` only when every condition is affirmatively proven.
+            ``False`` for any other state, including ``"inconclusive"``,
+            ``"invalid"``, ``"cancelled"``, ``"recovery_invalid"``, and
+            ``"pending"``.
         """
-        if self.verdict in {"cancelled", "recovery_invalid", "pending"}:
-            return False
-        # Ready(G): no member failed during prepare or activation
-        ready = all(m.error is None for m in self.members)
-        # Skew(G) ≤ ε
-        skew_ok = self.synchronization_valid is not False
-        # Manifested(F_i): False fails; None is inconclusive (doesn't fail bool gate)
-        manifested_ok = all(m.manifested is not False for m in self.members)
-        return ready and skew_ok and manifested_ok
+        return (
+            self.verdict == "valid"
+            and all(m.error is None for m in self.members)
+            and self.synchronization_valid is True
+            and all(m.manifested is True for m in self.members)
+        )
 
     def compute_skew(self) -> float | None:
         """Return observed activation skew in milliseconds, or None."""

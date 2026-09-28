@@ -486,6 +486,40 @@ class ExperimentPlan:
             timeout_s=cleanup_d.get("timeout_s", 30.0),
             on_failure=cleanup_d.get("on_failure", "abort"),
         )
+        groups = []
+        for gd in d.get("groups", []):
+            injections = [
+                InjectionMemberSpec(
+                    id=inj["id"],
+                    target=TargetSpec(
+                        kind=inj.get("target", {}).get("kind", "local"),
+                        host=inj.get("target", {}).get("host", ""),
+                        user=inj.get("target", {}).get("user", ""),
+                        port=inj.get("target", {}).get("port", 0),
+                        url=inj.get("target", {}).get("url", ""),
+                    ),
+                    fault=FaultSpec(
+                        fault_class=inj.get("fault", {}).get("fault_class", ""),
+                        parameters=inj.get("fault", {}).get("parameters", {}),
+                    ),
+                )
+                for inj in gd.get("injections", [])
+            ]
+            groups.append(InjectionGroupSpec(
+                name=gd["name"],
+                injections=injections,
+                synchronization=gd.get("synchronization", "scheduled"),
+                atomic=gd.get("atomic", True),
+                maximum_skew_ms=gd.get("maximum_skew_ms", 100.0),
+                start_after=gd.get("start_after", 5.0),
+                require_all_ready=gd.get("require_all_ready", True),
+                on_prepare_failure=gd.get("on_prepare_failure", "cancel"),
+                on_activation_failure=gd.get("on_activation_failure", "rollback_all"),
+                on_skew_violation=gd.get("on_skew_violation", "mark_invalid"),
+                safety_maximum_duration=gd.get("safety_maximum_duration", 90.0),
+                watchdog=gd.get("watchdog", True),
+            ))
+
         return cls(
             scenario=scenario,
             target=target,
@@ -494,6 +528,7 @@ class ExperimentPlan:
             observations=observations,
             safety=safety,
             cleanup=cleanup,
+            groups=groups,
             schema_version=d.get("schema_version", SCHEMA_VERSION),
             plan_id=d.get("plan_id", str(uuid.uuid4())),
             experiment_id=d.get("experiment_id", ""),
@@ -559,12 +594,50 @@ class ExperimentPlan:
             except Exception:
                 duration_s = float(duration) if isinstance(duration, (int, float)) else None
 
+        groups = []
+        for g in getattr(scenario, "groups", []):
+            member_specs = []
+            for inj in getattr(g, "injections", []):
+                t = inj.target
+                from chaos_jungle.targets.local import LocalTarget as _LT
+                from chaos_jungle.targets.ssh import SSHTarget as _SSH
+                from chaos_jungle.targets.http import HTTPTarget as _HTTP
+                if isinstance(t, _SSH):
+                    ts = TargetSpec(kind="ssh", host=getattr(t, "host", ""),
+                                    user=getattr(t, "user", ""), port=getattr(t, "port", 22))
+                elif isinstance(t, _HTTP):
+                    ts = TargetSpec(kind="http", url=getattr(t, "base_url", "") or getattr(t, "url", ""))
+                else:
+                    ts = TargetSpec(kind="local")
+                f = inj.fault
+                fs = FaultSpec(
+                    fault_class=f.__class__.__name__,
+                    parameters=f._parameters() if hasattr(f, "_parameters") else {},
+                    layer=getattr(f, "category", "llm"),
+                )
+                member_specs.append(InjectionMemberSpec(id=inj.id, target=ts, fault=fs))
+            groups.append(InjectionGroupSpec(
+                name=g.name,
+                injections=member_specs,
+                synchronization=getattr(g, "synchronization", "scheduled"),
+                atomic=getattr(g, "atomic", True),
+                maximum_skew_ms=getattr(g, "maximum_skew_ms", 100.0),
+                start_after=getattr(g, "start_after", 5.0),
+                require_all_ready=getattr(g, "require_all_ready", True),
+                on_prepare_failure=getattr(g, "on_prepare_failure", "cancel"),
+                on_activation_failure=getattr(g, "on_activation_failure", "rollback_all"),
+                on_skew_violation=getattr(g, "on_skew_violation", "mark_invalid"),
+                safety_maximum_duration=getattr(g, "safety_maximum_duration", 90.0),
+                watchdog=getattr(g, "watchdog", True),
+            ))
+
         plan = cls(
             scenario=scenario_spec,
             target=target_spec,
             safety=SafetySpec(max_duration_s=duration_s or 300.0),
             duration_s=duration_s,
             source=source,
+            groups=groups,
         )
         plan.compute_hash()
         return plan

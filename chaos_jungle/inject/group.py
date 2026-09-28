@@ -419,42 +419,22 @@ class InjectionGroupRunner:
         return self._evidence
 
     def emergency_stop(self) -> None:
-        """Trigger an immediate stop and launch a guaranteed rollback worker.
+        """Trigger an immediate stop from any thread, including signal handlers.
 
-        Unlike :meth:`stop`, this is safe to call from any thread including
-        signal handlers. The rollback runs in a daemon thread so it does not
-        block the caller. The evidence is finalized when the worker completes.
+        Sets the stop event then delegates to :meth:`stop` in a daemon thread.
+        Because :meth:`stop` owns the ``_stop_lock`` / ``_stopped`` flag, this
+        is race-free: concurrent calls to ``emergency_stop()`` and ``stop()``
+        both funnel into the same idempotent path and only one will perform
+        the rollback.
         """
         log.warning("Group %s: emergency stop requested", self.group.name)
         self._stop_event.set()
         worker = threading.Thread(
-            target=self._guaranteed_rollback_worker,
+            target=self.stop,
             daemon=True,
             name=f"cj-grp-estop-{self.group.group_id}",
         )
         worker.start()
-
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
-    def _guaranteed_rollback_worker(self) -> None:
-        """Daemon rollback worker launched by emergency_stop().
-
-        Reverts all active members then finalizes evidence. Errors are
-        logged but never re-raised — this is a best-effort safety net.
-        """
-        try:
-            self._revert_all()
-        except Exception as exc:
-            log.error("Group %s: rollback worker error: %s", self.group.name, exc)
-        if self._evidence is not None:
-            try:
-                with self._stop_lock:
-                    if not self._stopped:
-                        self._stopped = True
-                        self._evidence.members = [s.evidence for s in self._states]
-                        self._evidence.finalize()
-            except Exception as exc:
-                log.error("Group %s: evidence finalize error: %s", self.group.name, exc)
 
     def _prepare_member(self, state: "_MemberState") -> None:
         from chaos_jungle.distributed.clock import ClockProbe
@@ -562,6 +542,8 @@ class InjectionGroupRunner:
                     self._evidence.verdict = "recovery_invalid"
         except Exception as exc:
             log.error("Member %s verify_recovered error: %s", inj.id, exc)
+            if self._evidence is not None:
+                self._evidence.verdict = "recovery_invalid"
 
         # ── disconnect ───────────────────────────────────────────────────────
         if state.connected and hasattr(inj.target, "disconnect"):
