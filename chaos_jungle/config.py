@@ -112,7 +112,24 @@ ExperimentPlan for each experiment without running anything.
 
 from __future__ import annotations
 import os
+import re
 from typing import Any
+
+
+def _parse_duration(value: "str | int | float") -> float:
+    """Convert a duration string or number to seconds (float).
+
+    Accepted formats: ``"5s"``, ``"100ms"``, ``"2m"``, ``"1h"``, or a bare
+    number (already in seconds).
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(ms|s|m|h)?", s, re.IGNORECASE)
+    if not m:
+        raise ValueError(f"Cannot parse duration: {value!r}")
+    n, unit = float(m.group(1)), (m.group(2) or "s").lower()
+    return n * {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}[unit]
 
 # Known YAML top-level keys — unknown keys trigger validation warnings.
 _SUITE_KNOWN_KEYS = frozenset({
@@ -367,8 +384,10 @@ class ConfigLoader:
         kind = data.get("kind", "")
         if api and api != "cj.io/v1":
             errors.append(f"apiVersion must be 'cj.io/v1', got {api!r}")
-        if kind and kind not in {"ExperimentSuite", "Experiment"}:
-            errors.append(f"kind must be 'ExperimentSuite' or 'Experiment', got {kind!r}")
+        if kind and kind not in {"ExperimentSuite", "Experiment", "DistributedScenario"}:
+            errors.append(
+                f"kind must be 'ExperimentSuite', 'Experiment', or 'DistributedScenario', got {kind!r}"
+            )
 
         # conflict policy
         conflict = data.get("conflict", "raise")
@@ -418,7 +437,7 @@ class ConfigLoader:
 
     @classmethod
     def validate_file(cls, path: str) -> list[str]:
-        """Load and validate a YAML suite file; return list of error strings."""
+        """Load and validate a YAML file (suite or distributed scenario)."""
         try:
             import yaml
         except ImportError:
@@ -433,7 +452,176 @@ class ConfigLoader:
             except Exception as exc:
                 return [f"YAML parse error: {exc}"]
 
+        if data.get("kind") == "DistributedScenario":
+            return cls.validate_distributed_dict(data, path=path)
         return cls.validate_suite_dict(data, path=path)
+
+    _DISTRIBUTED_KNOWN_KEYS = frozenset({
+        "apiVersion", "kind", "metadata",
+        "synchronization", "atomicity", "injections",
+        "observation", "safety",
+    })
+    _SYNC_KNOWN_KEYS = frozenset({
+        "mode", "start_after", "maximum_skew_ms", "require_all_ready",
+        "prepare_timeout_s", "strict_skew",
+    })
+    _ATOMICITY_KNOWN_KEYS = frozenset({
+        "prepare", "activation_failure", "recovery_failure",
+    })
+    _INJECTION_KNOWN_KEYS = frozenset({"id", "target", "fault"})
+
+    @classmethod
+    def validate_distributed_dict(cls, data: dict, path: str = "<yaml>") -> list[str]:
+        """Validate a DistributedScenario YAML dict; return list of error strings."""
+        cls._register_faults()
+        errors: list[str] = []
+
+        unknown = set(data) - cls._DISTRIBUTED_KNOWN_KEYS
+        if unknown:
+            errors.append(f"Unknown top-level keys: {sorted(unknown)}")
+
+        api = data.get("apiVersion", "")
+        if api and api != "cj.io/v1":
+            errors.append(f"apiVersion must be 'cj.io/v1', got {api!r}")
+
+        metadata = data.get("metadata", {})
+        if not metadata.get("name"):
+            errors.append("metadata.name is required")
+
+        sync = data.get("synchronization", {})
+        if isinstance(sync, dict):
+            unknown_sync = set(sync) - cls._SYNC_KNOWN_KEYS
+            if unknown_sync:
+                errors.append(f"synchronization: unknown keys {sorted(unknown_sync)}")
+            mode = sync.get("mode", "scheduled")
+            if mode not in {"best_effort", "barrier", "scheduled"}:
+                errors.append(
+                    f"synchronization.mode must be best_effort|barrier|scheduled, got {mode!r}"
+                )
+
+        atomicity = data.get("atomicity", {})
+        if isinstance(atomicity, dict):
+            unknown_at = set(atomicity) - cls._ATOMICITY_KNOWN_KEYS
+            if unknown_at:
+                errors.append(f"atomicity: unknown keys {sorted(unknown_at)}")
+
+        injections = data.get("injections", [])
+        if not injections:
+            errors.append("injections list is empty or missing")
+        for idx, inj in enumerate(injections or []):
+            prefix = f"injections[{idx}]"
+            if not isinstance(inj, dict):
+                errors.append(f"{prefix}: must be a mapping")
+                continue
+            if not inj.get("id"):
+                errors.append(f"{prefix}: missing required field 'id'")
+            if not inj.get("target"):
+                errors.append(f"{prefix}: missing required field 'target'")
+            fault_spec = inj.get("fault")
+            if not fault_spec:
+                errors.append(f"{prefix}: missing required field 'fault'")
+            elif isinstance(fault_spec, dict):
+                fkind = fault_spec.get("kind")
+                if not fkind:
+                    errors.append(f"{prefix}.fault: missing required field 'kind'")
+                elif fkind not in cls._FAULT_REGISTRY:
+                    errors.append(
+                        f"{prefix}.fault: unsupported fault kind {fkind!r}"
+                    )
+            unknown_inj = set(inj) - cls._INJECTION_KNOWN_KEYS
+            if unknown_inj:
+                errors.append(f"{prefix}: unknown keys {sorted(unknown_inj)}")
+
+        return errors
+
+    @classmethod
+    def build_distributed_scenario(cls, path: str) -> "DistributedScenario":
+        """Load a ``kind: DistributedScenario`` YAML file and return a
+        :class:`~chaos_jungle.distributed.DistributedScenario`.
+
+        Parameters
+        ----------
+        path :
+            Path to the YAML file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the file does not exist.
+        ValueError
+            If the YAML has schema errors or unknown fault kinds.
+        """
+        from chaos_jungle.distributed.scenario import (
+            AtomicityConfig,
+            DistributedSafetyConfig,
+            DistributedScenario,
+            Injection,
+            SyncConfig,
+        )
+
+        try:
+            import yaml
+        except ImportError as exc:
+            raise ImportError("PyYAML required: pip install pyyaml") from exc
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"DistributedScenario config not found: {path}")
+
+        with open(path) as fh:
+            data = yaml.safe_load(fh) or {}
+
+        errors = cls.validate_distributed_dict(data, path=path)
+        if errors:
+            raise ValueError(
+                f"DistributedScenario config {path!r} has {len(errors)} error(s):\n"
+                + "\n".join(f"  • {e}" for e in errors)
+            )
+
+        metadata = data.get("metadata", {})
+        name = metadata.get("name", "unnamed")
+
+        sync_d = data.get("synchronization", {})
+        sync = SyncConfig(
+            mode=sync_d.get("mode", "scheduled"),
+            start_after=_parse_duration(sync_d.get("start_after", 5.0)),
+            maximum_skew_ms=float(sync_d.get("maximum_skew_ms", 100.0)),
+            require_all_ready=bool(sync_d.get("require_all_ready", True)),
+            prepare_timeout_s=float(sync_d.get("prepare_timeout_s", 30.0)),
+            strict_skew=bool(sync_d.get("strict_skew", True)),
+        )
+
+        atom_d = data.get("atomicity", {})
+        atomicity = AtomicityConfig(
+            prepare=atom_d.get("prepare", "all_or_nothing"),
+            activation_failure=atom_d.get("activation_failure", "rollback_all"),
+            recovery_failure=atom_d.get("recovery_failure", "mark_invalid"),
+        )
+
+        safety_d = data.get("safety", {})
+        safety = DistributedSafetyConfig(
+            emergency_stop=bool(safety_d.get("emergency_stop", True)),
+            maximum_duration=_parse_duration(safety_d.get("maximum_duration", 90.0)),
+            rollback_all=bool(safety_d.get("rollback_all", True)),
+        )
+
+        obs_d = data.get("observation", {})
+        observation_duration = _parse_duration(obs_d.get("duration", 60.0))
+
+        members: list[Injection] = []
+        for inj_d in data.get("injections", []):
+            inj_id = inj_d["id"]
+            target = cls.build_target(inj_d["target"])
+            fault = cls.build_fault(dict(inj_d["fault"]))
+            members.append(Injection(id=inj_id, target=target, fault=fault))
+
+        return DistributedScenario(
+            name=name,
+            members=members,
+            synchronization=sync,
+            atomicity=atomicity,
+            observation_duration=observation_duration,
+            safety=safety,
+        )
 
     # ── ExperimentPlan compilation ────────────────────────────────────────
 
@@ -594,3 +782,6 @@ def load_scenario(spec: dict[str, Any]) -> tuple:
 
 def load_suite(path: str):
     return ConfigLoader.load_suite(path)
+
+def build_distributed_scenario(path: str):
+    return ConfigLoader.build_distributed_scenario(path)

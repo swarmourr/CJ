@@ -115,6 +115,16 @@ from chaos_jungle.faults import (
     SkillFilePermissionDenied,
 )
 from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
+from chaos_jungle.distributed import (
+    DistributedScenario,
+    DistributedCoordinator,
+    Injection,
+    SyncConfig,
+    AtomicityConfig,
+    DistributedSafetyConfig,
+    GroupActivationEvidence,
+    MemberEvidence,
+)
 from chaos_jungle.inject.intercept import (
     inject,
     InjectResult,
@@ -186,6 +196,15 @@ __all__ = [
     "LocalTarget",
     "SSHTarget",
     "HTTPTarget",
+    # Distributed injection
+    "DistributedScenario",
+    "DistributedCoordinator",
+    "Injection",
+    "SyncConfig",
+    "AtomicityConfig",
+    "DistributedSafetyConfig",
+    "GroupActivationEvidence",
+    "MemberEvidence",
     # Guardrails
     "ConflictError",
     "ConflictWarning",
