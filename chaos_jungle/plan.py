@@ -591,7 +591,7 @@ class ExperimentPlan:
             elif isinstance(target, HTTPTarget):
                 target_spec = TargetSpec(
                     kind="http",
-                    url=getattr(target, "base_url", ""),
+                    url=getattr(target, "url", ""),
                 )
             else:
                 target_spec = TargetSpec(kind="local")
@@ -615,7 +615,7 @@ class ExperimentPlan:
                     ts = TargetSpec(kind="ssh", host=getattr(t, "host", ""),
                                     user=getattr(t, "user", ""), port=getattr(t, "port", 22))
                 elif isinstance(t, _HTTP):
-                    ts = TargetSpec(kind="http", url=getattr(t, "base_url", "") or getattr(t, "url", ""))
+                    ts = TargetSpec(kind="http", url=getattr(t, "url", ""))
                 else:
                     ts = TargetSpec(kind="local")
                 f = inj.fault
@@ -699,7 +699,7 @@ class ExperimentPlan:
                 port=getattr(target_obj, "port", 22),
             )
         elif isinstance(target_obj, HTTPTarget):
-            target_spec = TargetSpec(kind="http", url=getattr(target_obj, "base_url", ""))
+            target_spec = TargetSpec(kind="http", url=getattr(target_obj, "url", ""))
         else:
             target_spec = TargetSpec(kind="local")
 

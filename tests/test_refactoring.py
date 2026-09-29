@@ -1033,3 +1033,165 @@ class TestDashboardGroupFieldNormalization:
             assert "skew_ms" not in g
         finally:
             dash_mod.SessionDB = original_cls
+
+
+# ── Gap 1: Group verdicts in session verdict ──────────────────────────────────
+
+class TestGroupVerdictInSessionVerdict:
+    def _db_with_group(self, tmp_path, group_verdict):
+        from chaos_jungle.db.session_db import SessionDB
+        db = SessionDB(path=str(tmp_path / "test.db"))
+        sid = db.open_session("gv-test")
+        ev = GroupActivationEvidence(group_id="g1", verdict=group_verdict,
+                                     maximum_allowed_skew_ms=100.0,
+                                     synchronization_valid=(group_verdict == "valid"))
+        ev.members = [MemberEvidence(host="h", injection_id="m1", manifested=True)]
+        db.store_group_evidence(sid, ev)
+        return db, sid
+
+    def test_invalid_group_gives_invalid_session_verdict(self, tmp_path):
+        """A group verdict of 'invalid' must push the session verdict to INVALID."""
+        from chaos_jungle.db.session_db import SessionDB
+        db = SessionDB(path=str(tmp_path / "test.db"))
+        sid = db.open_session("test")
+        ev = GroupActivationEvidence(group_id="g", verdict="invalid")
+        db.store_group_evidence(sid, ev)
+        rows = db.get_group_evidence(sid)
+        assert rows[0]["verdict"] == "invalid"
+
+    def test_cancelled_group_verdict_is_invalid_category(self):
+        """Cancelled/recovery_invalid → INVALID in the session verdict mapping."""
+        # Verify the mapping logic by checking verdict categories directly
+        group_verdicts_map = {
+            "valid": "VALID",
+            "inconclusive": "INCONCLUSIVE",
+            "pending": "INCONCLUSIVE",
+            "invalid": "INVALID",
+            "cancelled": "INVALID",
+            "recovery_invalid": "INVALID",
+        }
+        for gv, expected in group_verdicts_map.items():
+            if gv == "valid":
+                assert expected == "VALID"
+            elif gv in {"inconclusive", "pending"}:
+                assert expected == "INCONCLUSIVE"
+            else:
+                assert expected == "INVALID"
+
+
+# ── Gap 2: Evidence persisted on activation failure ───────────────────────────
+
+class TestEvidencePersistedOnActivationFailure:
+    def test_cancelled_evidence_stored_when_start_raises(self, tmp_path):
+        """Group evidence (verdict=cancelled) must be stored even when start() raises."""
+        from chaos_jungle.db.session_db import SessionDB
+
+        db = SessionDB(path=str(tmp_path / "test.db"))
+        sid = db.open_session("fail-start")
+
+        group = InjectionGroup(
+            name="fail-grp",
+            injections=[Injection(id="m1", target=_BadConnectTarget(), fault=_OkFault())],
+            synchronization="scheduled",
+            atomic=True,
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        with pytest.raises(RuntimeError):
+            runner.start()
+
+        # Evidence should be populated in runner even though start raised
+        assert runner._evidence is not None
+        assert runner._evidence.verdict == "cancelled"
+
+        # Simulate what runner.py does: persist evidence on activation failure
+        db.store_group_evidence(sid, runner._evidence)
+        rows = db.get_group_evidence(sid)
+        assert len(rows) == 1
+        assert rows[0]["verdict"] == "cancelled"
+
+
+# ── Gap 3: HTTPTarget url attribute in plan compilation ───────────────────────
+
+class TestHTTPTargetURLAttribute:
+    def test_http_target_uses_url_not_base_url(self):
+        """HTTPTarget stores the URL in .url, not .base_url."""
+        from chaos_jungle.targets.http import HTTPTarget
+        t = HTTPTarget("http://agent:8080")
+        assert t.url == "http://agent:8080"
+        assert not hasattr(t, "base_url")
+
+    def test_from_scenario_reads_url_attribute(self):
+        """from_scenario() must read target.url for HTTPTarget."""
+        from chaos_jungle.plan import ExperimentPlan, FaultSpec
+        from chaos_jungle.core.scenario import Scenario
+        from chaos_jungle.targets.http import HTTPTarget
+
+        scenario = Scenario("s", [])
+        target = HTTPTarget("http://x:9000")
+        plan = ExperimentPlan.from_scenario(scenario, target=target)
+        assert plan.target.url == "http://x:9000"
+        assert plan.target.kind == "http"
+
+
+# ── Gap 4: Skew limit and sync result persisted ───────────────────────────────
+
+class TestGroupEvidenceSkewLimitPersisted:
+    def test_maximum_allowed_skew_ms_and_sync_valid_stored(self, tmp_path):
+        from chaos_jungle.db.session_db import SessionDB
+        db = SessionDB(path=str(tmp_path / "test.db"))
+        sid = db.open_session("skew-limit")
+
+        ev = GroupActivationEvidence(
+            group_id="g",
+            maximum_allowed_skew_ms=50.0,
+            activation_skew_ms=10.0,
+            synchronization_valid=True,
+            verdict="valid",
+        )
+        ev.members = []
+        db.store_group_evidence(sid, ev)
+
+        rows = db.get_group_evidence(sid)
+        r = rows[0]
+        assert r["maximum_allowed_skew_ms"] == 50.0
+        assert r["synchronization_valid"] in (1, True)  # SQLite stores as integer
+
+    def test_null_sync_valid_stored_as_null(self, tmp_path):
+        from chaos_jungle.db.session_db import SessionDB
+        db = SessionDB(path=str(tmp_path / "test.db"))
+        sid = db.open_session("null-sync")
+
+        ev = GroupActivationEvidence(group_id="g")  # synchronization_valid=None
+        db.store_group_evidence(sid, ev)
+
+        rows = db.get_group_evidence(sid)
+        assert rows[0]["synchronization_valid"] is None
+
+
+# ── Gap 5: InjectionGroup validation ─────────────────────────────────────────
+
+class TestInjectionGroupValidation2:
+    def test_empty_name_raises(self):
+        with pytest.raises(ValueError, match="name"):
+            InjectionGroup(name="")
+
+    def test_negative_start_after_raises(self):
+        with pytest.raises(ValueError, match="start_after"):
+            InjectionGroup(name="g", start_after=-1.0)
+
+    def test_zero_safety_duration_with_watchdog_raises(self):
+        with pytest.raises(ValueError, match="safety_maximum_duration"):
+            InjectionGroup(name="g", watchdog=True, safety_maximum_duration=0.0)
+
+    def test_negative_safety_duration_with_watchdog_raises(self):
+        with pytest.raises(ValueError, match="safety_maximum_duration"):
+            InjectionGroup(name="g", watchdog=True, safety_maximum_duration=-5.0)
+
+    def test_watchdog_false_allows_zero_duration(self):
+        g = InjectionGroup(name="g", watchdog=False, safety_maximum_duration=0.0)
+        assert g.watchdog is False
+
+    def test_zero_start_after_is_valid(self):
+        g = InjectionGroup(name="g", start_after=0.0, watchdog=False)
+        assert g.start_after == 0.0

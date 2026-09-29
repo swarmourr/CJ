@@ -171,6 +171,8 @@ class InjectionGroup:
     def __post_init__(self) -> None:
         if not self.group_id:
             self.group_id = str(uuid.uuid4())[:8]
+        if not self.name:
+            raise ValueError("InjectionGroup.name must not be empty")
         if self.synchronization not in {"best_effort", "barrier", "scheduled"}:
             raise ValueError(
                 f"synchronization must be best_effort|barrier|scheduled, "
@@ -182,6 +184,13 @@ class InjectionGroup:
             raise ValueError(f"on_activation_failure must be rollback_all|continue")
         if self.on_skew_violation not in {"rollback_all", "mark_invalid", "continue"}:
             raise ValueError(f"on_skew_violation must be rollback_all|mark_invalid|continue")
+        if self.start_after < 0:
+            raise ValueError(f"start_after must be >= 0, got {self.start_after}")
+        if self.watchdog and self.safety_maximum_duration <= 0:
+            raise ValueError(
+                f"safety_maximum_duration must be > 0 when watchdog=True, "
+                f"got {self.safety_maximum_duration}"
+            )
 
 
 class InjectionGroupRunner:

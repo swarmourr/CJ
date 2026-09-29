@@ -915,9 +915,18 @@ class ChaosRunner:
                 gr.start()
                 self._group_runners.append(gr)
             except RuntimeError as _grp_exc:
+                # Persist the cancelled/failed evidence before unwinding
+                if gr._evidence is not None:
+                    try:
+                        self.db.store_group_evidence(self._session_id, gr._evidence)
+                        self._group_evidence.append(gr._evidence)
+                    except Exception:
+                        pass
                 for _started in self._group_runners:
                     try:
-                        _started.stop()
+                        _ev = _started.stop()
+                        self.db.store_group_evidence(self._session_id, _ev)
+                        self._group_evidence.append(_ev)
                     except Exception:
                         pass
                 self._rollback(logged)
@@ -1263,8 +1272,21 @@ class ChaosRunner:
             reverted_count += 1
 
         # ── Compute and store session verdict ─────────────────────────────────
+        # Map group evidence verdicts to the same VALID/INVALID/INCONCLUSIVE scale
+        _group_verdicts: list[str] = []
+        for _gev in self._group_evidence:
+            _gv = getattr(_gev, "verdict", "pending")
+            if _gv == "valid":
+                _group_verdicts.append("VALID")
+            elif _gv in {"inconclusive", "pending"}:
+                _group_verdicts.append("INCONCLUSIVE")
+            else:  # invalid, cancelled, recovery_invalid
+                _group_verdicts.append("INVALID")
+
         _all_verdicts = (
-            list(self._activation_verdicts.values()) + list(recovery_verdicts.values())
+            list(self._activation_verdicts.values())
+            + list(recovery_verdicts.values())
+            + _group_verdicts
         )
         if _all_verdicts:
             if "INVALID" in _all_verdicts:
