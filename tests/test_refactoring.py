@@ -971,19 +971,25 @@ class TestRollbackVerdictNotOverwritten:
 
     def test_skew_violation_plus_rollback_failure_gives_recovery_invalid(self):
         """Rollback failure during skew-violation rollback → recovery_invalid, not invalid."""
+        # Two members with a 20ms sleep on one → guaranteed skew > 0ms limit
+        class _SlowStart(_FailStopFault):
+            def start(self, t):
+                import time; time.sleep(0.02)
+
         group = InjectionGroup(
             name="sv-rf",
             injections=[
-                Injection(id="m1", target=LocalTarget(), fault=_FailStopFault()),
+                Injection(id="m1", target=LocalTarget(), fault=_SlowStart()),
+                Injection(id="m2", target=LocalTarget(), fault=_FailStopFault()),
             ],
             synchronization="best_effort",
             atomic=False,
-            maximum_skew_ms=-1.0,   # any skew exceeds -1ms → always triggers violation
+            maximum_skew_ms=0.0,   # any real timing difference exceeds 0ms
             on_skew_violation="rollback_all",
             watchdog=False,
         )
         runner = InjectionGroupRunner(group)
-        runner.start()  # activates → skew=0.0 > -1.0 → rollback → stop() raises
+        runner.start()  # skew > 0ms → rollback → stop() raises → recovery_invalid
         assert runner._evidence.verdict == "recovery_invalid"
 
 
@@ -1189,9 +1195,58 @@ class TestInjectionGroupValidation2:
             InjectionGroup(name="g", watchdog=True, safety_maximum_duration=-5.0)
 
     def test_watchdog_false_allows_zero_duration(self):
-        g = InjectionGroup(name="g", watchdog=False, safety_maximum_duration=0.0)
+        inj = Injection(id="m1", target=LocalTarget(), fault=_OkFault())
+        g = InjectionGroup(name="g", injections=[inj], watchdog=False, safety_maximum_duration=0.0)
         assert g.watchdog is False
 
     def test_zero_start_after_is_valid(self):
-        g = InjectionGroup(name="g", start_after=0.0, watchdog=False)
+        inj = Injection(id="m1", target=LocalTarget(), fault=_OkFault())
+        g = InjectionGroup(name="g", injections=[inj], start_after=0.0, watchdog=False)
         assert g.start_after == 0.0
+
+    def test_negative_maximum_skew_ms_raises(self):
+        inj = Injection(id="m1", target=LocalTarget(), fault=_OkFault())
+        with pytest.raises(ValueError, match="maximum_skew_ms"):
+            InjectionGroup(name="g", injections=[inj], maximum_skew_ms=-0.1, watchdog=False)
+
+    def test_empty_injections_raises(self):
+        with pytest.raises(ValueError, match="injections"):
+            InjectionGroup(name="g", injections=[], watchdog=False)
+
+    def test_duplicate_injection_ids_raises(self):
+        inj1 = Injection(id="dup", target=LocalTarget(), fault=_OkFault())
+        inj2 = Injection(id="dup", target=LocalTarget(), fault=_OkFault())
+        with pytest.raises(ValueError, match="Duplicate"):
+            InjectionGroup(name="g", injections=[inj1, inj2], watchdog=False)
+
+
+# ── requested_start persisted in group_evidence ───────────────────────────────
+
+class TestRequestedStartPersisted:
+    def test_requested_start_stored_and_retrieved(self, tmp_path):
+        from chaos_jungle.db.session_db import SessionDB
+        db = SessionDB(path=str(tmp_path / "test.db"))
+        sid = db.open_session("rs-test")
+
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        ev = GroupActivationEvidence(
+            group_id="g",
+            requested_start=t0,
+            verdict="valid",
+            maximum_allowed_skew_ms=100.0,
+            synchronization_valid=True,
+        )
+        ev.members = []
+        db.store_group_evidence(sid, ev)
+
+        rows = db.get_group_evidence(sid)
+        assert rows[0]["requested_start"] == t0.isoformat()
+
+    def test_null_requested_start_stored_as_null(self, tmp_path):
+        from chaos_jungle.db.session_db import SessionDB
+        db = SessionDB(path=str(tmp_path / "test.db"))
+        sid = db.open_session("rs-null")
+        ev = GroupActivationEvidence(group_id="g")  # requested_start=None
+        db.store_group_evidence(sid, ev)
+        rows = db.get_group_evidence(sid)
+        assert rows[0]["requested_start"] is None

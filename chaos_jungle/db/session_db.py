@@ -243,15 +243,16 @@ class SessionDB:
                 ON scenarios(status);
 
             CREATE TABLE IF NOT EXISTS group_evidence (
-                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id             INTEGER NOT NULL REFERENCES sessions(id),
-                group_id               TEXT    NOT NULL,
-                verdict                TEXT    NOT NULL DEFAULT 'pending',
-                skew_ms                REAL,
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id              INTEGER NOT NULL REFERENCES sessions(id),
+                group_id                TEXT    NOT NULL,
+                verdict                 TEXT    NOT NULL DEFAULT 'pending',
+                skew_ms                 REAL,
                 maximum_allowed_skew_ms REAL,
-                synchronization_valid  INTEGER,
-                members_json           TEXT    NOT NULL DEFAULT '[]',
-                recorded_at            TEXT    NOT NULL
+                synchronization_valid   INTEGER,
+                requested_start         TEXT,
+                members_json            TEXT    NOT NULL DEFAULT '[]',
+                recorded_at             TEXT    NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_group_evidence_session
@@ -311,6 +312,7 @@ class SessionDB:
         _group_evidence_cols = [
             ("maximum_allowed_skew_ms", "REAL"),
             ("synchronization_valid",   "INTEGER"),
+            ("requested_start",         "TEXT"),
         ]
         for col, defn in _group_evidence_cols:
             try:
@@ -1180,8 +1182,8 @@ class SessionDB:
         cur = self._conn.execute(
             "INSERT INTO group_evidence "
             "(session_id, group_id, verdict, skew_ms, maximum_allowed_skew_ms, "
-            "synchronization_valid, members_json, recorded_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "synchronization_valid, requested_start, members_json, recorded_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 session_id,
                 d["group_id"],
@@ -1189,6 +1191,7 @@ class SessionDB:
                 d.get("activation_skew_ms"),
                 d.get("maximum_allowed_skew_ms"),
                 None if sync_valid is None else (1 if sync_valid else 0),
+                d.get("requested_start"),
                 json.dumps(d.get("members", [])),
                 _now(),
             ),

@@ -191,6 +191,14 @@ class InjectionGroup:
                 f"safety_maximum_duration must be > 0 when watchdog=True, "
                 f"got {self.safety_maximum_duration}"
             )
+        if self.maximum_skew_ms < 0:
+            raise ValueError(f"maximum_skew_ms must be >= 0, got {self.maximum_skew_ms}")
+        if not self.injections:
+            raise ValueError("InjectionGroup.injections must not be empty")
+        ids = [inj.id for inj in self.injections]
+        if len(ids) != len(set(ids)):
+            dupes = [i for i in ids if ids.count(i) > 1]
+            raise ValueError(f"Duplicate injection IDs in group {self.name!r}: {dupes}")
 
 
 class InjectionGroupRunner:

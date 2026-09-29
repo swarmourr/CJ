@@ -52,7 +52,7 @@ def _group(n=2, **kw):
 
 class TestInjectionGroupValidation:
     def test_defaults(self):
-        g = InjectionGroup(name="g")
+        g = InjectionGroup(name="g", injections=[_inj()])
         assert g.synchronization == "scheduled"
         assert g.atomic is True
         assert g.maximum_skew_ms == 100.0
@@ -60,33 +60,33 @@ class TestInjectionGroupValidation:
         assert g.watchdog is True
 
     def test_group_id_auto_assigned(self):
-        g1 = InjectionGroup(name="a")
-        g2 = InjectionGroup(name="b")
+        g1 = InjectionGroup(name="a", injections=[_inj()])
+        g2 = InjectionGroup(name="b", injections=[_inj()])
         assert g1.group_id != g2.group_id
 
     @pytest.mark.parametrize("bad", ["unknown", "", "sync"])
     def test_invalid_synchronization_raises(self, bad):
         with pytest.raises(ValueError, match="synchronization"):
-            InjectionGroup(name="g", synchronization=bad)
+            InjectionGroup(name="g", injections=[_inj()], synchronization=bad)
 
     @pytest.mark.parametrize("bad", ["ignore", "skip"])
     def test_invalid_on_prepare_failure_raises(self, bad):
         with pytest.raises(ValueError):
-            InjectionGroup(name="g", on_prepare_failure=bad)
+            InjectionGroup(name="g", injections=[_inj()], on_prepare_failure=bad)
 
     @pytest.mark.parametrize("bad", ["ignore", "abort"])
     def test_invalid_on_activation_failure_raises(self, bad):
         with pytest.raises(ValueError):
-            InjectionGroup(name="g", on_activation_failure=bad)
+            InjectionGroup(name="g", injections=[_inj()], on_activation_failure=bad)
 
     @pytest.mark.parametrize("bad", ["silent", "abort"])
     def test_invalid_on_skew_violation_raises(self, bad):
         with pytest.raises(ValueError):
-            InjectionGroup(name="g", on_skew_violation=bad)
+            InjectionGroup(name="g", injections=[_inj()], on_skew_violation=bad)
 
     @pytest.mark.parametrize("mode", ["best_effort", "barrier", "scheduled"])
     def test_valid_synchronization_modes(self, mode):
-        g = InjectionGroup(name="g", synchronization=mode)
+        g = InjectionGroup(name="g", injections=[_inj()], synchronization=mode, watchdog=False)
         assert g.synchronization == mode
 
 
@@ -120,7 +120,7 @@ class TestInjectionGroupRunnerLifecycle:
             assert m.reverted_at is not None
 
     def test_stop_before_start_is_cancelled(self):
-        runner = InjectionGroupRunner(InjectionGroup(name="g", watchdog=False))
+        runner = InjectionGroupRunner(InjectionGroup(name="g", injections=[_inj()], watchdog=False))
         ev = runner.stop()
         assert ev.verdict == "cancelled"
 
