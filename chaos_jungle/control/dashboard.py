@@ -548,6 +548,7 @@ td.mono{font-family:var(--mono);font-size:11px}
       <div class="dp-tab"        data-tab="tools"    onclick="switchRunTab('tools')">Tool Calls</div>
       <div class="dp-tab"        data-tab="commands" onclick="switchRunTab('commands')">Commands</div>
       <div class="dp-tab"        data-tab="events"   onclick="switchRunTab('events')">Events</div>
+      <div class="dp-tab"        data-tab="groups"   onclick="switchRunTab('groups')">Groups</div>
     </div>
     <div id="run-body" style="flex:1;overflow-y:auto;padding:20px 24px;width:100%">
       <div class="empty-state"><div class="empty-icon">&#8598;</div><div class="empty-text">Select a run from the left panel</div></div>
@@ -1449,18 +1450,20 @@ async function openDetail(id) {
   document.getElementById('run-body').innerHTML = '<div class="loading-state">Loading…</div>';
 
   try {
-    const [sRes, lRes, tcRes, impRes, rsRes] = await Promise.all([
+    const [sRes, lRes, tcRes, impRes, rsRes, grRes] = await Promise.all([
       fetch(`/api/session/${id}`),
       fetch(`/api/session/${id}/llm_calls`),
       fetch(`/api/session/${id}/tool_calls`),
       fetch(`/api/session/${id}/impact`),
       fetch(`/api/session/${id}/resources`),
+      fetch(`/api/session/${id}/groups`),
     ]);
     const sd        = await sRes.json();
     const llm       = await lRes.json();
     const toolCalls = await tcRes.json();
     const impact    = impRes.ok ? await impRes.json() : null;
     const resources = rsRes.ok ? await rsRes.json() : [];
+    const groups    = grRes.ok ? await grRes.json() : [];
     const s   = sd.session||{};
     _rawLLM       = llm;
     _rawResults   = sd.results||[];
@@ -1487,6 +1490,7 @@ async function openDetail(id) {
       llm:      buildDPLLM(llm),
       tools:    buildDPToolCalls(toolCalls, s),
       events:   buildDPEvents(sd.events||[]),
+      groups:   buildDPGroups(groups),
     };
     switchRunTab(_runTab);
   } catch(e) {
@@ -2439,6 +2443,45 @@ function buildDPEvents(events) {
   }).join('');
 }
 
+function buildDPGroups(groups) {
+  if (!groups || !groups.length) return '<div style="color:var(--text3);font-size:12px;padding:4px">No injection groups recorded</div>';
+  const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const verdictColor = v => ({valid:'var(--green)',invalid:'var(--red)',inconclusive:'var(--yellow)',cancelled:'var(--text3)',recovery_invalid:'var(--red)',pending:'var(--text3)'}[v]||'var(--text3)');
+  const boolDot = v => v===true?`<span style="color:var(--green)">&#10003;</span>`:v===false?`<span style="color:var(--red)">&#10007;</span>`:`<span style="color:var(--text3)">?</span>`;
+  return groups.map(g => {
+    const vc = verdictColor(g.verdict||'pending');
+    const skew = g.activation_skew_ms!=null ? `${g.activation_skew_ms.toFixed(1)} ms` : '—';
+    const members = (g.members||[]).map(m => `
+      <tr>
+        <td style="font-family:var(--mono);font-size:11px">${esc(m.host||'local')}</td>
+        <td style="font-family:var(--mono);font-size:11px">${esc(m.injection_id||'')}</td>
+        <td>${boolDot(m.manifested)}</td>
+        <td style="font-size:11px;color:var(--text3)">${m.active_at ? fmtDate(m.active_at) : '—'}</td>
+        <td style="font-size:11px;color:var(--text3)">${m.reverted_at ? fmtDate(m.reverted_at) : '—'}</td>
+        <td style="font-size:11px;color:var(--red)">${esc(m.error||'')}</td>
+      </tr>`).join('');
+    return `<div style="margin-bottom:20px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border)">
+        <span style="font-family:var(--mono);font-size:12px;font-weight:600">${esc(g.group_id||g.id||'')}</span>
+        <span style="font-size:11px;font-weight:600;color:${vc}">${esc(g.verdict||'pending')}</span>
+        <span style="font-size:11px;color:var(--text3)">skew: ${skew}</span>
+        <span style="font-size:11px;color:var(--text3);margin-left:auto">max allowed: ${g.maximum_allowed_skew_ms??100} ms</span>
+      </div>
+      ${members ? `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--surface)">
+          <th style="padding:6px 10px;text-align:left;font-weight:500;border-bottom:1px solid var(--border)">Host</th>
+          <th style="padding:6px 10px;text-align:left;font-weight:500;border-bottom:1px solid var(--border)">Injection ID</th>
+          <th style="padding:6px 10px;text-align:center;font-weight:500;border-bottom:1px solid var(--border)">Manifested</th>
+          <th style="padding:6px 10px;text-align:left;font-weight:500;border-bottom:1px solid var(--border)">Active At</th>
+          <th style="padding:6px 10px;text-align:left;font-weight:500;border-bottom:1px solid var(--border)">Reverted At</th>
+          <th style="padding:6px 10px;text-align:left;font-weight:500;border-bottom:1px solid var(--border)">Error</th>
+        </tr></thead>
+        <tbody>${members}</tbody>
+      </table>` : '<div style="padding:10px 14px;color:var(--text3);font-size:11px">No members</div>'}
+    </div>`;
+  }).join('');
+}
+
 function buildDPToolCalls(calls, session) {
   if (!Array.isArray(calls) || !calls.length) return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px;color:var(--text3);gap:8px">
     <div style="font-size:28px;opacity:.3">🔧</div>
@@ -2701,6 +2744,17 @@ async def api_session_resources(session_id: int):
     try:
         samples = db.get_resource_samples(session_id)
         return JSONResponse(samples)
+    except Exception:
+        return JSONResponse([])
+
+
+@app.get("/api/session/{session_id}/groups")
+async def api_session_groups(session_id: int):
+    """Group activation evidence for a session."""
+    db = SessionDB()
+    try:
+        groups = db.get_group_evidence(session_id)
+        return JSONResponse(groups)
     except Exception:
         return JSONResponse([])
 

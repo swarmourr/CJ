@@ -111,6 +111,12 @@ class DistributedCoordinator:
             self.evidence = self._runner._evidence or self.evidence
             return self.evidence
 
+        # Skip on_ready if prepare was cancelled (e.g. all members failed)
+        ev = self._runner._evidence
+        if ev is not None and ev.verdict == "cancelled":
+            self.evidence = ev
+            return self.evidence
+
         if self.on_ready is not None:
             try:
                 self.on_ready()

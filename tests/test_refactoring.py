@@ -818,3 +818,71 @@ class TestVerifyRecoveredExceptionHandling:
         runner.start()
         ev = runner.stop()
         assert ev.verdict != "recovery_invalid"
+
+
+# ── Single-member group (no longer inconclusive) ──────────────────────────────
+
+class TestSingleMemberGroup:
+    def test_single_member_valid_when_manifested(self):
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        ev = GroupActivationEvidence(group_id="g", maximum_allowed_skew_ms=100.0)
+        ev.members = [MemberEvidence(host="a", injection_id="m0", active_at=t0, manifested=True)]
+        ev.finalize()
+        assert ev.activation_skew_ms == 0.0
+        assert ev.verdict == "valid"
+        assert ev.group_valid is True
+
+    def test_single_member_inconclusive_when_manifested_unknown(self):
+        t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        ev = GroupActivationEvidence(group_id="g", maximum_allowed_skew_ms=100.0)
+        ev.members = [MemberEvidence(host="a", injection_id="m0", active_at=t0, manifested=None)]
+        ev.finalize()
+        assert ev.activation_skew_ms == 0.0
+        assert ev.verdict == "inconclusive"
+        assert ev.group_valid is False
+
+    def test_single_member_runner_has_zero_skew(self):
+        # Before fix: skew was None → verdict forced to inconclusive (no skew data).
+        # After fix: skew is 0.0 → verdict is inconclusive only if manifested=None,
+        # not because skew is missing. synchronization_valid must be True.
+        group = InjectionGroup(
+            name="sm",
+            injections=[Injection(id="m1", target=LocalTarget(), fault=_OkFault())],
+            synchronization="best_effort",
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        runner.start()
+        ev = runner.stop()
+        assert ev.activation_skew_ms == 0.0
+        assert ev.synchronization_valid is True
+
+
+# ── on_ready not called after cancelled start ─────────────────────────────────
+
+class TestOnReadyAfterCancelledStart:
+    def test_on_ready_not_called_when_start_cancelled(self):
+        from chaos_jungle.distributed.coordinator import DistributedCoordinator
+
+        called = []
+        def on_ready():
+            called.append(True)
+
+        # All members fail prepare → start is cancelled
+        members = [
+            Injection(id="bad1", target=_BadConnectTarget(), fault=_OkFault()),
+            Injection(id="bad2", target=_BadConnectTarget(), fault=_OkFault()),
+        ]
+        scenario = DistributedScenario(
+            name="no-ready",
+            members=members,
+            synchronization=SyncConfig(mode="scheduled", start_after=0.01,
+                                       require_all_ready=True),
+            atomicity=AtomicityConfig(prepare="all_or_nothing"),
+            safety=DistributedSafetyConfig(),
+            observation_duration=0.0,
+        )
+        coord = DistributedCoordinator(scenario, on_ready=on_ready)
+        ev = coord.run()
+        assert ev.verdict == "cancelled"
+        assert not called, "on_ready must not be called when start was cancelled"

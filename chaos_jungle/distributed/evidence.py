@@ -89,14 +89,22 @@ class GroupActivationEvidence:
         )
 
     def compute_skew(self) -> float | None:
-        """Return observed activation skew in milliseconds, or None."""
+        """Return observed activation skew in milliseconds, or None.
+
+        A single active member has skew 0.0 (perfectly synchronized with
+        itself). None is returned only when no members have active_at set.
+        Note: skew here is controller-observed activation-completion skew,
+        not verified simultaneous remote activation.
+        """
         times = [
             m.active_at.timestamp()
             for m in self.members
             if m.active_at is not None
         ]
-        if len(times) < 2:
+        if not times:
             return None
+        if len(times) == 1:
+            return 0.0
         return (max(times) - min(times)) * 1000.0
 
     def finalize(self) -> None:
