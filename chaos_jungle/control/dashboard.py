@@ -2754,7 +2754,16 @@ async def api_session_groups(session_id: int):
     db = SessionDB()
     try:
         groups = db.get_group_evidence(session_id)
-        return JSONResponse(groups)
+        # Normalize DB column names to the names the dashboard JS expects
+        normalized = []
+        for g in groups:
+            ng = dict(g)
+            if "members_json" in ng:
+                ng["members"] = ng.pop("members_json")
+            if "skew_ms" in ng:
+                ng["activation_skew_ms"] = ng.pop("skew_ms")
+            normalized.append(ng)
+        return JSONResponse(normalized)
     except Exception:
         return JSONResponse([])
 

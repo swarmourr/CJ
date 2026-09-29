@@ -239,10 +239,18 @@ class InjectionGroupSpec:
             "injections": [
                 {
                     "id": m.id,
-                    "target": {"kind": m.target.kind, "host": m.target.host,
-                               "user": m.target.user, "port": m.target.port},
-                    "fault": {"fault_class": m.fault.fault_class,
-                              "parameters": m.fault.parameters},
+                    "target": {
+                        "kind": m.target.kind,
+                        "host": m.target.host,
+                        "user": m.target.user,
+                        "port": m.target.port,
+                        "url": m.target.url,
+                    },
+                    "fault": {
+                        "fault_class": m.fault.fault_class,
+                        "parameters": m.fault.parameters,
+                        "layer": m.fault.layer,
+                    },
                 }
                 for m in self.injections
             ],
@@ -501,6 +509,7 @@ class ExperimentPlan:
                     fault=FaultSpec(
                         fault_class=inj.get("fault", {}).get("fault_class", ""),
                         parameters=inj.get("fault", {}).get("parameters", {}),
+                        layer=inj.get("fault", {}).get("layer", "llm"),
                     ),
                 )
                 for inj in gd.get("injections", [])

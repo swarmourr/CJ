@@ -886,3 +886,150 @@ class TestOnReadyAfterCancelledStart:
         ev = coord.run()
         assert ev.verdict == "cancelled"
         assert not called, "on_ready must not be called when start was cancelled"
+
+
+# ── HTTP URL and fault layer plan round-trip ──────────────────────────────────
+
+class TestPlanGroupURLAndLayer:
+    def test_url_and_layer_serialized(self):
+        from chaos_jungle.plan import (
+            InjectionGroupSpec, InjectionMemberSpec, TargetSpec, FaultSpec,
+        )
+        spec = InjectionGroupSpec(
+            name="g",
+            injections=[InjectionMemberSpec(
+                id="m1",
+                target=TargetSpec(kind="http", url="http://agent:8080"),
+                fault=FaultSpec(fault_class="NetworkDelay", parameters={"delay_ms": 100}, layer="network"),
+            )],
+        )
+        d = spec.to_dict()
+        inj = d["injections"][0]
+        assert inj["target"]["url"] == "http://agent:8080"
+        assert inj["fault"]["layer"] == "network"
+
+    def test_layer_restored_from_dict(self):
+        from chaos_jungle.plan import ExperimentPlan, ScenarioSpec
+        plan = ExperimentPlan(scenario=ScenarioSpec(name="s"))
+        d = plan.to_dict()
+        d["groups"] = [{
+            "name": "g",
+            "injections": [{
+                "id": "m1",
+                "target": {"kind": "http", "url": "http://x:8080"},
+                "fault": {"fault_class": "NetworkDelay", "layer": "network", "parameters": {}},
+            }],
+        }]
+        restored = ExperimentPlan.from_dict(d)
+        assert restored.groups[0].injections[0].fault.layer == "network"
+
+    def test_url_restored_from_dict(self):
+        from chaos_jungle.plan import ExperimentPlan, ScenarioSpec
+        plan = ExperimentPlan(scenario=ScenarioSpec(name="s"))
+        d = plan.to_dict()
+        d["groups"] = [{
+            "name": "g",
+            "injections": [{
+                "id": "m1",
+                "target": {"kind": "http", "url": "http://x:8080"},
+                "fault": {"fault_class": "X", "layer": "llm", "parameters": {}},
+            }],
+        }]
+        restored = ExperimentPlan.from_dict(d)
+        assert restored.groups[0].injections[0].target.url == "http://x:8080"
+
+
+# ── Rollback failures do not get overwritten ──────────────────────────────────
+
+class _FailStartFault(_OkFault):
+    """Fails during start (activation phase)."""
+    def start(self, target): raise RuntimeError("activation boom")
+
+
+class _FailStopFault(_OkFault):
+    """Activates successfully but raises during stop (rollback phase)."""
+    def stop(self, target): raise RuntimeError("stop boom")
+
+
+class TestRollbackVerdictNotOverwritten:
+    def test_activation_failure_plus_rollback_failure_gives_recovery_invalid(self):
+        """Rollback failure during activation-failure rollback → recovery_invalid, not cancelled."""
+        group = InjectionGroup(
+            name="af-rf",
+            injections=[
+                Injection(id="m1", target=LocalTarget(), fault=_FailStopFault()),
+                Injection(id="m2", target=LocalTarget(), fault=_FailStartFault()),
+            ],
+            synchronization="best_effort",
+            atomic=False,
+            on_activation_failure="rollback_all",
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        runner.start()  # m1 activates, m2 fails → rollback → m1.stop() raises
+        assert runner._evidence.verdict == "recovery_invalid"
+
+    def test_skew_violation_plus_rollback_failure_gives_recovery_invalid(self):
+        """Rollback failure during skew-violation rollback → recovery_invalid, not invalid."""
+        group = InjectionGroup(
+            name="sv-rf",
+            injections=[
+                Injection(id="m1", target=LocalTarget(), fault=_FailStopFault()),
+            ],
+            synchronization="best_effort",
+            atomic=False,
+            maximum_skew_ms=-1.0,   # any skew exceeds -1ms → always triggers violation
+            on_skew_violation="rollback_all",
+            watchdog=False,
+        )
+        runner = InjectionGroupRunner(group)
+        runner.start()  # activates → skew=0.0 > -1.0 → rollback → stop() raises
+        assert runner._evidence.verdict == "recovery_invalid"
+
+
+# ── Dashboard group evidence field normalization ───────────────────────────────
+
+class TestDashboardGroupFieldNormalization:
+    def test_api_normalizes_members_and_skew_fields(self, tmp_path):
+        """API must return 'members' and 'activation_skew_ms', not 'members_json'/'skew_ms'."""
+        from fastapi.testclient import TestClient
+        import chaos_jungle.control.dashboard as dash_mod
+        from chaos_jungle.db.session_db import SessionDB
+
+        db_path = str(tmp_path / "test.db")
+        db = SessionDB(path=db_path)
+        sid = db.open_session("norm-test")
+        ev = GroupActivationEvidence(
+            group_id="g-norm",
+            maximum_allowed_skew_ms=100.0,
+            activation_skew_ms=7.3,
+            verdict="valid",
+        )
+        ev.members = [
+            MemberEvidence(host="h", injection_id="m1",
+                           active_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                           manifested=True),
+        ]
+        db.store_group_evidence(sid, ev)
+
+        # Patch the dashboard DB to use our test DB
+        original_cls = dash_mod.SessionDB
+
+        class _PatchedDB(original_cls):
+            def __init__(self, **kw):
+                super().__init__(path=db_path, **kw)
+
+        dash_mod.SessionDB = _PatchedDB
+        try:
+            client = TestClient(dash_mod.app, raise_server_exceptions=True)
+            resp = client.get(f"/api/session/{sid}/groups")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            g = data[0]
+            assert "members" in g, "should be 'members', not 'members_json'"
+            assert "activation_skew_ms" in g, "should be 'activation_skew_ms', not 'skew_ms'"
+            assert "members_json" not in g
+            assert "skew_ms" not in g
+        finally:
+            dash_mod.SessionDB = original_cls

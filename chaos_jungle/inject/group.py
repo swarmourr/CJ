@@ -340,7 +340,8 @@ class InjectionGroupRunner:
             )
             self._revert_all()
             self._evidence.members = [s.evidence for s in self._states]
-            self._evidence.verdict = "cancelled"
+            if self._evidence.verdict != "recovery_invalid":
+                self._evidence.verdict = "cancelled"
             if group.atomic:
                 ids = [s.injection.id for s in activation_failed]
                 raise RuntimeError(
@@ -362,7 +363,8 @@ class InjectionGroupRunner:
                 self._evidence.members = [s.evidence for s in self._states]
                 self._evidence.activation_skew_ms = skew
                 self._evidence.synchronization_valid = False
-                self._evidence.verdict = "invalid"
+                if self._evidence.verdict != "recovery_invalid":
+                    self._evidence.verdict = "invalid"
                 if group.atomic:
                     raise RuntimeError(
                         f"InjectionGroup {group.name!r}: skew {skew:.1f} ms > "
