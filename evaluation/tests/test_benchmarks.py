@@ -163,3 +163,120 @@ class TestScoreTask:
         ok, tp, tt, output = score_task(task, "")
         assert ok is False
         assert "EMPTY" in output or tp == 0
+
+
+# ── EvalPlus scorer unit tests ────────────────────────────────────────────────
+
+class TestEvalPlusScoring:
+    """Verify score_task() with the official evalplus 0.3.1 evaluator.
+
+    All evalplus calls are mocked so no network access is required.
+    The tests exercise the wrapping logic in _score_evalplus / score_task,
+    not the evalplus library itself.
+    """
+
+    # A minimal BenchmarkTask that looks like it came from the evalplus loader
+    def _make_task(self, task_id: str = "HumanEval/0") -> "BenchmarkTask":
+        from evaluation.benchmarks.base import BenchmarkTask
+        problem = {
+            "task_id":            task_id,
+            "prompt":             "def f(x): ...",
+            "entry_point":        "f",
+            "canonical_solution": "    return x + 1\n",
+            "base_input":         [[1], [2], [3]],
+            "plus_input":         [[10], [20], [30], [40], [50]],
+        }
+        return BenchmarkTask(
+            task_id=task_id,
+            benchmark="humanevalplus",
+            prompt=problem["prompt"],
+            entry_point=problem["entry_point"],
+            test_code="",
+            canonical_solution=problem["canonical_solution"],
+            metadata={
+                "source":           "evalplus",
+                "evalplus_dataset": "humaneval",
+                "evalplus_problem": problem,
+            },
+        )
+
+    def _patch_evalplus(self, monkeypatch, base_result, plus_result):
+        """Patch check_correctness and _get_evalplus_groundtruth for one test."""
+        import evalplus.evaluate
+        monkeypatch.setattr(
+            evalplus.evaluate,
+            "check_correctness",
+            lambda *a, **kw: {"base": base_result, "plus": plus_result},
+        )
+        import evaluation.benchmarks.executor as ex
+        monkeypatch.setattr(
+            ex, "_get_evalplus_groundtruth",
+            lambda d: {"HumanEval/0": {"base": [], "plus": []}},
+        )
+
+    def test_canonical_solution_passes(self, monkeypatch):
+        """All base + plus inputs pass → ok=True, tests counted correctly."""
+        self._patch_evalplus(
+            monkeypatch,
+            base_result=("pass", [True, True, True]),
+            plus_result=("pass", [True, True, True, True, True]),
+        )
+        task = self._make_task()
+        ok, tp, tt, out = score_task(task, "def f(x): return x + 1")
+        assert ok is True, f"Canonical solution should pass: {out}"
+        assert tt == 8, f"3 base + 5 plus = 8 total, got {tt}"
+        assert tp == 8
+
+    def test_incorrect_solution_fails(self, monkeypatch):
+        """Wrong solution: base fails → ok=False."""
+        self._patch_evalplus(
+            monkeypatch,
+            base_result=("failed", [False, False, False]),
+            plus_result=("failed", [False] * 5),
+        )
+        task = self._make_task()
+        ok, tp, tt, out = score_task(task, "def f(x): return x")
+        assert ok is False, f"Incorrect solution should fail: {out}"
+        assert tp < tt
+
+    def test_plus_failure_causes_overall_failure(self, monkeypatch):
+        """Base passes but plus fails → ok=False (plus inputs are mandatory)."""
+        self._patch_evalplus(
+            monkeypatch,
+            base_result=("pass", [True, True, True]),
+            plus_result=("failed", [False] * 5),
+        )
+        task = self._make_task()
+        ok, tp, tt, out = score_task(task, "def f(x): return x + 1")
+        assert ok is False, "Plus failure must cause overall failure"
+
+    def test_evalplus_error_cannot_produce_passing_zero_tests(self, monkeypatch):
+        """An exception inside check_correctness must produce (False, 0, 0, ...)."""
+        import evalplus.evaluate
+        import evaluation.benchmarks.executor as ex
+
+        def crash(*a, **kw):
+            raise RuntimeError("simulated evalplus crash")
+
+        monkeypatch.setattr(evalplus.evaluate, "check_correctness", crash)
+        monkeypatch.setattr(
+            ex, "_get_evalplus_groundtruth",
+            lambda d: {"HumanEval/0": {}},
+        )
+        task = self._make_task()
+        ok, tp, tt, out = score_task(task, "def f(x): return x + 1")
+        assert ok is False,  "An evaluator crash must never produce a passing result"
+        assert tt == 0,      "Zero tests must be recorded on crash"
+        assert "ERROR" in out.upper(), f"Output should mention ERROR, got: {out!r}"
+
+    def test_zero_tests_executed_is_failure(self, monkeypatch):
+        """Empty detail lists (tests_total=0) must be treated as failure."""
+        self._patch_evalplus(
+            monkeypatch,
+            base_result=("pass", []),   # no base tests run
+            plus_result=("pass", []),   # no plus tests run
+        )
+        task = self._make_task()
+        ok, tp, tt, out = score_task(task, "def f(x): return x + 1")
+        assert ok is False, "Zero executed tests must not count as a pass"
+        assert tt == 0
