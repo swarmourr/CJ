@@ -87,6 +87,55 @@ def _load_yaml_config(path: str) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _apply_model_config(cfg: dict, dry_run: bool) -> None:
+    """Apply the top-level ``model:`` section from a YAML config to env vars.
+
+    Priority (highest → lowest):
+      1. CLI flags set by ``_apply_env_overrides`` (already in os.environ)
+      2. ``model:`` section in the YAML config
+      3. Existing env vars (CJ_EVAL_BASE_URL etc.)
+
+    ``setdefault`` is used so CLI flags always win.
+
+    Supported keys
+    --------------
+    base_url     : str  — endpoint base URL (CJ_EVAL_BASE_URL)
+    api_key_env  : str  — name of an env var that holds the API key.
+                          The key itself is never stored in the config file.
+    api_key      : str  — API key literal (discouraged; use api_key_env).
+    model        : str  — model identifier (CJ_EVAL_MODEL)
+    temperature  : float — sampling temperature (CJ_EVAL_TEMPERATURE)
+    """
+    if dry_run:
+        return  # dry-run needs no real model; skip silently
+
+    model_cfg = cfg.get("model", {})
+    if not model_cfg:
+        return
+
+    if "base_url" in model_cfg:
+        os.environ.setdefault("CJ_EVAL_BASE_URL", str(model_cfg["base_url"]))
+
+    # Prefer api_key_env (reads the key from a named env var at runtime)
+    if "api_key_env" in model_cfg:
+        key = os.environ.get(str(model_cfg["api_key_env"]), "")
+        if key:
+            os.environ.setdefault("CJ_EVAL_API_KEY", key)
+        else:
+            print(
+                f"[eval] Warning: model.api_key_env={model_cfg['api_key_env']!r} "
+                "is not set in the environment."
+            )
+    elif "api_key" in model_cfg:
+        os.environ.setdefault("CJ_EVAL_API_KEY", str(model_cfg["api_key"]))
+
+    if "model" in model_cfg:
+        os.environ.setdefault("CJ_EVAL_MODEL", str(model_cfg["model"]))
+
+    if "temperature" in model_cfg:
+        os.environ.setdefault("CJ_EVAL_TEMPERATURE", str(model_cfg["temperature"]))
+
+
 def run_single_experiment(
     system_name: str,
     benchmark_name: str,
@@ -167,6 +216,7 @@ def run_single_experiment(
 
 def run_from_yaml(config_path: str, dry_run: bool) -> None:
     cfg = _load_yaml_config(config_path)
+    _apply_model_config(cfg, dry_run)
     experiments = cfg.get("experiments", [cfg])
     results_dir = cfg.get("results_dir", "results")
     for exp in experiments:

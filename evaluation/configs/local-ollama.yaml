@@ -1,0 +1,27 @@
+# CJ Evaluation — Local Ollama / vLLM configuration
+# Runs a smoke campaign against a local model server (e.g. Ollama or vLLM).
+#
+# Prerequisites:
+#   ollama serve          # or: python -m vllm.entrypoints.openai.api_server ...
+#   ollama pull qwen2.5-coder:7b   # or whichever model you set below
+#
+# Usage:
+#   python -m evaluation.run --config evaluation/configs/local-ollama.yaml
+#
+# No API key is required for local servers; api_key_env is omitted.
+# Override model or base_url on the command line:
+#   --model codellama:13b  --base-url http://localhost:11434
+
+model:
+  base_url:    http://localhost:11434
+  model:       qwen2.5-coder:7b
+  temperature: 0.0
+
+results_dir: results/local-ollama
+
+experiments:
+  - {system: autogen,  benchmark: humanevalplus, fault: none,           tasks: 3, repeats: 1, seed: 42}
+  - {system: autogen,  benchmark: humanevalplus, fault: llm_timeout,    tasks: 3, repeats: 1, seed: 42}
+  - {system: autogen,  benchmark: humanevalplus, fault: llm_unavailable, tasks: 3, repeats: 1, seed: 42}
+  - {system: mad,      benchmark: humanevalplus, fault: none,           tasks: 3, repeats: 1, seed: 42}
+  - {system: mapcoder, benchmark: mbppplus,      fault: llm_latency,    tasks: 3, repeats: 1, seed: 42}

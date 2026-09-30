@@ -1,8 +1,19 @@
 # CJ Evaluation — Full campaign configuration
 # 164 HumanEval+ tasks, 30 MBPP+ tasks, 5 repeats each condition.
 # Estimated API cost: compute with evaluation/estimate_cost.py BEFORE running.
-# Requires: CJ_EVAL_BASE_URL, CJ_EVAL_API_KEY, CJ_EVAL_MODEL, evalplus installed.
-# Run: python -m evaluation.run --config evaluation/configs/full.yaml
+# Requires: evalplus installed (pip install evalplus==0.3.1)
+#
+# Usage:
+#   export OPENAI_API_KEY=sk-...
+#   python -m evaluation.run --config evaluation/configs/full.yaml
+#
+# Change model: below to switch providers without touching experiments.
+
+model:
+  base_url:    https://api.openai.com
+  api_key_env: OPENAI_API_KEY
+  model:       gpt-4o-mini
+  temperature: 0.0
 
 results_dir: results/full
 

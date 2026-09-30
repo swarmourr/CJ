@@ -1,0 +1,59 @@
+# CJ Evaluation — OpenAI provider config (3-task smoke, real model)
+#
+# Prerequisites:
+#   export OPENAI_API_KEY=sk-...
+#   pip install evalplus==0.3.1      # needed when tasks > 5
+#
+# Usage:
+#   python -m evaluation.run --config evaluation/configs/openai.yaml
+#
+# Swap model: gpt-4o or o1-mini to change the model without editing experiments.
+
+model:
+  base_url:    https://api.openai.com
+  api_key_env: OPENAI_API_KEY          # export OPENAI_API_KEY=sk-... in your shell
+  model:       gpt-4o-mini
+  temperature: 0.0
+
+results_dir: results/openai-smoke
+
+experiments:
+  # Baseline — no fault
+  - system:    autogen
+    benchmark: humanevalplus
+    fault:     none
+    tasks:     3
+    repeats:   1
+    seed:      42
+
+  # Fault: LLM timeout (5 s hang → 504)
+  - system:    autogen
+    benchmark: humanevalplus
+    fault:     llm_timeout
+    tasks:     3
+    repeats:   1
+    seed:      42
+
+  # Fault: LLM unavailable (HTTP 503)
+  - system:    autogen
+    benchmark: humanevalplus
+    fault:     llm_unavailable
+    tasks:     3
+    repeats:   1
+    seed:      42
+
+  # Fault: response truncated (partial JSON)
+  - system:    mad
+    benchmark: humanevalplus
+    fault:     response_truncation
+    tasks:     3
+    repeats:   1
+    seed:      42
+
+  # Fault: latency injection (3 s delay)
+  - system:    mapcoder
+    benchmark: mbppplus
+    fault:     llm_latency
+    tasks:     3
+    repeats:   1
+    seed:      42

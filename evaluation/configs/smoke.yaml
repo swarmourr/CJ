@@ -1,6 +1,11 @@
 # CJ Evaluation — Smoke configuration
-# 3 tasks, 1 repeat, dry-run safe.
-# Run: python -m evaluation.run --config evaluation/configs/smoke.yaml --dry-run
+# 3 tasks, 1 repeat, dry-run safe (no model API required).
+#
+# Usage:
+#   python -m evaluation.run --config evaluation/configs/smoke.yaml --dry-run
+#
+# model: section is intentionally absent — dry-run uses a stub response.
+# To run against a real model, copy a provider config here (see openai.yaml).
 
 results_dir: results/smoke
 
