@@ -1,0 +1,91 @@
+# CJ Evaluation — Development configuration
+# 20 tasks, 3 repeats, real model required.
+# Set CJ_EVAL_BASE_URL, CJ_EVAL_API_KEY, CJ_EVAL_MODEL before running.
+# Run: python -m evaluation.run --config evaluation/configs/development.yaml
+
+results_dir: results/development
+
+experiments:
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      none
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      llm_timeout
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      llm_rate_limit
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      llm_unavailable
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      response_truncation
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      malformed_response
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     mad
+    benchmark:  humanevalplus
+    fault:      none
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     mad
+    benchmark:  humanevalplus
+    fault:      llm_timeout
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     mapcoder
+    benchmark:  humanevalplus
+    fault:      none
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     mapcoder
+    benchmark:  humanevalplus
+    fault:      llm_timeout
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     autogen
+    benchmark:  mbppplus
+    fault:      tool_failure
+    tasks:      20
+    repeats:    3
+    seed:       42
+
+  - system:     autogen
+    benchmark:  mbppplus
+    fault:      token_starvation
+    tasks:      20
+    repeats:    3
+    seed:       42

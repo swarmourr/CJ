@@ -1,0 +1,34 @@
+# CJ Evaluation — Smoke configuration
+# 3 tasks, 1 repeat, dry-run safe.
+# Run: python -m evaluation.run --config evaluation/configs/smoke.yaml --dry-run
+
+results_dir: results/smoke
+
+experiments:
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      none
+    tasks:      3
+    repeats:    1
+    seed:       42
+
+  - system:     autogen
+    benchmark:  humanevalplus
+    fault:      llm_timeout
+    tasks:      3
+    repeats:    1
+    seed:       42
+
+  - system:     mad
+    benchmark:  humanevalplus
+    fault:      llm_unavailable
+    tasks:      3
+    repeats:    1
+    seed:       42
+
+  - system:     mapcoder
+    benchmark:  mbppplus
+    fault:      response_truncation
+    tasks:      3
+    repeats:    1
+    seed:       42

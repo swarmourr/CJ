@@ -1,0 +1,228 @@
+"""Common interface for all agent system adapters."""
+
+from __future__ import annotations
+
+import os
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class AgentRunResult:
+    """Result of a single agent run on one benchmark task.
+
+    All adapters must return this dataclass. Fields used as CJ workload
+    metrics are: success, duration_s, reported_error, retries.
+    """
+
+    # ── Primary outcome ───────────────────────────────────────────
+    success: float               # 1.0 = all deterministic tests pass, 0.0 = failed
+    duration_s: float            # wall-clock seconds from task start to completion
+    reported_error: float        # 1.0 = agent explicitly reported failure, 0.0 = didn't
+
+    # ── Effort metrics ────────────────────────────────────────────
+    retries: int = 0             # number of retry attempts the agent made
+    llm_calls: int = 0          # total LLM API calls made
+    tool_calls: int = 0         # total tool calls (code execution etc.) made
+    turns: int = 0              # conversation turns (multi-agent round count)
+
+    # ── Token usage ───────────────────────────────────────────────
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+
+    # ── Partial correctness ───────────────────────────────────────
+    tests_passed: int = 0       # number of test cases that passed
+    tests_total: int = 0        # total test cases attempted
+
+    # ── Artifact / trace ──────────────────────────────────────────
+    generated_code: str = ""    # final generated solution
+    execution_trace: list[dict] = field(default_factory=list)  # per-turn trace
+
+    # ── Error info ────────────────────────────────────────────────
+    termination_reason: str = ""  # "success", "max_turns", "api_error", "timeout", etc.
+    exception: str = ""           # exception repr if one occurred
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a plain dict suitable for CJ workload metrics and JSONL output."""
+        return {
+            "success":           self.success,
+            "duration_s":        self.duration_s,
+            "reported_error":    self.reported_error,
+            "retries":           self.retries,
+            "llm_calls":         self.llm_calls,
+            "tool_calls":        self.tool_calls,
+            "turns":             self.turns,
+            "prompt_tokens":     self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens":      self.total_tokens,
+            "cost_usd":          self.cost_usd,
+            "tests_passed":      self.tests_passed,
+            "tests_total":       self.tests_total,
+            "generated_code":    self.generated_code,
+            "termination_reason":self.termination_reason,
+            "exception":         self.exception,
+        }
+
+
+class ModelClient:
+    """Thin OpenAI-compatible HTTP client driven by environment variables.
+
+    Reads:
+      CJ_EVAL_BASE_URL    — endpoint base URL (required for real runs)
+      CJ_EVAL_API_KEY     — API key (default: "dummy")
+      CJ_EVAL_MODEL       — model id (default: "gpt-4o-mini")
+      CJ_EVAL_TEMPERATURE — float temperature (default: 0.0)
+
+    When CJ_EVAL_BASE_URL is not set the client raises RuntimeError unless
+    ``dry_run=True`` is passed to the constructor, in which case it returns
+    a hard-coded stub response so that CLI dry-runs need no credentials.
+    """
+
+    def __init__(self, dry_run: bool = False) -> None:
+        self.base_url = os.environ.get("CJ_EVAL_BASE_URL", "").rstrip("/")
+        self.api_key  = os.environ.get("CJ_EVAL_API_KEY", "dummy")
+        self.model    = os.environ.get("CJ_EVAL_MODEL", "gpt-4o-mini")
+        self.temperature = float(os.environ.get("CJ_EVAL_TEMPERATURE", "0.0"))
+        self.dry_run  = dry_run
+
+        if not self.base_url and not dry_run:
+            raise RuntimeError(
+                "CJ_EVAL_BASE_URL is not set. "
+                "Point it to an OpenAI-compatible endpoint, a local Ollama server, "
+                "or the evaluation fake model server. "
+                "Use --dry-run to run without any model server."
+            )
+
+    def chat(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int = 2048,
+        stop: list[str] | None = None,
+    ) -> dict:
+        """Send a chat completion request; return the API response dict.
+
+        Raises:
+            RuntimeError: on non-2xx HTTP status.
+        """
+        if self.dry_run:
+            return self._stub_response(messages)
+
+        import json
+        import urllib.error
+        import urllib.request
+
+        payload = {
+            "model":       self.model,
+            "messages":    messages,
+            "temperature": self.temperature,
+            "max_tokens":  max_tokens,
+        }
+        if stop:
+            payload["stop"] = stop
+
+        data = json.dumps(payload).encode()
+        req  = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=data,
+            headers={
+                "Content-Type":  "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            raise RuntimeError(
+                f"LLM API error {exc.code}: {body}"
+            ) from exc
+
+    def complete(self, messages: list[dict], **kwargs) -> str:
+        """Return the assistant message content string."""
+        resp = self.chat(messages, **kwargs)
+        try:
+            return resp["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            return ""
+
+    def usage(self, resp: dict) -> dict[str, int]:
+        """Extract token usage from a response dict."""
+        u = resp.get("usage") or {}
+        return {
+            "prompt_tokens":     int(u.get("prompt_tokens", 0)),
+            "completion_tokens": int(u.get("completion_tokens", 0)),
+            "total_tokens":      int(u.get("total_tokens", 0)),
+        }
+
+    # ── Internal stub for dry-run ──────────────────────────────────────────────
+
+    def _stub_response(self, messages: list[dict]) -> dict:
+        content = (
+            "```python\n"
+            "def solution(*args, **kwargs):\n"
+            "    # dry-run stub — replace with a real model\n"
+            "    return None\n"
+            "```"
+        )
+        return {
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+
+class AgentSystem(ABC):
+    """Abstract base class for all agent system adapters.
+
+    Subclasses must implement :meth:`run`.  The ``name`` class attribute
+    determines the system identifier used in output records and must be
+    a string like ``"autogen-style"``.
+    """
+
+    name: str = "base"
+
+    def __init__(
+        self,
+        client: ModelClient | None = None,
+        max_turns: int = 10,
+        dry_run: bool = False,
+    ) -> None:
+        self.client   = client or ModelClient(dry_run=dry_run)
+        self.max_turns = max_turns
+        self.dry_run  = dry_run
+
+    @abstractmethod
+    def run(self, task: str, seed: int = 0) -> AgentRunResult:
+        """Execute the agent on *task* and return a populated AgentRunResult.
+
+        Parameters
+        ----------
+        task : str
+            The benchmark task description / problem statement.
+        seed : int
+            Random seed for any stochastic decisions (debate order, etc.).
+
+        Returns
+        -------
+        AgentRunResult
+        """
+
+    # ── Shared utility ─────────────────────────────────────────────────────────
+
+    def _extract_code(self, text: str) -> str:
+        """Extract the first Python code block from a markdown-fenced response."""
+        import re
+        # Try ```python ... ``` first, then plain ``` ... ```
+        m = re.search(r"```(?:python)?\n(.*?)```", text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+        # Fallback: return whole text if it looks like code
+        if "def " in text or "return " in text:
+            return text.strip()
+        return text.strip()

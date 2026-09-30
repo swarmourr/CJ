@@ -1,0 +1,37 @@
+# CJ Evaluation — Full campaign configuration
+# 164 HumanEval+ tasks, 30 MBPP+ tasks, 5 repeats each condition.
+# Estimated API cost: compute with evaluation/estimate_cost.py BEFORE running.
+# Requires: CJ_EVAL_BASE_URL, CJ_EVAL_API_KEY, CJ_EVAL_MODEL, evalplus installed.
+# Run: python -m evaluation.run --config evaluation/configs/full.yaml
+
+results_dir: results/full
+
+experiments:
+  # ── Common SoA faults (HumanEval+) ──────────────────────────────────────────
+  - {system: autogen,   benchmark: humanevalplus, fault: none,                tasks: 164, repeats: 5, seed: 42}
+  - {system: autogen,   benchmark: humanevalplus, fault: llm_timeout,         tasks: 164, repeats: 5, seed: 42}
+  - {system: autogen,   benchmark: humanevalplus, fault: llm_rate_limit,      tasks: 164, repeats: 5, seed: 42}
+  - {system: autogen,   benchmark: humanevalplus, fault: llm_unavailable,     tasks: 164, repeats: 5, seed: 42}
+  - {system: autogen,   benchmark: humanevalplus, fault: response_truncation,  tasks: 164, repeats: 5, seed: 42}
+  - {system: autogen,   benchmark: humanevalplus, fault: malformed_response,   tasks: 164, repeats: 5, seed: 42}
+
+  - {system: mad,       benchmark: humanevalplus, fault: none,                tasks: 164, repeats: 5, seed: 42}
+  - {system: mad,       benchmark: humanevalplus, fault: llm_timeout,         tasks: 164, repeats: 5, seed: 42}
+  - {system: mad,       benchmark: humanevalplus, fault: llm_rate_limit,      tasks: 164, repeats: 5, seed: 42}
+  - {system: mad,       benchmark: humanevalplus, fault: llm_unavailable,     tasks: 164, repeats: 5, seed: 42}
+  - {system: mad,       benchmark: humanevalplus, fault: response_truncation,  tasks: 164, repeats: 5, seed: 42}
+  - {system: mad,       benchmark: humanevalplus, fault: malformed_response,   tasks: 164, repeats: 5, seed: 42}
+
+  - {system: mapcoder,  benchmark: humanevalplus, fault: none,                tasks: 164, repeats: 5, seed: 42}
+  - {system: mapcoder,  benchmark: humanevalplus, fault: llm_timeout,         tasks: 164, repeats: 5, seed: 42}
+  - {system: mapcoder,  benchmark: humanevalplus, fault: llm_rate_limit,      tasks: 164, repeats: 5, seed: 42}
+  - {system: mapcoder,  benchmark: humanevalplus, fault: llm_unavailable,     tasks: 164, repeats: 5, seed: 42}
+  - {system: mapcoder,  benchmark: humanevalplus, fault: response_truncation,  tasks: 164, repeats: 5, seed: 42}
+  - {system: mapcoder,  benchmark: humanevalplus, fault: malformed_response,   tasks: 164, repeats: 5, seed: 42}
+
+  # ── CJ-specific faults (MBPP+) ───────────────────────────────────────────────
+  - {system: autogen,   benchmark: mbppplus, fault: tool_failure,      tasks: 30, repeats: 5, seed: 42}
+  - {system: autogen,   benchmark: mbppplus, fault: token_starvation,  tasks: 30, repeats: 5, seed: 42}
+  - {system: autogen,   benchmark: mbppplus, fault: llm_latency,       tasks: 30, repeats: 5, seed: 42}
+  - {system: mad,       benchmark: mbppplus, fault: tool_failure,      tasks: 30, repeats: 5, seed: 42}
+  - {system: mapcoder,  benchmark: mbppplus, fault: token_starvation,  tasks: 30, repeats: 5, seed: 42}
