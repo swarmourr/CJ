@@ -100,11 +100,15 @@ class ModelClient:
             )
 
     def _current_base_url(self) -> str:
-        """Return the live endpoint URL, picking up CJ proxy redirects.
+        """Return the live endpoint URL, re-read on every call.
 
-        CJ LLM faults set OPENAI_BASE_URL when the proxy starts.  We check
-        CJ_EVAL_BASE_URL first (explicit override) then OPENAI_BASE_URL (CJ
-        proxy redirect) so that requests are intercepted during fault phases.
+        CJ LLM faults are configured with ``base_url_env="CJ_EVAL_BASE_URL"``,
+        so when a fault starts the proxy URL is written into CJ_EVAL_BASE_URL
+        and the original value is saved.  Reading the variable fresh on every
+        request means ModelClient automatically routes through the proxy during
+        the fault phase, and back to the real API once the fault stops.
+
+        OPENAI_BASE_URL is checked as a fallback for non-CJ usage.
         """
         return (
             os.environ.get("CJ_EVAL_BASE_URL")

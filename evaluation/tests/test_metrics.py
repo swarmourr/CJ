@@ -244,9 +244,10 @@ class TestStatisticalAnalysis:
         assert all(isinstance(s, ConditionStats) for s in stats)
 
     def test_cohens_d_computed(self):
-        # Use varying values so std > 0 and Cohen's d is defined
+        # Differences must be non-constant so std(diff) > 0 and d_z is defined.
+        # b=[1,2,3,4,5], f=[3,5,7,9,11] → diffs=[2,3,4,5,6] → std>0
         b_recs = [_b(f"t{i}", duration_s=float(i+1)) for i in range(5)]
-        f_recs = [_f(f"t{i}", duration_s=float(i+4), validity="valid") for i in range(5)]
+        f_recs = [_f(f"t{i}", duration_s=float(i*2+3), validity="valid") for i in range(5)]
         stats = compute_condition_stats(b_recs, f_recs)
         duration_fault = next((s for s in stats if s.metric == "duration_s" and s.condition == "fault"), None)
         assert duration_fault is not None

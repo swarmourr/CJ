@@ -71,16 +71,18 @@ def _stats(values: list[float]) -> dict:
     return {"n": n, "mean": mean, "std": std, "median": median, "iqr": iqr, "ci95_half": ci95}
 
 
-def _cohens_d(base_vals: list[float], fault_vals: list[float]) -> float | None:
-    nb, nf = len(base_vals), len(fault_vals)
-    if nb < 2 or nf < 2:
+def _cohens_dz(differences: list[float]) -> float | None:
+    """Paired Cohen's d_z = mean(diff) / std(diff).
+
+    Uses the within-subject formula appropriate for paired designs where each
+    baseline observation is matched to exactly one fault observation.
+    """
+    n = len(differences)
+    if n < 2:
         return None
-    mb = sum(base_vals) / nb
-    mf = sum(fault_vals) / nf
-    vb = sum((x - mb) ** 2 for x in base_vals) / (nb - 1)
-    vf = sum((x - mf) ** 2 for x in fault_vals) / (nf - 1)
-    pooled = math.sqrt(((nb - 1) * vb + (nf - 1) * vf) / (nb + nf - 2))
-    return round((mf - mb) / pooled, 4) if pooled > 0 else None
+    mean_d = sum(differences) / n
+    std_d  = math.sqrt(sum((x - mean_d) ** 2 for x in differences) / (n - 1))
+    return round(mean_d / std_d, 4) if std_d > 0 else None
 
 
 def compute_condition_stats(
@@ -132,14 +134,19 @@ def compute_condition_stats(
         b_st = _stats(b_vals)
         f_st = _stats(f_vals)
 
-        # Cohen's d: use only task_id-paired records so the comparison is valid
-        b_paired = [r.get(metric, 0.0) for tid in paired_tasks
-                    for r in baseline_by_task.get(tid, [])
-                    if isinstance(r.get(metric), (int, float))]
-        f_paired = [r.get(metric, 0.0) for tid in paired_tasks
-                    for r in fault_by_task.get(tid, [])
-                    if isinstance(r.get(metric), (int, float))]
-        d = _cohens_d(b_paired, f_paired)
+        # Paired Cohen's d_z: compute differences for matched (task_id) pairs.
+        # When a task has multiple repeats pick the first match per task_id to
+        # form one canonical pair (avoids duplicate-counting).
+        differences: list[float] = []
+        for tid in paired_tasks:
+            b_recs = baseline_by_task.get(tid, [])
+            f_recs = fault_by_task.get(tid, [])
+            for b_r, f_r in zip(b_recs, f_recs):
+                bv = b_r.get(metric)
+                fv = f_r.get(metric)
+                if isinstance(bv, (int, float)) and isinstance(fv, (int, float)):
+                    differences.append(float(fv) - float(bv))
+        d = _cohens_dz(differences)
 
         results.append(ConditionStats(
             metric=metric, condition="baseline",

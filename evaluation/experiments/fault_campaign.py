@@ -123,16 +123,39 @@ def build_cj_fault(name: str):
     Returns
     -------
     chaos_jungle.faults.base.Fault
+
+    Proxy routing note
+    ------------------
+    LLM proxy faults are configured with ``base_url_env="CJ_EVAL_BASE_URL"``
+    so that CJ temporarily replaces that variable with the proxy URL when the
+    fault starts (and restores it on stop).  ModelClient reads the same
+    variable on every request, so it automatically routes through the proxy
+    during the fault phase without any additional wiring.
+
+    The ``upstream`` argument points the proxy at the real API so it can
+    forward non-faulted portions of requests correctly.
     """
-    spec = get_fault_spec(name)
+    import os
+    import importlib
+
+    spec     = get_fault_spec(name)
     cls_name = spec["cj_class"]
     params   = dict(spec["parameters"])
 
-    import importlib
     mod = importlib.import_module("chaos_jungle.faults.llm")
     cls = getattr(mod, cls_name, None)
     if cls is None:
         raise ImportError(f"CJ fault class {cls_name!r} not found in chaos_jungle.faults.llm")
+
+    # Inject routing parameters into every LLM proxy fault so that CJ
+    # modifies CJ_EVAL_BASE_URL (the same variable ModelClient reads) rather
+    # than the default OPENAI_BASE_URL.
+    from chaos_jungle.faults.llm import _LLMProxyFault, _DEFAULT_UPSTREAM
+    if issubclass(cls, _LLMProxyFault):
+        real_upstream = os.environ.get("CJ_EVAL_BASE_URL", _DEFAULT_UPSTREAM).rstrip("/")
+        params.setdefault("upstream",     real_upstream)
+        params.setdefault("base_url_env", "CJ_EVAL_BASE_URL")
+
     return cls(**params)
 
 

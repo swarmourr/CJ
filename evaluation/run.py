@@ -117,25 +117,28 @@ def run_single_experiment(
     agent_cls = AGENT_REGISTRY[system_name]
     agent = agent_cls(client=client, dry_run=dry_run)
 
-    # Load tasks — pick subset based on requested count
+    # Load tasks — pick subset based on requested count.
+    # The ImportError from evalplus not being installed surfaces inside loader.load()
+    # (when _load_all() runs), not during the loader constructor.
     _SMOKE_MAX = 5  # bundled tasks available without evalplus
     if tasks <= _SMOKE_MAX:
         loader = BENCH_REGISTRY[benchmark_name](subset="smoke")
         loader.smoke_n = tasks
+        task_list = loader.load(seed=seed)
     else:
+        loader = BENCH_REGISTRY[benchmark_name](subset="development")
+        loader.development_n = tasks
         try:
-            loader = BENCH_REGISTRY[benchmark_name](subset="development")
-            loader.development_n = tasks
-            # smoke_n not used in development mode; set for compat
+            task_list = loader.load(seed=seed)
         except ImportError:
             print(
                 f"[eval] Warning: evalplus not installed; cannot load {tasks} tasks. "
-                f"Falling back to smoke subset (up to {_SMOKE_MAX} tasks). "
+                f"Falling back to smoke subset (up to {_SMOKE_MAX} bundled tasks). "
                 "Install with: pip install evalplus==0.3.1"
             )
             loader = BENCH_REGISTRY[benchmark_name](subset="smoke")
             loader.smoke_n = _SMOKE_MAX
-    task_list = loader.load(seed=seed)
+            task_list = loader.load(seed=seed)
     print(f"[eval] Loaded {len(task_list)} tasks from {benchmark_name}")
 
     # Run protocol

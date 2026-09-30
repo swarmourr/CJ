@@ -95,9 +95,9 @@ class AutoGenStyleAgent(AgentSystem):
             turns = turn + 1
 
             # ── Assistant turn ────────────────────────────────────────────────
+            llm_calls += 1  # count attempt; blocked calls still hit the proxy
             try:
                 resp = self.client.chat(messages, seed=seed)
-                llm_calls += 1
             except RuntimeError as exc:
                 reported_error = 1.0
                 termination_reason = "api_error"

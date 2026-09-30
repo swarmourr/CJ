@@ -72,29 +72,48 @@ def write_condition_summary_csv(
     baselines  = [r for r in records if r.get("phase") == "baseline"]
     fault_recs = [r for r in records if r.get("phase") == "fault"]
 
-    # Index baselines by (agent_system, benchmark)
-    baseline_idx: dict[tuple, list[dict]] = {}
+    # Index baselines by pair_id (exact pairing) and by (agent_system, benchmark)
+    # for fallback when pair_id is absent (records from older schema).
+    baseline_by_pair:  dict[str, dict] = {}
+    baseline_by_ab:    dict[tuple, list[dict]] = {}
     for r in baselines:
+        pid = r.get("pair_id", "")
+        if pid:
+            baseline_by_pair[pid] = r
         k = (r.get("agent_system", ""), r.get("benchmark", ""))
-        baseline_idx.setdefault(k, []).append(r)
+        baseline_by_ab.setdefault(k, []).append(r)
 
     def fault_key(r: dict):
         return (r.get("agent_system", ""), r.get("benchmark", ""), r.get("fault_type", "none"))
 
     rows: list[dict] = []
 
-    # One row per fault type — combined with matching baselines so degradation computes
+    # One row per (agent_system, benchmark, fault_type).
+    # For each fault record, find its paired baseline via pair_id (preferred) or
+    # via (agent_system, benchmark) match (fallback for records without pair_id).
     sorted_faults = sorted(fault_recs, key=fault_key)
     for (sys, bench, fault), group_recs in groupby(sorted_faults, key=fault_key):
-        paired_baselines = baseline_idx.get((sys, bench), [])
-        combined = paired_baselines + list(group_recs)
+        group_list = list(group_recs)
+
+        paired_baselines: list[dict] = []
+        for fr in group_list:
+            pid = fr.get("pair_id", "")
+            if pid and pid in baseline_by_pair:
+                paired_baselines.append(baseline_by_pair[pid])
+            # else: no exact match; baseline_by_ab fallback applied below
+
+        # Fall back to all baselines for this (sys, bench) when pair_id is absent
+        if not paired_baselines:
+            paired_baselines = baseline_by_ab.get((sys, bench), [])
+
+        combined = paired_baselines + group_list
         m   = compute_metrics(combined)
         row = {"agent_system": sys, "benchmark": bench, "fault_type": fault}
         row.update(m.to_dict())
         rows.append(row)
 
     # Baseline-only summary rows
-    for (sys, bench), b_recs in sorted(baseline_idx.items()):
+    for (sys, bench), b_recs in sorted(baseline_by_ab.items()):
         m   = compute_metrics(b_recs)
         row = {"agent_system": sys, "benchmark": bench, "fault_type": "none"}
         row.update(m.to_dict())

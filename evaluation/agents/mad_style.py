@@ -101,10 +101,12 @@ class MADStyleAgent(AgentSystem):
         proposals: list[str] = [""] * self.n_agents
 
         # ── Round 0: independent proposals ────────────────────────────────────
+        # Each agent gets a distinct seed so proposals diverge (seed+i avoids
+        # all agents producing identical output at temperature=0).
         for i in range(self.n_agents):
+            llm_calls += 1  # count attempt; blocked calls still reach the proxy
             try:
-                resp = self.client.chat(histories[i], seed=seed)
-                llm_calls += 1
+                resp = self.client.chat(histories[i], seed=seed + i)
             except RuntimeError as exc:
                 reported_error = 1.0
                 retries += 1
@@ -136,9 +138,9 @@ class MADStyleAgent(AgentSystem):
                     f"to the original task. Output your final answer in a ```python ... ``` block."
                 )
                 histories[i].append({"role": "user", "content": debate_prompt})
+                llm_calls += 1
                 try:
-                    resp = self.client.chat(histories[i], seed=seed)
-                    llm_calls += 1
+                    resp = self.client.chat(histories[i], seed=seed + i + rnd * self.n_agents)
                 except RuntimeError as exc:
                     reported_error = 1.0
                     retries += 1

@@ -87,12 +87,12 @@ class MapCoderStyleAgent(AgentSystem):
             f"that would be helpful for solving the above. "
             f"Format: Problem: <desc>\nSolution: <python code>"
         )
+        llm_calls += 1
         try:
             resp = self.client.chat([
                 {"role": "system", "content": "You are an expert competitive programmer."},
                 {"role": "user",   "content": retrieval_prompt},
             ], seed=seed)
-            llm_calls += 1
             u = self.client.usage(resp)
             prompt_tokens += u["prompt_tokens"]; completion_tokens += u["completion_tokens"]
             analogies = resp["choices"][0]["message"]["content"] or ""
@@ -107,12 +107,12 @@ class MapCoderStyleAgent(AgentSystem):
             f"Now solve this problem step by step:\n\n{task}\n\n"
             f"Output a numbered step-by-step plan (no code yet)."
         )
+        llm_calls += 1
         try:
             resp = self.client.chat([
                 {"role": "system", "content": "You are an expert algorithm designer."},
                 {"role": "user",   "content": planning_prompt},
             ], seed=seed)
-            llm_calls += 1
             u = self.client.usage(resp)
             prompt_tokens += u["prompt_tokens"]; completion_tokens += u["completion_tokens"]
             plan = resp["choices"][0]["message"]["content"] or ""
@@ -128,12 +128,12 @@ class MapCoderStyleAgent(AgentSystem):
             f"Implement a Python solution following the plan exactly. "
             f"Output only the Python code in a ```python ... ``` block."
         )
+        llm_calls += 1
         try:
             resp = self.client.chat([
                 {"role": "system", "content": "You are an expert Python programmer."},
                 {"role": "user",   "content": coding_prompt},
             ], seed=seed)
-            llm_calls += 1
             u = self.client.usage(resp)
             prompt_tokens += u["prompt_tokens"]; completion_tokens += u["completion_tokens"]
             code_response = resp["choices"][0]["message"]["content"] or ""
@@ -174,11 +174,11 @@ class MapCoderStyleAgent(AgentSystem):
                 f"Python code in a ```python ... ``` block."
             )
             try:
+                llm_calls += 1
                 resp = self.client.chat([
                     {"role": "system", "content": "You are an expert Python debugger."},
                     {"role": "user",   "content": debug_prompt},
                 ], seed=seed)
-                llm_calls += 1
                 u = self.client.usage(resp)
                 prompt_tokens += u["prompt_tokens"]; completion_tokens += u["completion_tokens"]
                 debug_response = resp["choices"][0]["message"]["content"] or ""

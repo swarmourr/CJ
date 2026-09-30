@@ -87,6 +87,9 @@ class RunRecord:
     # Validity classification
     validity:        str = "unchecked"  # valid / invalid / inconclusive / untriggered
 
+    # Pairing: baseline and fault records for the same (task, repeat) share a pair_id
+    pair_id:         str = ""
+
     # Artifact location
     artifact_path:   str = ""
 
@@ -95,7 +98,25 @@ class RunRecord:
         return d
 
 
-_CJ_COMMIT = os.environ.get("CJ_COMMIT", "7f5a6fdbee72ce86b7a44f74ee73391e7f5ccc09")
+def _detect_cj_commit() -> str:
+    """Return HEAD SHA of the CJ package repo, falling back to env/hardcoded."""
+    import subprocess
+    pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=pkg_root,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).decode().strip()
+        if sha:
+            return sha
+    except Exception:
+        pass
+    return os.environ.get("CJ_COMMIT", "unknown")
+
+
+_CJ_COMMIT = _detect_cj_commit()
 
 
 def _code_hash(code: str) -> str:
@@ -123,6 +144,7 @@ def _make_baseline_record(
     tests_passed: int,
     tests_total: int,
     exec_output: str,
+    pair_id: str = "",
 ) -> RunRecord:
     return RunRecord(
         run_id=str(uuid.uuid4()),
@@ -155,6 +177,7 @@ def _make_baseline_record(
         termination_reason=result.termination_reason,
         exception=result.exception,
         validity="unchecked",
+        pair_id=pair_id,
     )
 
 
@@ -204,6 +227,8 @@ class ExperimentProtocol:
 
         for rep in range(repeats):
             task_seed = seed + rep * 1000
+            # Shared ID ties baseline and fault record for this (task, repeat)
+            pair_id = str(uuid.uuid4())
 
             # ── Baseline execution ─────────────────────────────────────────────
             b_result = self.agent.run(task.agent_prompt(), seed=task_seed)
@@ -211,14 +236,15 @@ class ExperimentProtocol:
                 task, b_result.generated_code, timeout_s=self.exec_timeout_s
             )
             b_rec = _make_baseline_record(
-                self.agent, task, b_result, task_seed, b_ok, b_tp, b_tt, b_out
+                self.agent, task, b_result, task_seed, b_ok, b_tp, b_tt, b_out,
+                pair_id=pair_id,
             )
             records.append(b_rec)
             self._append_jsonl(b_rec)
 
             # ── Fault execution ────────────────────────────────────────────────
             if self.fault_name != "none":
-                f_rec = self._run_fault_phase(task, task_seed, b_ok)
+                f_rec = self._run_fault_phase(task, task_seed, b_ok, pair_id=pair_id)
                 records.append(f_rec)
                 self._append_jsonl(f_rec)
 
@@ -246,6 +272,7 @@ class ExperimentProtocol:
         task: BenchmarkTask,
         seed: int,
         baseline_success: bool,
+        pair_id: str = "",
     ) -> RunRecord:
         from evaluation.experiments.fault_campaign import build_cj_fault, get_fault_spec
         from chaos_jungle import Scenario, ChaosRunner
@@ -277,7 +304,7 @@ class ExperimentProtocol:
                 ev.activated = False
                 ev.verdict   = "INVALID"
                 ev.details   = f"start() failed: {exc}"
-                return self._error_fault_record(task, seed, spec, ev, str(exc))
+                return self._error_fault_record(task, seed, spec, ev, str(exc), pair_id=pair_id)
 
             # Run agent under the fault
             t0 = time.time()
@@ -297,30 +324,43 @@ class ExperimentProtocol:
                 ev.recovered = False
                 ev.details   = f"stop() errors: {exc}"
 
-            # Pull session verdict from CJ DB and derive trigger/manifest evidence
+            # Pull real evidence from CJ DB proxy call log
             if runner._session_id is not None:
                 try:
                     sess = runner.db.get_session(runner._session_id)
-                    raw_verdict = str(sess["verdict"]) if sess and "verdict" in sess.keys() else "INCONCLUSIVE"
+                    raw_verdict = (
+                        str(sess["verdict"]) if sess and "verdict" in sess.keys()
+                        else "INCONCLUSIVE"
+                    )
                     ev.verdict = raw_verdict
 
-                    # triggered: fault was activated AND at least one LLM call happened
-                    # (LLM faults only intercept requests; if no requests were made, untriggered)
-                    ev.triggered = ev.activated and (f_result.llm_calls > 0)
-
-                    # manifested: CJ considers the session VALID → fault affected the execution
-                    ev.manifested = (raw_verdict == "VALID")
-                except Exception:
+                    # Read proxy-observed LLM calls for the fault phase
+                    llm_call_rows = runner.db.get_llm_calls(
+                        runner._session_id, phase="fault"
+                    )
+                    # triggered: at least one request reached the proxy
+                    ev.triggered = ev.activated and len(llm_call_rows) > 0
+                    # manifested: at least one request was blocked or modified by the fault
+                    ev.manifested = any(
+                        row.get("was_blocked") or row.get("was_modified")
+                        for row in llm_call_rows
+                    )
+                except Exception as _db_exc:
                     ev.verdict    = "INCONCLUSIVE"
+                    # Fall back to llm_calls count from agent self-report
                     ev.triggered  = ev.activated and (f_result.llm_calls > 0)
                     ev.manifested = False
+                    ev.details    = f"DB query failed: {_db_exc}"
 
             f_ok, f_tp, f_tt, _ = score_task(
                 task, f_result.generated_code, timeout_s=self.exec_timeout_s
             )
 
-            # Untriggered: fault was activated but no LLM request passed through it
+            # Classify validity
             if ev.activated and not ev.triggered:
+                validity = "untriggered"
+            elif ev.triggered and not ev.manifested:
+                # Reached proxy but fault had no effect (e.g. rate limit not yet hit)
                 validity = "untriggered"
             else:
                 validity = {
@@ -366,10 +406,11 @@ class ExperimentProtocol:
             lifecycle=ev,
             validity=validity,
             oracle_outcome={"silent_failure": silent_failure},
+            pair_id=pair_id,
         )
 
     def _error_fault_record(
-        self, task, seed, spec, ev, exc_str
+        self, task, seed, spec, ev, exc_str, pair_id: str = ""
     ) -> RunRecord:
         return RunRecord(
             run_id=str(uuid.uuid4()),
@@ -403,6 +444,7 @@ class ExperimentProtocol:
             exception=exc_str,
             lifecycle=ev,
             validity="invalid",
+            pair_id=pair_id,
         )
 
     def _append_jsonl(self, record: RunRecord) -> None:
