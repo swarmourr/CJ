@@ -159,3 +159,72 @@ class TestProxyRouting:
         # Must be non-empty and either a valid-looking SHA or "unknown"
         assert _CJ_COMMIT
         assert len(_CJ_COMMIT) >= 7, f"commit too short: {_CJ_COMMIT!r}"
+
+
+# ── Evidence classification integration tests ─────────────────────────────────
+
+class TestFaultEvidenceClassification:
+    """Non-dry-run ExperimentProtocol tests that assert triggered/manifested/validity.
+
+    These tests start a real CJ proxy subprocess and route through a
+    FakeModelServer so no paid API is required.  They verify that the
+    evidence fields populated from the CJ DB are correct for latency and
+    blocking fault types.
+    """
+
+    def _run_fault(self, fault_name, fake_server, monkeypatch, tmp_path, delay_override=None):
+        """Helper: run ExperimentProtocol for one task, return the fault RunRecord."""
+        import evaluation.experiments.fault_campaign as fc
+        monkeypatch.setenv("CJ_EVAL_BASE_URL", fake_server.base_url)
+        fake_server.reset_calls()
+
+        if delay_override is not None:
+            # Patch in-place for speed; monkeypatch restores after the test.
+            monkeypatch.setitem(
+                fc._CATALOG_BY_NAME[fault_name]["parameters"], "delay_s", delay_override
+            )
+
+        from evaluation.agents.autogen_style import AutoGenStyleAgent
+        from evaluation.benchmarks.humanevalplus import _bundled_tasks
+        from evaluation.experiments.protocol import ExperimentProtocol
+
+        task   = _bundled_tasks()[0]
+        client = ModelClient()
+        agent  = AutoGenStyleAgent(client=client, max_turns=1)
+        proto  = ExperimentProtocol(agent, fault_name, str(tmp_path), dry_run=False)
+        records = proto.run_task(task, seed=0)
+        fault_recs = [r for r in records if r.phase == "fault"]
+        assert len(fault_recs) == 1, "Expected exactly one fault record"
+        return fault_recs[0]
+
+    def test_llm_latency_triggered_and_manifested(
+        self, fake_server, monkeypatch, tmp_path
+    ):
+        """LLMLatency: request reaches proxy, latency applied → triggered + manifested.
+
+        Latency faults are neither blocked nor content-modified; manifestation
+        must be detected from triggered_faults_json, not was_blocked/was_modified.
+        """
+        rec = self._run_fault(
+            "llm_latency", fake_server, monkeypatch, tmp_path, delay_override=0.3
+        )
+        lc = rec.lifecycle
+        assert lc.triggered  is True,  f"LLMLatency: triggered should be True, got {lc.triggered}"
+        assert lc.manifested is True,  f"LLMLatency: manifested should be True, got {lc.manifested}"
+        assert rec.validity  == "valid", f"LLMLatency: validity should be 'valid', got {rec.validity!r}"
+        assert lc.recovered  is True,  f"LLMLatency: recovered should be True, got {lc.recovered}"
+
+    def test_llm_unavailable_triggered_and_manifested(
+        self, fake_server, monkeypatch, tmp_path
+    ):
+        """LLMUnavailable: proxy blocks every request (HTTP 503) → triggered + manifested.
+
+        Blocking faults are detected via was_blocked; this test confirms the
+        full evidence chain for a fault that never reaches the upstream.
+        """
+        rec = self._run_fault("llm_unavailable", fake_server, monkeypatch, tmp_path)
+        lc = rec.lifecycle
+        assert lc.triggered  is True,  f"LLMUnavailable: triggered={lc.triggered}"
+        assert lc.manifested is True,  f"LLMUnavailable: manifested={lc.manifested}"
+        assert rec.validity  == "valid", f"LLMUnavailable: validity={rec.validity!r}"
+        assert lc.recovered  is True,  f"LLMUnavailable: recovered={lc.recovered}"

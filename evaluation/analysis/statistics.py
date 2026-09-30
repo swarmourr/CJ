@@ -112,17 +112,28 @@ def compute_condition_stats(
 
     results: list[ConditionStats] = []
 
-    # Build paired sets — match by task_id
-    baseline_by_task: dict[str, list[dict]] = {}
+    # Build pair_id-indexed lookups for exact (task, repeat) pairing.
+    # Fall back to task_id list-order matching for legacy records without pair_id.
+    baseline_by_pair: dict[str, dict] = {}
+    legacy_baseline_by_task: dict[str, list[dict]] = {}
     for r in baseline_records:
-        baseline_by_task.setdefault(r.get("task_id", ""), []).append(r)
+        pid = r.get("pair_id", "")
+        if pid:
+            baseline_by_pair[pid] = r
+        else:
+            legacy_baseline_by_task.setdefault(r.get("task_id", ""), []).append(r)
 
-    fault_by_task: dict[str, list[dict]] = {}
+    fault_by_pair: dict[str, dict] = {}
+    legacy_fault_by_task: dict[str, list[dict]] = {}
     for r in fault_records:
-        fault_by_task.setdefault(r.get("task_id", ""), []).append(r)
+        pid = r.get("pair_id", "")
+        if pid:
+            fault_by_pair[pid] = r
+        else:
+            legacy_fault_by_task.setdefault(r.get("task_id", ""), []).append(r)
 
-    paired_tasks   = set(baseline_by_task) & set(fault_by_task)
-    missing_pairs  = len(set(baseline_by_task) - set(fault_by_task))
+    matched_pair_ids = set(baseline_by_pair) & set(fault_by_pair)
+    missing_pairs    = len(set(baseline_by_pair) - set(fault_by_pair))
 
     for metric in metrics:
         # Descriptive stats use all available records (not restricted to pairs)
@@ -134,18 +145,26 @@ def compute_condition_stats(
         b_st = _stats(b_vals)
         f_st = _stats(f_vals)
 
-        # Paired Cohen's d_z: compute differences for matched (task_id) pairs.
-        # When a task has multiple repeats pick the first match per task_id to
-        # form one canonical pair (avoids duplicate-counting).
+        # Paired Cohen's d_z — prefer pair_id for exact (task, repeat) matching;
+        # fall back to task_id list-order for legacy records without pair_id.
         differences: list[float] = []
-        for tid in paired_tasks:
-            b_recs = baseline_by_task.get(tid, [])
-            f_recs = fault_by_task.get(tid, [])
-            for b_r, f_r in zip(b_recs, f_recs):
-                bv = b_r.get(metric)
-                fv = f_r.get(metric)
-                if isinstance(bv, (int, float)) and isinstance(fv, (int, float)):
-                    differences.append(float(fv) - float(bv))
+        for pid in matched_pair_ids:
+            b_r = baseline_by_pair[pid]
+            f_r = fault_by_pair[pid]
+            bv  = b_r.get(metric)
+            fv  = f_r.get(metric)
+            if isinstance(bv, (int, float)) and isinstance(fv, (int, float)):
+                differences.append(float(fv) - float(bv))
+        if not differences:
+            # Legacy fallback: pair by task_id list order
+            for tid in set(legacy_baseline_by_task) & set(legacy_fault_by_task):
+                for b_r, f_r in zip(
+                    legacy_baseline_by_task[tid], legacy_fault_by_task[tid]
+                ):
+                    bv = b_r.get(metric)
+                    fv = f_r.get(metric)
+                    if isinstance(bv, (int, float)) and isinstance(fv, (int, float)):
+                        differences.append(float(fv) - float(bv))
         d = _cohens_dz(differences)
 
         results.append(ConditionStats(

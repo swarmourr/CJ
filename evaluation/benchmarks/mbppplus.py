@@ -161,15 +161,18 @@ def _evalplus_tasks() -> list[BenchmarkTask]:
     dataset = get_mbpp_plus()
     tasks = []
     for task_id, d in dataset.items():
-        test_code = d.get("test", "") or ""
         tasks.append(BenchmarkTask(
             task_id=task_id,
             benchmark="mbppplus",
             prompt=d.get("prompt", d.get("text", "")),
             entry_point=d.get("entry_point", "solution"),
-            test_code=test_code,
+            test_code=d.get("test", "") or "",
             canonical_solution=d.get("canonical_solution", ""),
-            metadata={"source": "evalplus"},
+            metadata={
+                "source":           "evalplus",
+                "evalplus_dataset": "mbpp",
+                "evalplus_problem": d,
+            },
         ))
     return tasks
 

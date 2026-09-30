@@ -99,7 +99,16 @@ class RunRecord:
 
 
 def _detect_cj_commit() -> str:
-    """Return HEAD SHA of the CJ package repo, falling back to env/hardcoded."""
+    """Return HEAD SHA of the CJ package repo.
+
+    Resolution order:
+    1. ``git rev-parse HEAD`` — works in a full checkout.
+    2. ``COMMIT`` file in the package root — baked in during ZIP/release builds
+       (``echo $SHA > COMMIT``); also works when the repo is installed as an
+       editable package without a ``.git`` directory.
+    3. ``CJ_COMMIT`` environment variable — override for CI / container builds.
+    4. ``"unknown"`` — last resort; the field will still be recorded.
+    """
     import subprocess
     pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     try:
@@ -112,6 +121,14 @@ def _detect_cj_commit() -> str:
         if sha:
             return sha
     except Exception:
+        pass
+    commit_file = os.path.join(pkg_root, "COMMIT")
+    try:
+        with open(commit_file, encoding="utf-8") as f:
+            sha = f.read().strip()
+            if sha:
+                return sha
+    except OSError:
         pass
     return os.environ.get("CJ_COMMIT", "unknown")
 
@@ -338,11 +355,16 @@ class ExperimentProtocol:
                     llm_call_rows = runner.db.get_llm_calls(
                         runner._session_id, phase="fault"
                     )
+                    import json as _json
                     # triggered: at least one request reached the proxy
                     ev.triggered = ev.activated and len(llm_call_rows) > 0
-                    # manifested: at least one request was blocked or modified by the fault
+                    # manifested: fault actually fired on at least one request.
+                    # was_blocked/was_modified cover blocking and content-modifying faults.
+                    # triggered_faults_json covers latency and other pass-through faults
+                    # that are neither blocked nor content-modified (e.g. LLMLatency).
                     ev.manifested = any(
                         row.get("was_blocked") or row.get("was_modified")
+                        or bool(_json.loads(row.get("triggered_faults_json") or "[]"))
                         for row in llm_call_rows
                     )
                 except Exception as _db_exc:

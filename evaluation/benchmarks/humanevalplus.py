@@ -219,18 +219,22 @@ def _evalplus_tasks() -> list[BenchmarkTask]:
     dataset = get_human_eval_plus()
     tasks = []
     for task_id, d in dataset.items():
-        # evalplus stores runnable test code in 'test'.
-        # 'plus_input' is augmented *input variants* used by evalplus's own
-        # evaluator — it is NOT test code and must not be used as test_code.
-        test_code = d.get("test", "")
+        # evalplus tasks include base_input and plus_input for the extended
+        # test suite that the official evalplus evaluator runs.  The 'test'
+        # field contains only the base HumanEval assertions; plus_input is
+        # used by score_task() via the evalplus checker when available.
         tasks.append(BenchmarkTask(
             task_id=task_id,
             benchmark="humanevalplus",
             prompt=d["prompt"],
             entry_point=d["entry_point"],
-            test_code=test_code,
+            test_code=d.get("test", ""),
             canonical_solution=d.get("canonical_solution", ""),
-            metadata={"source": "evalplus"},
+            metadata={
+                "source":           "evalplus",
+                "evalplus_dataset": "humaneval",
+                "evalplus_problem": d,
+            },
         ))
     return tasks
 

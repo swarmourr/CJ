@@ -109,12 +109,21 @@ class ModelClient:
         the fault phase, and back to the real API once the fault stops.
 
         OPENAI_BASE_URL is checked as a fallback for non-CJ usage.
+
+        A ``/v1`` suffix is appended when missing so that both
+        ``https://api.openai.com`` and ``https://api.openai.com/v1`` produce
+        identical request URLs (``…/v1/chat/completions``).  The CJ proxy
+        already writes ``http://127.0.0.1:PORT/v1`` into the env var so this
+        normalisation is idempotent for proxy-routed calls.
         """
-        return (
+        url = (
             os.environ.get("CJ_EVAL_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
             or ""
         ).rstrip("/")
+        if url and not url.endswith("/v1"):
+            url = url + "/v1"
+        return url
 
     def chat(
         self,

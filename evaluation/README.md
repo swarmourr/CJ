@@ -7,7 +7,7 @@ built on the Chaos Jungle (CJ) framework.
 
 | Component | Version / Commit |
 |---|---|
-| CJ package | `7f5a6fdbee72ce86b7a44f74ee73391e7f5ccc09` |
+| CJ package | `586c6c0835c707ea5a95c37006b9e0d0a1316623` |
 | AgentChaos reference | [floritange/AgentChaos](https://github.com/floritange/AgentChaos) — inspected for architecture descriptions; adapters are independent implementations |
 | EvalPlus (HumanEval+, MBPP+) | 0.3.1, Apache-2.0 |
 

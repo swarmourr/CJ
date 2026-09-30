@@ -90,12 +90,61 @@ def sandbox_exec(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _score_evalplus(
+    task: "BenchmarkTask",
+    generated_code: str,
+    timeout_s: float,
+) -> tuple[bool, int, int, str] | None:
+    """Score using the official evalplus evaluator (base + plus inputs).
+
+    Returns None when evalplus is not installed or the task has no evalplus
+    metadata, so the caller can fall back to sandbox_exec.
+    """
+    problem = task.metadata.get("evalplus_problem")
+    dataset = task.metadata.get("evalplus_dataset")
+    if not problem or not dataset:
+        return None
+    try:
+        from evalplus.evaluate import check_correctness  # type: ignore[import]
+    except ImportError:
+        return None
+
+    try:
+        result = check_correctness(
+            dataset=dataset,
+            problem=problem,
+            solution=generated_code,
+            max_as_timeout=int(timeout_s),
+            base_only=False,
+        )
+        # result is {"base": [bool, ...], "plus": [bool, ...]}
+        base_results = result.get("base") or []
+        plus_results = result.get("plus") or []
+        all_results  = base_results + plus_results
+        tests_total  = len(all_results)
+        tests_passed = sum(1 for r in all_results if r)
+        ok = tests_passed == tests_total and tests_total > 0
+        summary = (
+            f"evalplus: base={sum(base_results)}/{len(base_results)} "
+            f"plus={sum(plus_results)}/{len(plus_results)}"
+        )
+        return ok, tests_passed, tests_total, summary
+    except Exception as exc:
+        return None  # fall through to sandbox_exec
+
+
 def score_task(
     task: "BenchmarkTask",
     generated_code: str,
     timeout_s: float = _DEFAULT_TIMEOUT,
 ) -> tuple[bool, int, int, str]:
     """Score generated code against a BenchmarkTask's test suite.
+
+    For tasks loaded via the evalplus library (metadata contains
+    ``evalplus_problem``), uses ``evalplus.evaluate.check_correctness``
+    which runs both the base and augmented plus inputs.  Falls back to
+    sandbox_exec + test_code assertions when evalplus is not installed or
+    the task has no evalplus metadata (smoke/bundled tasks).
 
     Parameters
     ----------
@@ -110,6 +159,10 @@ def score_task(
     """
     if not generated_code.strip():
         return False, 0, 0, "EMPTY: agent produced no code"
+
+    ep = _score_evalplus(task, generated_code, timeout_s)
+    if ep is not None:
+        return ep
 
     full_code = task.full_exec_code(generated_code)
     ok, output = sandbox_exec(full_code, timeout_s=timeout_s)

@@ -153,6 +153,11 @@ def build_cj_fault(name: str):
     from chaos_jungle.faults.llm import _LLMProxyFault, _DEFAULT_UPSTREAM
     if issubclass(cls, _LLMProxyFault):
         real_upstream = os.environ.get("CJ_EVAL_BASE_URL", _DEFAULT_UPSTREAM).rstrip("/")
+        # Strip /v1 suffix: the CJ proxy appends the full request path
+        # (/v1/chat/completions) to upstream, so upstream must NOT end with
+        # /v1 to avoid constructing upstream/v1/v1/chat/completions.
+        if real_upstream.endswith("/v1"):
+            real_upstream = real_upstream[:-3]
         params.setdefault("upstream",     real_upstream)
         params.setdefault("base_url_env", "CJ_EVAL_BASE_URL")
 

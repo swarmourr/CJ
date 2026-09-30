@@ -163,15 +163,27 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
     m.recovery_rate      = filt.recovery_rate
 
     # ── Robustness score ───────────────────────────────────────────────────────
-    # success under fault, restricted to tasks that succeeded at baseline
+    # Fault success restricted to tasks that succeeded at baseline.
+    # Prefer pair_id for exact (task, repeat) matching; fall back to task_id
+    # for legacy records without pair_id.
     if filt.baseline and filt.valid:
-        baseline_success_tasks = {
-            r["task_id"] for r in filt.baseline if r.get("success", 0.0) >= 0.5
+        baseline_success_pairs = {
+            r["pair_id"] for r in filt.baseline
+            if r.get("success", 0.0) >= 0.5 and r.get("pair_id")
         }
-        fault_among_baseline_success = [
-            r for r in filt.valid if r["task_id"] in baseline_success_tasks
-        ]
-        if baseline_success_tasks and fault_among_baseline_success:
+        if baseline_success_pairs:
+            fault_among_baseline_success = [
+                r for r in filt.valid if r.get("pair_id") in baseline_success_pairs
+            ]
+        else:
+            # Legacy: match by task_id
+            baseline_success_tasks = {
+                r["task_id"] for r in filt.baseline if r.get("success", 0.0) >= 0.5
+            }
+            fault_among_baseline_success = [
+                r for r in filt.valid if r.get("task_id") in baseline_success_tasks
+            ]
+        if fault_among_baseline_success:
             m.robustness_score = round(
                 sum(r["success"] for r in fault_among_baseline_success)
                 / len(fault_among_baseline_success),
