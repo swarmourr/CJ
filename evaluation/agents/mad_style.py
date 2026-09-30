@@ -103,7 +103,7 @@ class MADStyleAgent(AgentSystem):
         # ── Round 0: independent proposals ────────────────────────────────────
         for i in range(self.n_agents):
             try:
-                resp = self.client.chat(histories[i])
+                resp = self.client.chat(histories[i], seed=seed)
                 llm_calls += 1
             except RuntimeError as exc:
                 reported_error = 1.0
@@ -137,7 +137,7 @@ class MADStyleAgent(AgentSystem):
                 )
                 histories[i].append({"role": "user", "content": debate_prompt})
                 try:
-                    resp = self.client.chat(histories[i])
+                    resp = self.client.chat(histories[i], seed=seed)
                     llm_calls += 1
                 except RuntimeError as exc:
                     reported_error = 1.0

@@ -297,24 +297,37 @@ class ExperimentProtocol:
                 ev.recovered = False
                 ev.details   = f"stop() errors: {exc}"
 
-            # Pull session verdict from CJ DB
+            # Pull session verdict from CJ DB and derive trigger/manifest evidence
             if runner._session_id is not None:
                 try:
                     sess = runner.db.get_session(runner._session_id)
-                    ev.verdict  = str(sess["verdict"]) if sess and "verdict" in sess.keys() else "INCONCLUSIVE"
-                    ev.triggered  = ev.activated
-                    ev.manifested = ev.triggered
+                    raw_verdict = str(sess["verdict"]) if sess and "verdict" in sess.keys() else "INCONCLUSIVE"
+                    ev.verdict = raw_verdict
+
+                    # triggered: fault was activated AND at least one LLM call happened
+                    # (LLM faults only intercept requests; if no requests were made, untriggered)
+                    ev.triggered = ev.activated and (f_result.llm_calls > 0)
+
+                    # manifested: CJ considers the session VALID → fault affected the execution
+                    ev.manifested = (raw_verdict == "VALID")
                 except Exception:
-                    ev.verdict = "INCONCLUSIVE"
+                    ev.verdict    = "INCONCLUSIVE"
+                    ev.triggered  = ev.activated and (f_result.llm_calls > 0)
+                    ev.manifested = False
 
             f_ok, f_tp, f_tt, _ = score_task(
                 task, f_result.generated_code, timeout_s=self.exec_timeout_s
             )
-            validity = {
-                "VALID":       "valid",
-                "INVALID":     "invalid",
-                "INCONCLUSIVE":"inconclusive",
-            }.get(ev.verdict, "inconclusive")
+
+            # Untriggered: fault was activated but no LLM request passed through it
+            if ev.activated and not ev.triggered:
+                validity = "untriggered"
+            else:
+                validity = {
+                    "VALID":       "valid",
+                    "INVALID":     "invalid",
+                    "INCONCLUSIVE":"inconclusive",
+                }.get(ev.verdict, "inconclusive")
 
         # ── Detect silent failure ──────────────────────────────────────────────
         # Silent failure: tests fail but agent did not report an error

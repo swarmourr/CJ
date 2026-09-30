@@ -59,21 +59,44 @@ def write_condition_summary_csv(
     records: list[dict],
     path: str,
 ) -> None:
-    """Write aggregated metrics per (agent_system, benchmark, fault_type)."""
+    """Write aggregated metrics per (agent_system, benchmark, fault_type).
+
+    Baselines (fault_type="none") are paired with each fault condition that
+    shares the same (agent_system, benchmark) so that degradation is computable.
+    """
     from itertools import groupby
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
-    # Group by (agent_system, benchmark, fault_type)
-    def key(r):
-        return (r.get("agent_system",""), r.get("benchmark",""), r.get("fault_type","none"))
+    # Separate baselines from fault records
+    baselines  = [r for r in records if r.get("phase") == "baseline"]
+    fault_recs = [r for r in records if r.get("phase") == "fault"]
 
-    sorted_recs = sorted(records, key=key)
+    # Index baselines by (agent_system, benchmark)
+    baseline_idx: dict[tuple, list[dict]] = {}
+    for r in baselines:
+        k = (r.get("agent_system", ""), r.get("benchmark", ""))
+        baseline_idx.setdefault(k, []).append(r)
+
+    def fault_key(r: dict):
+        return (r.get("agent_system", ""), r.get("benchmark", ""), r.get("fault_type", "none"))
+
     rows: list[dict] = []
-    for (sys, bench, fault), group_recs in groupby(sorted_recs, key=key):
-        recs = list(group_recs)
-        m    = compute_metrics(recs)
-        row  = {"agent_system": sys, "benchmark": bench, "fault_type": fault}
+
+    # One row per fault type — combined with matching baselines so degradation computes
+    sorted_faults = sorted(fault_recs, key=fault_key)
+    for (sys, bench, fault), group_recs in groupby(sorted_faults, key=fault_key):
+        paired_baselines = baseline_idx.get((sys, bench), [])
+        combined = paired_baselines + list(group_recs)
+        m   = compute_metrics(combined)
+        row = {"agent_system": sys, "benchmark": bench, "fault_type": fault}
+        row.update(m.to_dict())
+        rows.append(row)
+
+    # Baseline-only summary rows
+    for (sys, bench), b_recs in sorted(baseline_idx.items()):
+        m   = compute_metrics(b_recs)
+        row = {"agent_system": sys, "benchmark": bench, "fault_type": "none"}
         row.update(m.to_dict())
         rows.append(row)
 

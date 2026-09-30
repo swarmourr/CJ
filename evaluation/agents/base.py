@@ -83,13 +83,15 @@ class ModelClient:
     """
 
     def __init__(self, dry_run: bool = False) -> None:
-        self.base_url = os.environ.get("CJ_EVAL_BASE_URL", "").rstrip("/")
-        self.api_key  = os.environ.get("CJ_EVAL_API_KEY", "dummy")
-        self.model    = os.environ.get("CJ_EVAL_MODEL", "gpt-4o-mini")
+        # Snapshot construction-time URL only for the startup check; the actual
+        # URL used per request is re-read at call time so CJ proxy redirects work.
+        _init_url = os.environ.get("CJ_EVAL_BASE_URL", "").rstrip("/")
+        self.api_key     = os.environ.get("CJ_EVAL_API_KEY", "dummy")
+        self.model       = os.environ.get("CJ_EVAL_MODEL", "gpt-4o-mini")
         self.temperature = float(os.environ.get("CJ_EVAL_TEMPERATURE", "0.0"))
-        self.dry_run  = dry_run
+        self.dry_run     = dry_run
 
-        if not self.base_url and not dry_run:
+        if not _init_url and not dry_run:
             raise RuntimeError(
                 "CJ_EVAL_BASE_URL is not set. "
                 "Point it to an OpenAI-compatible endpoint, a local Ollama server, "
@@ -97,14 +99,31 @@ class ModelClient:
                 "Use --dry-run to run without any model server."
             )
 
+    def _current_base_url(self) -> str:
+        """Return the live endpoint URL, picking up CJ proxy redirects.
+
+        CJ LLM faults set OPENAI_BASE_URL when the proxy starts.  We check
+        CJ_EVAL_BASE_URL first (explicit override) then OPENAI_BASE_URL (CJ
+        proxy redirect) so that requests are intercepted during fault phases.
+        """
+        return (
+            os.environ.get("CJ_EVAL_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or ""
+        ).rstrip("/")
+
     def chat(
         self,
         messages: list[dict],
         *,
         max_tokens: int = 2048,
         stop: list[str] | None = None,
+        seed: int | None = None,
     ) -> dict:
         """Send a chat completion request; return the API response dict.
+
+        The endpoint URL is re-read from the environment on every call so that
+        CJ proxy redirects (OPENAI_BASE_URL) are picked up automatically.
 
         Raises:
             RuntimeError: on non-2xx HTTP status.
@@ -116,7 +135,8 @@ class ModelClient:
         import urllib.error
         import urllib.request
 
-        payload = {
+        base_url = self._current_base_url()
+        payload: dict = {
             "model":       self.model,
             "messages":    messages,
             "temperature": self.temperature,
@@ -124,10 +144,12 @@ class ModelClient:
         }
         if stop:
             payload["stop"] = stop
+        if seed is not None:
+            payload["seed"] = seed
 
         data = json.dumps(payload).encode()
         req  = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
+            f"{base_url}/chat/completions",
             data=data,
             headers={
                 "Content-Type":  "application/json",
@@ -144,9 +166,9 @@ class ModelClient:
                 f"LLM API error {exc.code}: {body}"
             ) from exc
 
-    def complete(self, messages: list[dict], **kwargs) -> str:
+    def complete(self, messages: list[dict], seed: int | None = None, **kwargs) -> str:
         """Return the assistant message content string."""
-        resp = self.chat(messages, **kwargs)
+        resp = self.chat(messages, seed=seed, **kwargs)
         try:
             return resp["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):

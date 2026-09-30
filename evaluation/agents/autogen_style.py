@@ -96,7 +96,7 @@ class AutoGenStyleAgent(AgentSystem):
 
             # ── Assistant turn ────────────────────────────────────────────────
             try:
-                resp = self.client.chat(messages)
+                resp = self.client.chat(messages, seed=seed)
                 llm_calls += 1
             except RuntimeError as exc:
                 reported_error = 1.0

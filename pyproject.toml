@@ -59,7 +59,7 @@ chaos-jungle = "chaos_jungle.pytest_plugin"
 packages = ["chaos_jungle"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "evaluation/tests"]
 addopts = "-v --tb=short"
 
 [tool.black]

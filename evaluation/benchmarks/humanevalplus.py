@@ -219,14 +219,10 @@ def _evalplus_tasks() -> list[BenchmarkTask]:
     dataset = get_human_eval_plus()
     tasks = []
     for task_id, d in dataset.items():
-        test_code = (
-            d.get("plus_input") or ""
-            if "plus_input" in d
-            else d.get("test", "")
-        )
-        # evalplus stores tests in a 'test' key as runnable code
-        if not test_code and "test" in d:
-            test_code = d["test"]
+        # evalplus stores runnable test code in 'test'.
+        # 'plus_input' is augmented *input variants* used by evalplus's own
+        # evaluator — it is NOT test code and must not be used as test_code.
+        test_code = d.get("test", "")
         tasks.append(BenchmarkTask(
             task_id=task_id,
             benchmark="humanevalplus",

@@ -110,19 +110,20 @@ def compute_condition_stats(
 
     results: list[ConditionStats] = []
 
-    # Paired analysis: match by task_id
+    # Build paired sets — match by task_id
     baseline_by_task: dict[str, list[dict]] = {}
     for r in baseline_records:
-        baseline_by_task.setdefault(r["task_id"], []).append(r)
+        baseline_by_task.setdefault(r.get("task_id", ""), []).append(r)
 
     fault_by_task: dict[str, list[dict]] = {}
     for r in fault_records:
-        fault_by_task.setdefault(r["task_id"], []).append(r)
+        fault_by_task.setdefault(r.get("task_id", ""), []).append(r)
 
-    paired_tasks = set(baseline_by_task) & set(fault_by_task)
-    missing_pairs = len(set(baseline_by_task) - set(fault_by_task))
+    paired_tasks   = set(baseline_by_task) & set(fault_by_task)
+    missing_pairs  = len(set(baseline_by_task) - set(fault_by_task))
 
     for metric in metrics:
+        # Descriptive stats use all available records (not restricted to pairs)
         b_vals = [r.get(metric, 0.0) for r in baseline_records
                   if isinstance(r.get(metric), (int, float))]
         f_vals = [r.get(metric, 0.0) for r in fault_records
@@ -130,7 +131,15 @@ def compute_condition_stats(
 
         b_st = _stats(b_vals)
         f_st = _stats(f_vals)
-        d    = _cohens_d(b_vals, f_vals)
+
+        # Cohen's d: use only task_id-paired records so the comparison is valid
+        b_paired = [r.get(metric, 0.0) for tid in paired_tasks
+                    for r in baseline_by_task.get(tid, [])
+                    if isinstance(r.get(metric), (int, float))]
+        f_paired = [r.get(metric, 0.0) for tid in paired_tasks
+                    for r in fault_by_task.get(tid, [])
+                    if isinstance(r.get(metric), (int, float))]
+        d = _cohens_d(b_paired, f_paired)
 
         results.append(ConditionStats(
             metric=metric, condition="baseline",

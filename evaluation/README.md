@@ -307,6 +307,34 @@ python -m pytest evaluation/tests/ -v
 
 ---
 
+## Known limitations
+
+### `tool_failure` fault cannot trigger
+The three agent adapters (AutoGen-style, MAD-style, MapCoder-style) communicate
+with the LLM via direct HTTP calls.  No `role="tool"` messages are sent because
+no tool-calling API feature is used.  The `ToolFault` CJ class intercepts
+tool-role messages; it will never activate for these adapters.
+
+**Impact:** `tool_failure` experiments produce `validity=untriggered` records.
+Exclude `tool_failure` from degradation analysis or implement tool-use in the
+agent adapters before running it.
+
+### Sandbox security scope
+`sandbox_exec` isolates code execution in a temporary directory with a
+wall-clock timeout and an env that excludes API keys.  It does NOT provide
+OS-level process/filesystem isolation (e.g. `nsjail`, `bubblewrap`, `seccomp`).
+Generated code can read host files and make network requests.
+
+**Impact:** Suitable for trusted benchmark tasks (HumanEval+, MBPP+) whose test
+code is known-safe.  Do not run arbitrary untrusted code from a real model
+without additional OS-level sandboxing in production.
+
+### Test coverage with dry-run only
+The 94 unit tests use a fake model server and `--dry-run` mode.  No test
+verifies real CJ proxy interception or actual fault manifestation.  Run
+`smoke.yaml` against a real model+endpoint as an integration smoke test before
+a paid campaign.
+
 ## Unresolved compatibility issues
 
 1. **evalplus not installed** — `subset="smoke"` works offline with bundled tasks.

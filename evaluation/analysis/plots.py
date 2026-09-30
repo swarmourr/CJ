@@ -84,11 +84,19 @@ def plot_degradation(
     if not _check_matplotlib():
         return None
 
+    def _flt(v: Any) -> float | None:
+        if v is None or v == "" or v == "None":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
     real = [
         c for c in condition_summaries
-        if c.get("pass_at_1_baseline") is not None
-        and c.get("pass_at_1_fault") is not None
-        and c.get("n_fault_valid", 0) > 0
+        if _flt(c.get("pass_at_1_baseline")) is not None
+        and _flt(c.get("pass_at_1_fault")) is not None
+        and int(c.get("n_fault_valid", 0) or 0) > 0
     ]
     if not real:
         _no_data_notice(output_path, "no valid fault records with pass@1 data")
@@ -102,7 +110,7 @@ def plot_degradation(
         fig, ax = plt.subplots()
         labels = [c["fault_type"] for c in real]
         degrad = [
-            round(c["pass_at_1_baseline"] - c["pass_at_1_fault"], 3)
+            round(_flt(c["pass_at_1_baseline"]) - _flt(c["pass_at_1_fault"]), 3)
             for c in real
         ]
         x = range(len(labels))
@@ -181,9 +189,17 @@ def plot_amplification(
     if not _check_matplotlib():
         return None
 
+    def _flt2(v: Any) -> float | None:
+        if v is None or v == "" or v == "None":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
     real = [
         c for c in condition_summaries
-        if c.get(metric) is not None
+        if _flt2(c.get(metric)) is not None
     ]
     if not real:
         _no_data_notice(output_path, f"no records with {metric}")
@@ -196,7 +212,7 @@ def plot_amplification(
     with plt.rc_context(_grayscale_style()):
         fig, ax = plt.subplots()
         labels = [c["fault_type"] for c in real]
-        vals   = [c[metric] for c in real]
+        vals   = [_flt2(c[metric]) for c in real]
         ax.bar(range(len(labels)), vals, color="#333333", edgecolor="black")
         ax.axhline(1.0, color="black", linewidth=0.8, linestyle="--", label="baseline (1.0×)")
         ax.set_xticks(range(len(labels)))
