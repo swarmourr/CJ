@@ -49,11 +49,12 @@ dev = [
 ]
 evaluation = [
     # Real agent frameworks — required for autogen-real, langgraph-real, crewai-real
-    "autogen-agentchat>=0.4.0,<0.8.0",
-    "autogen-ext[openai]>=0.4.0,<0.8.0",
-    "langgraph>=0.2.0,<2.0.0",
-    "langchain-openai>=0.1.0,<2.0.0",
-    "crewai>=0.100.0,<2.0.0",
+    # All require Python >=3.10; guarded by marker so the core package stays 3.9-compatible.
+    "autogen-agentchat>=0.4.0,<0.8.0; python_version>='3.10'",
+    "autogen-ext[openai]>=0.4.0,<0.8.0; python_version>='3.10'",
+    "langgraph>=0.2.0,<2.0.0; python_version>='3.10'",
+    "langchain-openai>=0.1.0,<2.0.0; python_version>='3.10'",
+    "crewai>=0.100.0,<2.0.0; python_version>='3.10'",
     # Benchmark evaluation
     "evalplus==0.3.1",
     # Credential management

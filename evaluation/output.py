@@ -42,17 +42,34 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
         return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     cols = [
-        "run_id", "timestamp", "agent_system", "benchmark", "task_id",
-        "model", "seed", "fault_type", "phase", "validity",
+        "run_id", "campaign_id", "pair_id", "timestamp", "cj_commit",
+        "agent_system", "benchmark", "task_id",
+        "model", "endpoint_type", "config_hash",
+        "seed", "fault_type", "phase", "validity",
         "success", "duration_s", "reported_error", "retries",
         "llm_calls", "tool_calls", "turns",
         "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd",
         "tests_passed", "tests_total", "termination_reason",
+        "lifecycle.triggered", "lifecycle.manifested", "lifecycle.recovered",
+        "lifecycle.activated", "lifecycle.verdict",
+        "framework_version", "python_version",
     ]
+
+    def _flatten(r: dict) -> dict:
+        out = dict(r)
+        lc = r.get("lifecycle") or {}
+        if isinstance(lc, dict):
+            out["lifecycle.triggered"]  = lc.get("triggered", "")
+            out["lifecycle.manifested"] = lc.get("manifested", "")
+            out["lifecycle.recovered"]  = lc.get("recovered", "")
+            out["lifecycle.activated"]  = lc.get("activated", "")
+            out["lifecycle.verdict"]    = lc.get("verdict", "")
+        return out
+
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
-        w.writerows(records)
+        w.writerows(_flatten(r) for r in records)
 
 
 def write_condition_summary_csv(
@@ -252,28 +269,98 @@ def write_latex_tables(
     print(f"[output] LaTeX table → {out}")
 
 
+def write_stats_summary_csv(records: list[dict], path: str) -> None:
+    """Write per-condition statistical summary with CIs and Cohen's d_z."""
+    from evaluation.analysis.statistics import compute_condition_stats
+    from evaluation.analysis.validity import classify_records
+    from itertools import groupby
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    def fault_key(r: dict):
+        return (r.get("agent_system", ""), r.get("benchmark", ""), r.get("fault_type", "none"))
+
+    all_fault_recs = [r for r in records if r.get("phase") == "fault"]
+    all_base_recs  = [r for r in records if r.get("phase") == "baseline"]
+
+    rows: list[dict] = []
+    for (sys, bench, fault), group_recs in groupby(
+        sorted(all_fault_recs, key=fault_key), key=fault_key
+    ):
+        group_list = list(group_recs)
+        filt = classify_records(group_list)
+        # Paired baselines for this condition
+        pair_ids = {r.get("pair_id") for r in group_list if r.get("pair_id")}
+        if pair_ids:
+            base_recs = [r for r in all_base_recs
+                         if r.get("agent_system") == sys
+                         and r.get("benchmark") == bench
+                         and r.get("pair_id") in pair_ids]
+        else:
+            base_recs = [r for r in all_base_recs
+                         if r.get("agent_system") == sys and r.get("benchmark") == bench]
+
+        stats_list = compute_condition_stats(
+            baseline_records=base_recs,
+            fault_records=filt.valid,
+            condition_name=fault,
+        )
+        for s in stats_list:
+            row = {"agent_system": sys, "benchmark": bench}
+            row.update(s.to_dict())
+            rows.append(row)
+
+    if not rows:
+        print(f"[output] No stats data — skipping {path}")
+        return
+
+    cols = ["agent_system", "benchmark"] + list(rows[0].keys())[2:]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[output] Stats summary → {path}")
+
+
 def generate_all_outputs(
     results_dir: str = "results",
     figures_dir: str | None = None,
     latex_dir:   str | None = None,
+    campaign_id: str | None = None,
 ) -> None:
-    """Load runs.jsonl and generate all output files."""
+    """Load runs.jsonl and generate all output files.
+
+    Parameters
+    ----------
+    campaign_id : str, optional
+        When provided, only records from this campaign are processed.
+        Prevents mixing data from old and new runs in the same JSONL file.
+    """
     from evaluation.analysis.plots import plot_degradation, plot_validity_summary
     from itertools import groupby
 
     jsonl_path = os.path.join(results_dir, "runs.jsonl")
-    records    = load_jsonl(jsonl_path)
+    all_records = load_jsonl(jsonl_path)
 
-    if not records:
+    if not all_records:
         print(f"[output] No records found in {jsonl_path}. Run an experiment first.")
         return
 
-    print(f"[output] Loaded {len(records)} records from {jsonl_path}")
+    if campaign_id:
+        records = [r for r in all_records
+                   if r.get("campaign_id") == campaign_id
+                   or not r.get("campaign_id")]
+        print(f"[output] Loaded {len(records)}/{len(all_records)} records "
+              f"for campaign {campaign_id[:8]} from {jsonl_path}")
+    else:
+        records = all_records
+        print(f"[output] Loaded {len(records)} records from {jsonl_path}")
 
     write_task_results_csv(records, os.path.join(results_dir, "task_results.csv"))
     write_condition_summary_csv(records, os.path.join(results_dir, "condition_summary.csv"))
     write_validity_summary_csv(records, os.path.join(results_dir, "validity_summary.csv"))
     write_group_summary_csv(records, os.path.join(results_dir, "group_summary.csv"))
+    write_stats_summary_csv(records, os.path.join(results_dir, "stats_summary.csv"))
 
     fig_dir = figures_dir or os.path.join(results_dir, "figures")
     plot_degradation(

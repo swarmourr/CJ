@@ -476,7 +476,7 @@ class ExperimentProtocol:
             if ev.activated and not ev.triggered:
                 validity = "untriggered"
             elif ev.triggered and not ev.manifested:
-                validity = "untriggered"
+                validity = "invalid"
             else:
                 validity = {
                     "VALID":       "valid",

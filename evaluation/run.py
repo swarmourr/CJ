@@ -279,7 +279,7 @@ def run_single_experiment(
     print(f"\n[eval] Completed {len(records)} run records → {jsonl_path} "
           f"(campaign {proto.campaign_id[:8]})")
 
-    generate_all_outputs(results_dir)
+    generate_all_outputs(results_dir, campaign_id=proto.campaign_id)
 
     from evaluation.analysis.metrics import compute_metrics
     from evaluation.output import load_jsonl

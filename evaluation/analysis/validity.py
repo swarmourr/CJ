@@ -94,12 +94,28 @@ class ValidityFilter:
 
     @property
     def recovery_rate(self) -> float | None:
-        manifested = self.valid
-        if not manifested:
+        """recovered / all_manifested.
+
+        Counts all fault records where lifecycle.manifested is True, not just
+        those in the valid bucket.  A triggered-but-invalid record that still
+        manifested (proxy hit, response unmodified) counts in the denominator.
+        Falls back to the valid bucket for legacy records without lifecycle field.
+        """
+        all_manifested = [
+            r for r in self.all_fault
+            if (r.get("lifecycle") or {}).get("manifested") is True
+            or (
+                (r.get("lifecycle") or {}).get("manifested") is None
+                and r.get("validity") == "valid"
+            )
+        ]
+        if not all_manifested:
             return None
-        lc = [r.get("lifecycle", {}) for r in manifested]
-        recovered = [l for l in lc if l.get("recovered") is True]
-        return len(recovered) / len(manifested) if manifested else None
+        recovered = [
+            r for r in all_manifested
+            if (r.get("lifecycle") or {}).get("recovered") is True
+        ]
+        return len(recovered) / len(all_manifested)
 
     @property
     def all_fault(self) -> list[dict]:
