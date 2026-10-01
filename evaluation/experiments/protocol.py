@@ -9,23 +9,40 @@ For every (system, benchmark_task, fault, seed) combination:
   6. Persist configuration, metrics, lifecycle evidence, and artifacts.
   7. Remove transient task state (handled by sandbox_exec's tmpdir cleanup).
 
-No agent memory, generated files, caches, or conversation history leak
-between baseline and fault executions — each call to agent.run() is
-stateless (new ModelClient, new message histories).
+Fresh-client guarantee
+----------------------
+Real-framework adapters (AutoGen, LangGraph, CrewAI) create fresh SDK client
+objects inside their ``run()`` method, reading ``CJ_EVAL_BASE_URL`` at that
+instant.  This ensures the proxy URL injected by ``fault.start()`` is always
+used during the fault phase.
+
+When an ``agent_factory`` is provided (callable → AgentSystem), the protocol
+creates a brand-new agent instance for every phase (baseline *and* fault).
+This is the recommended pattern for real-framework agents.
+
+When a pre-built ``agent`` instance is provided, it is reused across phases.
+Style adapters are safe with this pattern because they already re-read the
+endpoint URL on every ``ModelClient.chat()`` call.
 """
 
 from __future__ import annotations
 
 import os
+import platform
+import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from evaluation.agents.base import AgentRunResult, AgentSystem
 from evaluation.benchmarks.base import BenchmarkTask
 from evaluation.benchmarks.executor import score_task
 
+
+# ---------------------------------------------------------------------------
+# Evidence dataclasses
+# ---------------------------------------------------------------------------
 
 @dataclass
 class LifecycleEvidence:
@@ -39,6 +56,10 @@ class LifecycleEvidence:
     session_id:   int | None = None
     details:      str = ""
 
+
+# ---------------------------------------------------------------------------
+# RunRecord
+# ---------------------------------------------------------------------------
 
 @dataclass
 class RunRecord:
@@ -93,10 +114,19 @@ class RunRecord:
     # Artifact location
     artifact_path:   str = ""
 
+    # Provenance (populated by the protocol)
+    framework_version: str = ""   # e.g. "autogen-agentchat 0.4.9"
+    python_version:    str = ""   # e.g. "3.13.1"
+    config_hash:       str = ""   # sha256[:12] of the model configuration
+
     def to_dict(self) -> dict:
         d = asdict(self)
         return d
 
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
 
 def _detect_cj_commit() -> str:
     """Return HEAD SHA of the CJ package repo.
@@ -152,6 +182,30 @@ def _endpoint_type() -> str:
     return "openai_compat"
 
 
+def _python_version() -> str:
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def _framework_version(agent: AgentSystem) -> str:
+    fn = getattr(agent, "framework_version", None)
+    if callable(fn):
+        try:
+            return fn()
+        except Exception:
+            pass
+    return ""
+
+
+def _config_hash_for(agent: AgentSystem) -> str:
+    mc = getattr(agent, "_model_config", None)
+    if mc is not None and hasattr(mc, "config_hash"):
+        try:
+            return mc.config_hash()
+        except Exception:
+            pass
+    return ""
+
+
 def _make_baseline_record(
     agent: AgentSystem,
     task: BenchmarkTask,
@@ -170,7 +224,7 @@ def _make_baseline_record(
         agent_system=agent.name,
         benchmark=task.benchmark,
         task_id=task.task_id,
-        model=agent.client.model,
+        model=agent.model_name,
         endpoint_type=_endpoint_type(),
         seed=seed,
         fault_type="none",
@@ -195,15 +249,25 @@ def _make_baseline_record(
         exception=result.exception,
         validity="unchecked",
         pair_id=pair_id,
+        framework_version=_framework_version(agent),
+        python_version=_python_version(),
+        config_hash=_config_hash_for(agent),
     )
 
+
+# ---------------------------------------------------------------------------
+# ExperimentProtocol
+# ---------------------------------------------------------------------------
 
 class ExperimentProtocol:
     """Run paired baseline + fault experiments and emit RunRecords.
 
     Parameters
     ----------
-    agent : AgentSystem
+    agent : AgentSystem, optional
+        Pre-built agent instance.  Reused across tasks in the campaign.
+        Style adapters are safe with reuse because they re-read the endpoint
+        URL at every call.  Mutually exclusive with *agent_factory*.
     fault_name : str
         One of the fault catalog names; ``"none"`` for baseline-only.
     output_dir : str
@@ -213,22 +277,39 @@ class ExperimentProtocol:
         (clean) agent client to verify protocol plumbing only.
     exec_timeout_s : float
         Sandbox execution timeout per task.
+    agent_factory : callable, optional
+        ``() -> AgentSystem`` — called to create a fresh agent for every
+        run phase (baseline *and* fault).  Recommended for real-framework
+        adapters to guarantee fully isolated state.
     """
 
     def __init__(
         self,
-        agent: AgentSystem,
-        fault_name: str,
+        agent: AgentSystem | None = None,
+        fault_name: str = "none",
         output_dir: str = "results",
         dry_run: bool = False,
         exec_timeout_s: float = 10.0,
+        agent_factory: Callable[[], AgentSystem] | None = None,
     ) -> None:
-        self.agent          = agent
+        if agent_factory is None and agent is None:
+            raise ValueError("Either agent or agent_factory must be provided")
+        # Normalise to factory form internally.
+        # A fixed agent is wrapped so the factory path is always taken.
+        self._agent_factory = agent_factory if agent_factory is not None else (lambda: agent)
+        # Keep a reference for metadata (name, model) before the first run
+        self._meta_agent    = agent or agent_factory()  # type: ignore[misc]
         self.fault_name     = fault_name
         self.output_dir     = output_dir
         self.dry_run        = dry_run
         self.exec_timeout_s = exec_timeout_s
         os.makedirs(output_dir, exist_ok=True)
+
+    # Legacy accessor kept for backward compatibility with tests that read
+    # proto.agent.name etc.
+    @property
+    def agent(self) -> AgentSystem:
+        return self._meta_agent
 
     def run_task(
         self,
@@ -248,12 +329,13 @@ class ExperimentProtocol:
             pair_id = str(uuid.uuid4())
 
             # ── Baseline execution ─────────────────────────────────────────────
-            b_result = self.agent.run(task.agent_prompt(), seed=task_seed)
+            b_agent  = self._agent_factory()
+            b_result = b_agent.run(task.agent_prompt(), seed=task_seed)
             b_ok, b_tp, b_tt, b_out = score_task(
                 task, b_result.generated_code, timeout_s=self.exec_timeout_s
             )
             b_rec = _make_baseline_record(
-                self.agent, task, b_result, task_seed, b_ok, b_tp, b_tt, b_out,
+                b_agent, task, b_result, task_seed, b_ok, b_tp, b_tt, b_out,
                 pair_id=pair_id,
             )
             records.append(b_rec)
@@ -275,9 +357,10 @@ class ExperimentProtocol:
     ) -> list[RunRecord]:
         """Run full campaign across all tasks."""
         all_records: list[RunRecord] = []
+        meta = self._meta_agent
         for i, task in enumerate(tasks):
             print(f"[eval] Task {i+1}/{len(tasks)}: {task.task_id}  "
-                  f"fault={self.fault_name}  system={self.agent.name}")
+                  f"fault={self.fault_name}  system={meta.name}")
             recs = self.run_task(task, seed=seed + i * 7, repeats=repeats)
             all_records.extend(recs)
         return all_records
@@ -299,10 +382,10 @@ class ExperimentProtocol:
         ev    = LifecycleEvidence(configured=True)
 
         if self.dry_run:
-            # In dry-run: record configured but skip real injection
             ev.verdict = "INCONCLUSIVE"
             ev.details = "dry-run: fault not started"
-            f_result = self.agent.run(task.agent_prompt(), seed=seed)
+            f_agent  = self._agent_factory()
+            f_result = f_agent.run(task.agent_prompt(), seed=seed)
             f_ok, f_tp, f_tt, _ = score_task(
                 task, f_result.generated_code, timeout_s=self.exec_timeout_s
             )
@@ -323,10 +406,13 @@ class ExperimentProtocol:
                 ev.details   = f"start() failed: {exc}"
                 return self._error_fault_record(task, seed, spec, ev, str(exc), pair_id=pair_id)
 
-            # Run agent under the fault
+            # Fresh agent for fault phase — created AFTER fault.start() so SDK
+            # clients bind to the proxy URL now in CJ_EVAL_BASE_URL.
+            f_agent = self._agent_factory()
+
             t0 = time.time()
             try:
-                f_result = self.agent.run(task.agent_prompt(), seed=seed)
+                f_result = f_agent.run(task.agent_prompt(), seed=seed)
             except Exception as exc:
                 f_result = AgentRunResult(
                     success=0.0, duration_s=time.time()-t0,
@@ -351,17 +437,11 @@ class ExperimentProtocol:
                     )
                     ev.verdict = raw_verdict
 
-                    # Read proxy-observed LLM calls for the fault phase
                     llm_call_rows = runner.db.get_llm_calls(
                         runner._session_id, phase="fault"
                     )
                     import json as _json
-                    # triggered: at least one request reached the proxy
                     ev.triggered = ev.activated and len(llm_call_rows) > 0
-                    # manifested: fault actually fired on at least one request.
-                    # was_blocked/was_modified cover blocking and content-modifying faults.
-                    # triggered_faults_json covers latency and other pass-through faults
-                    # that are neither blocked nor content-modified (e.g. LLMLatency).
                     ev.manifested = any(
                         row.get("was_blocked") or row.get("was_modified")
                         or bool(_json.loads(row.get("triggered_faults_json") or "[]"))
@@ -369,7 +449,6 @@ class ExperimentProtocol:
                     )
                 except Exception as _db_exc:
                     ev.verdict    = "INCONCLUSIVE"
-                    # Fall back to llm_calls count from agent self-report
                     ev.triggered  = ev.activated and (f_result.llm_calls > 0)
                     ev.manifested = False
                     ev.details    = f"DB query failed: {_db_exc}"
@@ -378,11 +457,9 @@ class ExperimentProtocol:
                 task, f_result.generated_code, timeout_s=self.exec_timeout_s
             )
 
-            # Classify validity
             if ev.activated and not ev.triggered:
                 validity = "untriggered"
             elif ev.triggered and not ev.manifested:
-                # Reached proxy but fault had no effect (e.g. rate limit not yet hit)
                 validity = "untriggered"
             else:
                 validity = {
@@ -391,18 +468,16 @@ class ExperimentProtocol:
                     "INCONCLUSIVE":"inconclusive",
                 }.get(ev.verdict, "inconclusive")
 
-        # ── Detect silent failure ──────────────────────────────────────────────
-        # Silent failure: tests fail but agent did not report an error
         silent_failure = (not f_ok) and (f_result.reported_error < 0.5)
 
         return RunRecord(
             run_id=str(uuid.uuid4()),
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             cj_commit=_CJ_COMMIT,
-            agent_system=self.agent.name,
+            agent_system=f_agent.name,
             benchmark=task.benchmark,
             task_id=task.task_id,
-            model=self.agent.client.model,
+            model=f_agent.model_name,
             endpoint_type=_endpoint_type(),
             seed=seed,
             fault_type=self.fault_name,
@@ -429,19 +504,23 @@ class ExperimentProtocol:
             validity=validity,
             oracle_outcome={"silent_failure": silent_failure},
             pair_id=pair_id,
+            framework_version=_framework_version(f_agent),
+            python_version=_python_version(),
+            config_hash=_config_hash_for(f_agent),
         )
 
     def _error_fault_record(
         self, task, seed, spec, ev, exc_str, pair_id: str = ""
     ) -> RunRecord:
+        meta = self._meta_agent
         return RunRecord(
             run_id=str(uuid.uuid4()),
             timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             cj_commit=_CJ_COMMIT,
-            agent_system=self.agent.name,
+            agent_system=meta.name,
             benchmark=task.benchmark,
             task_id=task.task_id,
-            model=self.agent.client.model,
+            model=meta.model_name,
             endpoint_type=_endpoint_type(),
             seed=seed,
             fault_type=self.fault_name,
@@ -467,6 +546,7 @@ class ExperimentProtocol:
             lifecycle=ev,
             validity="invalid",
             pair_id=pair_id,
+            python_version=_python_version(),
         )
 
     def _append_jsonl(self, record: RunRecord) -> None:

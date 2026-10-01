@@ -1,0 +1,40 @@
+# CJ Evaluation — Real-agent smoke configuration
+# Three tasks, one repeat, all three official frameworks, one shared model.
+#
+# This configuration uses real framework packages (AutoGen, LangGraph, CrewAI)
+# against a real OpenAI-compatible endpoint.  No dry-run fallback.
+#
+# Prerequisites:
+#   pip install -e ".[evaluation]"   # installs autogen-agentchat, langgraph, crewai
+#   cp .env.example .env             # then edit .env with the real API key
+#
+# Usage:
+#   python -m evaluation.run --config evaluation/configs/real_smoke.yaml
+#
+# The run will fail clearly if:
+#   - CJ_EVAL_API_KEY is absent from .env / environment
+#   - Any framework package is missing
+#   - The endpoint is unreachable
+#
+# Model section — all experiments share exactly this configuration.
+# Never put the actual API key here; use api_key_env to name the env var.
+
+model:
+  provider:           openai_compatible
+  name:               gpt-4o-mini
+  base_url:           https://api.openai.com
+  api_key_env:        CJ_EVAL_API_KEY
+  temperature:        0.0
+  max_tokens:         2048
+  request_timeout_s:  120
+  transport_retries:  0
+  # Optional pricing (for cost tracking).  Leave at 0.0 to skip cost recording.
+  input_price_per_1k_tokens:  0.000150   # gpt-4o-mini input (USD/1k tokens)
+  output_price_per_1k_tokens: 0.000600   # gpt-4o-mini output (USD/1k tokens)
+
+results_dir: results/real-smoke
+
+experiments:
+  - {system: autogen-real,   benchmark: humanevalplus, fault: llm_latency, tasks: 3, repeats: 1, seed: 42}
+  - {system: langgraph-real, benchmark: humanevalplus, fault: llm_latency, tasks: 3, repeats: 1, seed: 42}
+  - {system: crewai-real,    benchmark: humanevalplus, fault: llm_latency, tasks: 3, repeats: 1, seed: 42}

@@ -1,0 +1,55 @@
+# CJ Evaluation — Real-agent development configuration
+# 20 tasks, 3 repeats, all three official frameworks, one shared model.
+# Do NOT execute automatically — cost and runtime are significant.
+#
+# Estimated API cost: run evaluation/estimate_cost.py first.
+# Requires: pip install -e ".[evaluation]" and a valid CJ_EVAL_API_KEY.
+#
+# Usage:
+#   python -m evaluation.run --config evaluation/configs/real_development.yaml
+
+model:
+  provider:           openai_compatible
+  name:               gpt-4o-mini
+  base_url:           https://api.openai.com
+  api_key_env:        CJ_EVAL_API_KEY
+  temperature:        0.0
+  max_tokens:         2048
+  request_timeout_s:  120
+  transport_retries:  0
+  input_price_per_1k_tokens:  0.000150
+  output_price_per_1k_tokens: 0.000600
+
+results_dir: results/real-development
+
+experiments:
+  # ── AutoGen real ────────────────────────────────────────────────────────────
+  - {system: autogen-real,   benchmark: humanevalplus, fault: none,               tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: humanevalplus, fault: llm_timeout,        tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: humanevalplus, fault: llm_rate_limit,     tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: humanevalplus, fault: llm_unavailable,    tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: humanevalplus, fault: response_truncation, tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: humanevalplus, fault: malformed_response,  tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: humanevalplus, fault: llm_latency,        tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: mbppplus,      fault: tool_failure,       tasks: 20, repeats: 3, seed: 42}
+  - {system: autogen-real,   benchmark: mbppplus,      fault: token_starvation,   tasks: 20, repeats: 3, seed: 42}
+
+  # ── LangGraph real ──────────────────────────────────────────────────────────
+  - {system: langgraph-real, benchmark: humanevalplus, fault: none,               tasks: 20, repeats: 3, seed: 42}
+  - {system: langgraph-real, benchmark: humanevalplus, fault: llm_timeout,        tasks: 20, repeats: 3, seed: 42}
+  - {system: langgraph-real, benchmark: humanevalplus, fault: llm_rate_limit,     tasks: 20, repeats: 3, seed: 42}
+  - {system: langgraph-real, benchmark: humanevalplus, fault: llm_unavailable,    tasks: 20, repeats: 3, seed: 42}
+  - {system: langgraph-real, benchmark: humanevalplus, fault: response_truncation, tasks: 20, repeats: 3, seed: 42}
+  - {system: langgraph-real, benchmark: humanevalplus, fault: malformed_response,  tasks: 20, repeats: 3, seed: 42}
+  - {system: langgraph-real, benchmark: humanevalplus, fault: llm_latency,        tasks: 20, repeats: 3, seed: 42}
+  - {system: langgraph-real, benchmark: mbppplus,      fault: tool_failure,       tasks: 20, repeats: 3, seed: 42}
+
+  # ── CrewAI real ─────────────────────────────────────────────────────────────
+  - {system: crewai-real,    benchmark: humanevalplus, fault: none,               tasks: 20, repeats: 3, seed: 42}
+  - {system: crewai-real,    benchmark: humanevalplus, fault: llm_timeout,        tasks: 20, repeats: 3, seed: 42}
+  - {system: crewai-real,    benchmark: humanevalplus, fault: llm_rate_limit,     tasks: 20, repeats: 3, seed: 42}
+  - {system: crewai-real,    benchmark: humanevalplus, fault: llm_unavailable,    tasks: 20, repeats: 3, seed: 42}
+  - {system: crewai-real,    benchmark: humanevalplus, fault: response_truncation, tasks: 20, repeats: 3, seed: 42}
+  - {system: crewai-real,    benchmark: humanevalplus, fault: malformed_response,  tasks: 20, repeats: 3, seed: 42}
+  - {system: crewai-real,    benchmark: humanevalplus, fault: llm_latency,        tasks: 20, repeats: 3, seed: 42}
+  - {system: crewai-real,    benchmark: mbppplus,      fault: tool_failure,       tasks: 20, repeats: 3, seed: 42}

@@ -172,3 +172,164 @@ class FakeModelServer:
 
     def __exit__(self, *args) -> None:
         self.stop()
+
+
+# ---------------------------------------------------------------------------
+# ToolAwareFakeServer — simulates function/tool-calling for ToolFault tests
+# ---------------------------------------------------------------------------
+
+class _ToolAwareHandler(BaseHTTPRequestHandler):
+    """Handler that returns ``tool_calls`` on the first request per conversation,
+    then returns a text completion when it detects ``role="tool"`` messages.
+
+    This lets integration tests verify that:
+      1. The framework requests tool execution (``tool_calls`` in response).
+      2. The framework sends back the tool result as ``role="tool"``.
+      3. The CJ proxy intercepts that second request (ToolFault activation).
+    """
+
+    def log_message(self, fmt, *args) -> None:
+        pass
+
+    def do_GET(self) -> None:
+        if self.path == "/_fake/calls":
+            calls = self.server._calls  # type: ignore[attr-defined]
+            body  = json.dumps(calls).encode()
+            self._send(200, body, "application/json")
+        elif self.path == "/_fake/tool_calls":
+            calls = self.server._tool_call_requests  # type: ignore[attr-defined]
+            body  = json.dumps(calls).encode()
+            self._send(200, body, "application/json")
+        elif self.path in ("/_cj/health", "/_fake/reset"):
+            if "reset" in self.path:
+                self.server._calls.clear()  # type: ignore[attr-defined]
+                self.server._tool_call_requests.clear()  # type: ignore[attr-defined]
+            self._send(200, b'{"status":"ok"}', "application/json")
+        else:
+            self._send(404, b"not found", "text/plain")
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        body_bytes = self.rfile.read(length)
+        try:
+            body = json.loads(body_bytes)
+        except json.JSONDecodeError:
+            self._send(400, b"bad json", "text/plain")
+            return
+
+        self.server._calls.append(body)  # type: ignore[attr-defined]
+        messages   = body.get("messages", [])
+        tool_name  = self.server._tool_name  # type: ignore[attr-defined]
+        has_tool_msg = any(m.get("role") == "tool" for m in messages)
+
+        if has_tool_msg:
+            # Second request: the framework returned a tool result.
+            # Record it for test assertions and return a final text answer.
+            self.server._tool_call_requests.append(body)  # type: ignore[attr-defined]
+            content = "```python\ndef solution(*args, **kwargs):\n    return None\n```"
+            resp: dict = {
+                "id":      "fake-tool-completion",
+                "object":  "chat.completion",
+                "model":   body.get("model", "fake"),
+                "choices": [{
+                    "index":         0,
+                    "message":       {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35},
+            }
+        else:
+            # First request: tell the model to call the registered tool.
+            resp = {
+                "id":      "fake-tool-request",
+                "object":  "chat.completion",
+                "model":   body.get("model", "fake"),
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id":   "call_fake_001",
+                            "type": "function",
+                            "function": {
+                                "name":      tool_name,
+                                "arguments": json.dumps({"code": "print('test')"}),
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 15, "completion_tokens": 8, "total_tokens": 23},
+            }
+
+        self._send(200, json.dumps(resp).encode(), "application/json")
+
+    def _send(self, code: int, body: bytes, ct: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class ToolAwareFakeServer:
+    """Fake model server that simulates function/tool calling.
+
+    Used to test the full tool-call chain:
+
+        Framework agent
+          → request 1 (no tool messages) → server returns tool_calls response
+          → framework executes tool
+          → request 2 (role="tool") → CJ ToolFault intercepts OR server answers
+          → framework returns final result
+
+    Attributes
+    ----------
+    base_url : str
+        HTTP base URL to set as ``CJ_EVAL_BASE_URL``.
+    calls : list[dict]
+        All received request bodies.
+    tool_call_requests : list[dict]
+        Only requests that contained ``role="tool"`` messages.
+    """
+
+    def __init__(self, tool_name: str = "execute_python_code", port: int = 0) -> None:
+        self._server: HTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self.port      = port
+        self.base_url  = ""
+        self.tool_name = tool_name
+        self.calls: list[dict] = []
+        self.tool_call_requests: list[dict] = []
+
+    def start(self) -> "ToolAwareFakeServer":
+        self._server = HTTPServer(("127.0.0.1", self.port), _ToolAwareHandler)
+        self._server._calls              = self.calls               # type: ignore[attr-defined]
+        self._server._tool_call_requests = self.tool_call_requests  # type: ignore[attr-defined]
+        self._server._tool_name          = self.tool_name           # type: ignore[attr-defined]
+        self.port     = self._server.server_address[1]
+        self.base_url = f"http://127.0.0.1:{self.port}"
+        self._thread  = threading.Thread(
+            target=self._server.serve_forever, daemon=True, name="tool-fake-model"
+        )
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        if self._server:
+            self._server.shutdown()
+            self._server = None
+        if self._thread:
+            self._thread.join(timeout=3)
+            self._thread = None
+
+    def reset(self) -> None:
+        self.calls.clear()
+        self.tool_call_requests.clear()
+
+    def __enter__(self) -> "ToolAwareFakeServer":
+        return self.start()
+
+    def __exit__(self, *args) -> None:
+        self.stop()

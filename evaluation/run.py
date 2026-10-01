@@ -1,21 +1,34 @@
 """CLI entry point for the CJ evaluation package.
 
-Usage examples:
-    python -m evaluation.run --system autogen --benchmark humanevalplus \
+Usage examples::
+
+    # Dry-run (no model API required)
+    python -m evaluation.run --config evaluation/configs/smoke.yaml --dry-run
+
+    # Real model via YAML config
+    cp .env.example .env  # then edit .env with your API key
+    python -m evaluation.run --config evaluation/configs/real_smoke.yaml
+
+    # Single experiment (style agent)
+    python -m evaluation.run --system autogen --benchmark humanevalplus \\
         --fault llm_timeout --tasks 5 --repeats 3 --seed 42
 
-    python -m evaluation.run --system mad --benchmark mbppplus \
-        --fault response_truncation --tasks 5 --repeats 3 --seed 42
+    # Single experiment (real agent)
+    python -m evaluation.run --system autogen-real --benchmark humanevalplus \\
+        --fault llm_latency --tasks 3 --repeats 1 --seed 42
 
-    python -m evaluation.run --system mapcoder --benchmark humanevalplus \
-        --fault tool_failure --tasks 5 --repeats 3 --seed 42
-
-    python -m evaluation.run --dry-run --system autogen \
-        --benchmark humanevalplus --fault llm_timeout --tasks 3
-
-    python -m evaluation.run --config evaluation/configs/smoke.yaml
-
+    # Regenerate output files from existing runs.jsonl
     python -m evaluation.run --generate-outputs --results-dir results/
+
+Credential precedence (highest → lowest)::
+
+    CLI arguments (--api-key, --base-url, --model)
+    > exported environment variables (CJ_EVAL_API_KEY, CJ_EVAL_BASE_URL, …)
+    > .env values (loaded with override=False so exported vars always win)
+    > YAML model: section values
+    > built-in defaults
+
+The API key must never appear in YAML; ``model.api_key_env`` names the env var.
 """
 
 from __future__ import annotations
@@ -24,6 +37,42 @@ import argparse
 import os
 import sys
 
+
+# ---------------------------------------------------------------------------
+# .env loading — must happen before any env-var reads
+# ---------------------------------------------------------------------------
+
+def _load_dotenv() -> None:
+    """Load ``.env`` from the repository root.
+
+    Uses ``override=False`` so variables that are already exported in the
+    shell environment (highest precedence) are never overwritten.  Silently
+    skips if ``python-dotenv`` is not installed (only needed for real runs).
+
+    The `.env` file is located relative to this file's package root so the
+    command works from any working directory.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return  # python-dotenv not installed; acceptable for dry-run
+
+    # Walk up from evaluation/ to the repo root (contains .env.example)
+    here     = os.path.dirname(os.path.abspath(__file__))
+    pkg_root = os.path.dirname(here)
+    env_file = os.path.join(pkg_root, ".env")
+    if os.path.isfile(env_file):
+        load_dotenv(env_file, override=False)
+
+
+# Load .env immediately at module import so env vars are available for
+# everything that follows (YAML parsing, credential checks, etc.).
+_load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -41,7 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Load all settings from a YAML config file")
 
     # ── Experiment parameters ──────────────────────────────────────────────────
-    p.add_argument("--system", choices=["autogen", "mad", "mapcoder"],
+    p.add_argument("--system",
+                   choices=["autogen", "mad", "mapcoder",
+                            "autogen-real", "langgraph-real", "crewai-real"],
                    help="Agent system to evaluate")
     p.add_argument("--benchmark", choices=["humanevalplus", "mbppplus"],
                    help="Benchmark to use")
@@ -77,7 +128,6 @@ def _apply_env_overrides(args: argparse.Namespace) -> None:
         os.environ["CJ_EVAL_MODEL"] = args.model
 
     if args.dry_run:
-        # Ensure env is clean for dry-run (no stale base_url)
         os.environ.pop("CJ_EVAL_BASE_URL", None)
 
 
@@ -93,7 +143,8 @@ def _apply_model_config(cfg: dict, dry_run: bool) -> None:
     Priority (highest → lowest):
       1. CLI flags set by ``_apply_env_overrides`` (already in os.environ)
       2. ``model:`` section in the YAML config
-      3. Existing env vars (CJ_EVAL_BASE_URL etc.)
+      3. ``.env`` values (loaded at module import above)
+      4. Existing env vars
 
     ``setdefault`` is used so CLI flags always win.
 
@@ -103,11 +154,11 @@ def _apply_model_config(cfg: dict, dry_run: bool) -> None:
     api_key_env  : str  — name of an env var that holds the API key.
                           The key itself is never stored in the config file.
     api_key      : str  — API key literal (discouraged; use api_key_env).
-    model        : str  — model identifier (CJ_EVAL_MODEL)
+    model / name : str  — model identifier (CJ_EVAL_MODEL)
     temperature  : float — sampling temperature (CJ_EVAL_TEMPERATURE)
     """
     if dry_run:
-        return  # dry-run needs no real model; skip silently
+        return
 
     model_cfg = cfg.get("model", {})
     if not model_cfg:
@@ -116,7 +167,6 @@ def _apply_model_config(cfg: dict, dry_run: bool) -> None:
     if "base_url" in model_cfg:
         os.environ.setdefault("CJ_EVAL_BASE_URL", str(model_cfg["base_url"]))
 
-    # Prefer api_key_env (reads the key from a named env var at runtime)
     if "api_key_env" in model_cfg:
         key = os.environ.get(str(model_cfg["api_key_env"]), "")
         if key:
@@ -129,12 +179,44 @@ def _apply_model_config(cfg: dict, dry_run: bool) -> None:
     elif "api_key" in model_cfg:
         os.environ.setdefault("CJ_EVAL_API_KEY", str(model_cfg["api_key"]))
 
-    if "model" in model_cfg:
-        os.environ.setdefault("CJ_EVAL_MODEL", str(model_cfg["model"]))
+    model_name = model_cfg.get("model") or model_cfg.get("name")
+    if model_name:
+        os.environ.setdefault("CJ_EVAL_MODEL", str(model_name))
 
     if "temperature" in model_cfg:
         os.environ.setdefault("CJ_EVAL_TEMPERATURE", str(model_cfg["temperature"]))
 
+
+# ---------------------------------------------------------------------------
+# Agent construction — dispatches to style vs. real adapters
+# ---------------------------------------------------------------------------
+
+def _build_agent(system_name: str, yaml_model_cfg: dict, dry_run: bool):
+    """Construct the appropriate agent for *system_name*.
+
+    Style adapters receive a :class:`~evaluation.agents.base.ModelClient`.
+    Real-framework adapters receive a :class:`~evaluation.model_config.ModelConfig`.
+    """
+    from evaluation.agents import REGISTRY
+
+    agent_cls = REGISTRY[system_name]
+    uses_mc   = getattr(agent_cls, "uses_model_config", False)
+
+    if uses_mc:
+        from evaluation.model_config import load_model_config, require_api_key
+        mc = load_model_config(yaml_model_cfg)
+        if not dry_run:
+            require_api_key(mc)
+        return agent_cls(model_config=mc, max_turns=10)
+    else:
+        from evaluation.agents.base import ModelClient
+        client = ModelClient(dry_run=dry_run)
+        return agent_cls(client=client, dry_run=dry_run)
+
+
+# ---------------------------------------------------------------------------
+# Single experiment
+# ---------------------------------------------------------------------------
 
 def run_single_experiment(
     system_name: str,
@@ -146,12 +228,13 @@ def run_single_experiment(
     results_dir: str,
     exec_timeout: float,
     dry_run: bool,
+    yaml_model_cfg: dict | None = None,
 ) -> None:
-    from evaluation.agents import REGISTRY as AGENT_REGISTRY
-    from evaluation.agents.base import ModelClient
     from evaluation.benchmarks import REGISTRY as BENCH_REGISTRY
     from evaluation.experiments.protocol import ExperimentProtocol
     from evaluation.output import generate_all_outputs
+
+    yaml_model_cfg = yaml_model_cfg or {}
 
     print(f"\n[eval] === Experiment ===")
     print(f"  system    : {system_name}")
@@ -162,14 +245,10 @@ def run_single_experiment(
     print()
 
     # Build agent
-    client = ModelClient(dry_run=dry_run)
-    agent_cls = AGENT_REGISTRY[system_name]
-    agent = agent_cls(client=client, dry_run=dry_run)
+    agent = _build_agent(system_name, yaml_model_cfg, dry_run)
 
-    # Load tasks — pick subset based on requested count.
-    # The ImportError from evalplus not being installed surfaces inside loader.load()
-    # (when _load_all() runs), not during the loader constructor.
-    _SMOKE_MAX = 5  # bundled tasks available without evalplus
+    # Load tasks
+    _SMOKE_MAX = 5
     if tasks <= _SMOKE_MAX:
         loader = BENCH_REGISTRY[benchmark_name](subset="smoke")
         loader.smoke_n = tasks
@@ -201,10 +280,8 @@ def run_single_experiment(
     records = proto.run_campaign(task_list, seed=seed, repeats=repeats)
     print(f"\n[eval] Completed {len(records)} run records → {results_dir}/runs.jsonl")
 
-    # Generate outputs
     generate_all_outputs(results_dir)
 
-    # Print summary
     from evaluation.analysis.metrics import compute_metrics
     from evaluation.output import load_jsonl
     all_recs = load_jsonl(os.path.join(results_dir, "runs.jsonl"))
@@ -217,8 +294,9 @@ def run_single_experiment(
 def run_from_yaml(config_path: str, dry_run: bool) -> None:
     cfg = _load_yaml_config(config_path)
     _apply_model_config(cfg, dry_run)
-    experiments = cfg.get("experiments", [cfg])
-    results_dir = cfg.get("results_dir", "results")
+    yaml_model_cfg = cfg.get("model", {})
+    experiments    = cfg.get("experiments", [cfg])
+    results_dir    = cfg.get("results_dir", "results")
     for exp in experiments:
         run_single_experiment(
             system_name=exp.get("system", "autogen"),
@@ -230,8 +308,13 @@ def run_from_yaml(config_path: str, dry_run: bool) -> None:
             results_dir=exp.get("results_dir", results_dir),
             exec_timeout=exp.get("exec_timeout", 10.0),
             dry_run=dry_run or exp.get("dry_run", False),
+            yaml_model_cfg=yaml_model_cfg,
         )
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
@@ -263,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
         results_dir=args.results_dir,
         exec_timeout=args.exec_timeout,
         dry_run=args.dry_run,
+        yaml_model_cfg={},
     )
     return 0
 

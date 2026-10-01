@@ -218,9 +218,16 @@ class AgentSystem(ABC):
     Subclasses must implement :meth:`run`.  The ``name`` class attribute
     determines the system identifier used in output records and must be
     a string like ``"autogen-style"``.
+
+    Real-framework adapters (AutoGen, LangGraph, CrewAI) set ``client=None``
+    and use SDK-native clients created inside :meth:`run`.  They set the class
+    attribute ``uses_model_config = True`` so the experiment runner knows to
+    pass a :class:`~evaluation.model_config.ModelConfig` instead of a
+    :class:`ModelClient`.
     """
 
     name: str = "base"
+    uses_model_config: bool = False  # True for real-framework adapters
 
     def __init__(
         self,
@@ -231,6 +238,18 @@ class AgentSystem(ABC):
         self.client   = client or ModelClient(dry_run=dry_run)
         self.max_turns = max_turns
         self.dry_run  = dry_run
+
+    @property
+    def model_name(self) -> str:
+        """Return the model identifier for this agent.
+
+        Style adapters: reads from the underlying :class:`ModelClient`.
+        Real-framework adapters: reads the ``_model_name`` attribute set in
+        their own ``__init__``.
+        """
+        if self.client is not None:
+            return self.client.model
+        return getattr(self, "_model_name", "unknown")
 
     @abstractmethod
     def run(self, task: str, seed: int = 0) -> AgentRunResult:

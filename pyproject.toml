@@ -47,6 +47,18 @@ dev = [
     "black>=24.0",
     "ruff>=0.4",
 ]
+evaluation = [
+    # Real agent frameworks — required for autogen-real, langgraph-real, crewai-real
+    "autogen-agentchat>=0.4.0,<0.8.0",
+    "autogen-ext[openai]>=0.4.0,<0.8.0",
+    "langgraph>=0.2.0,<2.0.0",
+    "langchain-openai>=0.1.0,<2.0.0",
+    "crewai>=0.100.0,<2.0.0",
+    # Benchmark evaluation
+    "evalplus==0.3.1",
+    # Credential management
+    "python-dotenv>=1.0,<2.0",
+]
 
 [project.scripts]
 chaos-jungle = "chaos_jungle.control.cli:main"
@@ -60,7 +72,10 @@ packages = ["chaos_jungle"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evaluation/tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not real_eval'"
+markers = [
+    "real_eval: requires evaluation package dependencies (autogen-agentchat, langgraph, crewai)",
+]
 
 [tool.black]
 line-length = 100
