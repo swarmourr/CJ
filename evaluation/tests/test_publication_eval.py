@@ -132,6 +132,42 @@ def test_docker_runner_prepare_writes_redacted_request(tmp_path, monkeypatch):
     assert container.image_digest == "sha256:test"
 
 
+def test_docker_runner_prepare_resolves_relative_output_root(tmp_path, monkeypatch):
+    runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
+    monkeypatch.setattr(runner, "_require_docker", lambda: None)
+    monkeypatch.setattr(runner, "_image_digest", lambda image: "sha256:test")
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(cmd, timeout):
+        if cmd[1] == "create":
+            mount_args = [cmd[i + 1] for i, item in enumerate(cmd) if item == "--mount"]
+            assert any("source=" + str(tmp_path / "relative-out" / "input") in arg for arg in mount_args)
+            assert any("source=" + str(tmp_path / "relative-out" / "output") in arg for arg in mount_args)
+            return subprocess.CompletedProcess(cmd, 0, "container123\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    ctx = RunContext(
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        run_id="run",
+        condition="direct_baseline",
+        output_root="relative-out",
+    )
+    container = runner.prepare(
+        agent_system="autogen",
+        topology="single",
+        task={"prompt": "solve"},
+        seed=1,
+        model_config={"name": "model"},
+        execution_config={"dry_run": True},
+        run_context=ctx,
+    )
+    assert container.input_dir == str(tmp_path / "relative-out" / "input")
+    assert container.output_dir == str(tmp_path / "relative-out" / "output")
+
+
 def test_proxy_selector_matching_and_header_stripping():
     class Headers(dict):
         def items(self):

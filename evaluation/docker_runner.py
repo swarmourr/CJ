@@ -162,7 +162,9 @@ class DockerAgentRunner:
         run_context: RunContext,
     ) -> PreparedContainer:
         self._require_docker()
-        output_root = Path(run_context.output_root or tempfile.mkdtemp(prefix="cj-docker-run-"))
+        output_root = Path(
+            run_context.output_root or tempfile.mkdtemp(prefix="cj-docker-run-")
+        ).expanduser().resolve()
         input_dir = output_root / "input"
         output_dir = output_root / "output"
         input_dir.mkdir(parents=True, exist_ok=True)
