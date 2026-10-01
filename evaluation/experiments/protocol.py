@@ -111,6 +111,10 @@ class RunRecord:
     # Pairing: baseline and fault records for the same (task, repeat) share a pair_id
     pair_id:         str = ""
 
+    # Campaign: all records from one protocol invocation share a campaign_id.
+    # Enables filtering out reruns that were appended to the same results_dir.
+    campaign_id:     str = ""
+
     # Artifact location
     artifact_path:   str = ""
 
@@ -216,6 +220,7 @@ def _make_baseline_record(
     tests_total: int,
     exec_output: str,
     pair_id: str = "",
+    campaign_id: str = "",
 ) -> RunRecord:
     return RunRecord(
         run_id=str(uuid.uuid4()),
@@ -249,6 +254,7 @@ def _make_baseline_record(
         exception=result.exception,
         validity="unchecked",
         pair_id=pair_id,
+        campaign_id=campaign_id,
         framework_version=_framework_version(agent),
         python_version=_python_version(),
         config_hash=_config_hash_for(agent),
@@ -303,6 +309,11 @@ class ExperimentProtocol:
         self.output_dir     = output_dir
         self.dry_run        = dry_run
         self.exec_timeout_s = exec_timeout_s
+        # Stable ID for this campaign invocation; written to every RunRecord so
+        # that reruns appended to the same results_dir can be separated during
+        # analysis by filtering on campaign_id.
+        self.campaign_id    = str(uuid.uuid4())
+        self._jsonl_path    = os.path.join(output_dir, "runs.jsonl")
         os.makedirs(output_dir, exist_ok=True)
 
     # Legacy accessor kept for backward compatibility with tests that read
@@ -336,14 +347,16 @@ class ExperimentProtocol:
             )
             b_rec = _make_baseline_record(
                 b_agent, task, b_result, task_seed, b_ok, b_tp, b_tt, b_out,
-                pair_id=pair_id,
+                pair_id=pair_id, campaign_id=self.campaign_id,
             )
             records.append(b_rec)
             self._append_jsonl(b_rec)
 
             # ── Fault execution ────────────────────────────────────────────────
             if self.fault_name != "none":
-                f_rec = self._run_fault_phase(task, task_seed, b_ok, pair_id=pair_id)
+                f_rec = self._run_fault_phase(
+                    task, task_seed, b_ok, pair_id=pair_id, campaign_id=self.campaign_id
+                )
                 records.append(f_rec)
                 self._append_jsonl(f_rec)
 
@@ -373,6 +386,7 @@ class ExperimentProtocol:
         seed: int,
         baseline_success: bool,
         pair_id: str = "",
+        campaign_id: str = "",
     ) -> RunRecord:
         from evaluation.experiments.fault_campaign import build_cj_fault, get_fault_spec
         from chaos_jungle import Scenario, ChaosRunner
@@ -404,7 +418,9 @@ class ExperimentProtocol:
                 ev.activated = False
                 ev.verdict   = "INVALID"
                 ev.details   = f"start() failed: {exc}"
-                return self._error_fault_record(task, seed, spec, ev, str(exc), pair_id=pair_id)
+                return self._error_fault_record(
+                    task, seed, spec, ev, str(exc), pair_id=pair_id, campaign_id=campaign_id
+                )
 
             # Fresh agent for fault phase — created AFTER fault.start() so SDK
             # clients bind to the proxy URL now in CJ_EVAL_BASE_URL.
@@ -504,13 +520,14 @@ class ExperimentProtocol:
             validity=validity,
             oracle_outcome={"silent_failure": silent_failure},
             pair_id=pair_id,
+            campaign_id=campaign_id,
             framework_version=_framework_version(f_agent),
             python_version=_python_version(),
             config_hash=_config_hash_for(f_agent),
         )
 
     def _error_fault_record(
-        self, task, seed, spec, ev, exc_str, pair_id: str = ""
+        self, task, seed, spec, ev, exc_str, pair_id: str = "", campaign_id: str = ""
     ) -> RunRecord:
         meta = self._meta_agent
         return RunRecord(
@@ -546,11 +563,11 @@ class ExperimentProtocol:
             lifecycle=ev,
             validity="invalid",
             pair_id=pair_id,
+            campaign_id=campaign_id,
             python_version=_python_version(),
         )
 
     def _append_jsonl(self, record: RunRecord) -> None:
         import json
-        path = os.path.join(self.output_dir, "runs.jsonl")
-        with open(path, "a", encoding="utf-8") as f:
+        with open(self._jsonl_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record.to_dict()) + "\n")

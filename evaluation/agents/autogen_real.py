@@ -123,6 +123,7 @@ class AutoGenRealAgent(AgentSystem):
         except Exception:
             _model_info = None  # older version; no model_info param
 
+        # seed is passed as model-specific extra arg for reproducible completions.
         client_kwargs: dict = dict(
             model=cfg.name,
             base_url=base_url,
@@ -131,6 +132,7 @@ class AutoGenRealAgent(AgentSystem):
             max_tokens=cfg.max_tokens,
             timeout=cfg.request_timeout_s,
             max_retries=cfg.transport_retries,
+            model_extra={"seed": seed},
         )
         if _model_info is not None:
             client_kwargs["model_info"] = _model_info

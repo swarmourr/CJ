@@ -356,12 +356,21 @@ class TestRequireApiKey:
         mc = ModelConfig(api_key="sk-real-key")
         require_api_key(mc)  # has key — no raise
 
-    def test_non_local_dummy_key_passes(self, monkeypatch):
+    def test_non_local_dummy_key_raises(self, monkeypatch):
         from evaluation.model_config import ModelConfig, require_api_key
         monkeypatch.setenv("CJ_EVAL_BASE_URL", "https://api.openai.com")
         mc = ModelConfig(api_key="dummy")
-        # dummy key is not empty — accepted (validation policy is warn, not block)
-        require_api_key(mc)
+        # dummy key must be rejected for remote endpoints to prevent silent
+        # mis-configured runs.
+        with pytest.raises(RuntimeError, match="dummy"):
+            require_api_key(mc)
+
+    def test_non_local_empty_key_raises(self, monkeypatch):
+        from evaluation.model_config import ModelConfig, require_api_key
+        monkeypatch.setenv("CJ_EVAL_BASE_URL", "https://api.openai.com")
+        mc = ModelConfig(api_key="")
+        with pytest.raises(RuntimeError):
+            require_api_key(mc)
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +482,38 @@ class TestProvenanceFields:
         rec = self._make_record()
         d   = rec.to_dict()
         assert "pair_id" in d  # may be empty string for baseline-only
+
+    def test_campaign_id_present(self):
+        from evaluation.experiments.protocol import RunRecord
+        rec = self._make_record()
+        d   = rec.to_dict()
+        assert "campaign_id" in d
+
+    def test_campaign_id_shared_within_protocol(self, monkeypatch, tmp_path):
+        """All records from one ExperimentProtocol share the same campaign_id."""
+        from evaluation.agents.autogen_style import AutoGenStyleAgent
+        from evaluation.agents.base import ModelClient
+        from evaluation.experiments.protocol import ExperimentProtocol
+        from evaluation.benchmarks.humanevalplus import _bundled_tasks
+
+        monkeypatch.setenv("CJ_EVAL_BASE_URL", "http://127.0.0.1:1")
+
+        def factory():
+            return AutoGenStyleAgent(
+                client=ModelClient(dry_run=True), dry_run=True, max_turns=1
+            )
+
+        proto = ExperimentProtocol(
+            agent_factory=factory,
+            fault_name="none",
+            output_dir=str(tmp_path),
+            dry_run=True,
+        )
+        tasks = _bundled_tasks()[:2]
+        recs  = proto.run_campaign(tasks, seed=0)
+        campaign_ids = {r.campaign_id for r in recs}
+        assert len(campaign_ids) == 1, "All records must share one campaign_id"
+        assert list(campaign_ids)[0] != "", "campaign_id must not be empty"
 
     def test_cj_commit_is_not_hardcoded(self):
         from evaluation.experiments.protocol import _CJ_COMMIT
@@ -766,6 +807,30 @@ class TestCrewAIRealProxyRouting:
         assert isinstance(result.generated_code, str)
         assert len(fake_server.calls) >= 1, "No requests reached the fake server"
 
+    def test_crewai_role_tool_in_proxy(self, monkeypatch):
+        """CrewAI sends role=tool message via LiteLLM when a tool is used."""
+        pytest.importorskip("crewai", reason="crewai not installed")
+
+        from evaluation.agents.fake_model import ToolAwareFakeServer
+        from evaluation.model_config import ModelConfig
+        from evaluation.agents.crewai_real import CrewAIRealAgent
+
+        with ToolAwareFakeServer(tool_name="execute_python") as srv:
+            monkeypatch.setenv("CJ_EVAL_BASE_URL", srv.base_url)
+            monkeypatch.setenv("CJ_EVAL_API_KEY", "dummy")
+
+            mc    = ModelConfig(name="gpt-4o-mini", request_timeout_s=30.0)
+            agent = CrewAIRealAgent(model_config=mc, max_turns=4)
+
+            agent.run("Write a Python function that returns 42.", seed=0)
+
+            assert len(srv.calls) >= 2, (
+                f"Expected >=2 requests (tool_calls + tool_result), got {len(srv.calls)}"
+            )
+            assert len(srv.tool_call_requests) >= 1, (
+                "No role='tool' message reached the server from CrewAI"
+            )
+
 
 # ---------------------------------------------------------------------------
 # ── Tool-call traversal integration tests (real_eval) ─────────────────────
@@ -872,5 +937,18 @@ class TestToolFaultActivation:
             f_recs = [r for r in recs if r.phase == "fault"]
             assert len(f_recs) == 1
             lc = f_recs[0].lifecycle
-            # ToolFault must have been triggered via role=tool request
-            assert lc.activated is True
+            # ToolFault lifecycle: must have activated → triggered → manifested
+            assert lc.activated is True, "Fault did not activate"
+            # triggered: at least one role=tool request crossed the proxy
+            assert lc.triggered is True, (
+                f"Expected lifecycle.triggered=True (role=tool request hit proxy); "
+                f"lifecycle={lc}"
+            )
+            # manifested: the fault actually modified or blocked the tool response
+            assert lc.manifested is True, (
+                f"Expected lifecycle.manifested=True; lifecycle={lc}"
+            )
+            # Validity must be 'valid' for this record to count in metrics
+            assert f_recs[0].validity == "valid", (
+                f"Expected validity='valid', got {f_recs[0].validity!r}"
+            )

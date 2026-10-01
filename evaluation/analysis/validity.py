@@ -40,19 +40,57 @@ class ValidityFilter:
 
     @property
     def trigger_rate(self) -> float:
-        fault = [r for r in self.all_fault if r["phase"] == "fault"]
+        """triggered / attempted_injections.
+
+        Uses ``lifecycle.triggered`` from each record when present (set by the
+        CJ DB query in the protocol).  Falls back to inferring from validity
+        only for legacy records that pre-date the lifecycle field.  Inconclusive
+        records are NOT counted as triggered — unknown is not confirmed.
+        """
+        fault = self.all_fault
         if not fault:
             return 0.0
-        triggered = [r for r in fault if r.get("validity") in ("valid", "inconclusive")]
-        return len(triggered) / len(fault)
+        count = 0
+        for r in fault:
+            lc = r.get("lifecycle") or {}
+            if isinstance(lc, dict):
+                t = lc.get("triggered")
+                if t is True:
+                    count += 1
+                elif t is None:
+                    # lifecycle field absent or not set: infer conservatively
+                    # Only "valid" implies confirmed trigger; inconclusive does not
+                    if r.get("validity") == "valid":
+                        count += 1
+            # t is False → not triggered; inconclusive without lifecycle → skip
+        return count / len(fault)
 
     @property
     def manifestation_rate(self) -> float | None:
-        triggered = [r for r in self.all_fault if r.get("validity") in ("valid", "inconclusive")]
-        if not triggered:
+        """manifested / triggered.
+
+        Uses ``lifecycle.triggered`` and ``lifecycle.manifested`` when present.
+        """
+        triggered_records = []
+        for r in self.all_fault:
+            lc = r.get("lifecycle") or {}
+            if isinstance(lc, dict):
+                t = lc.get("triggered")
+                if t is True:
+                    triggered_records.append(r)
+                elif t is None and r.get("validity") == "valid":
+                    # Legacy: valid implies triggered
+                    triggered_records.append(r)
+        if not triggered_records:
             return None
-        manifested = [r for r in triggered if r.get("validity") == "valid"]
-        return len(manifested) / len(triggered)
+        manifested = 0
+        for r in triggered_records:
+            lc = r.get("lifecycle") or {}
+            if isinstance(lc, dict):
+                mf = lc.get("manifested")
+                if mf is True or r.get("validity") == "valid":
+                    manifested += 1
+        return manifested / len(triggered_records)
 
     @property
     def recovery_rate(self) -> float | None:

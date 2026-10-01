@@ -153,9 +153,23 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
         m.fault_tokens       = _mean([r.get("total_tokens",0) for r in filt.valid])
         m.fault_cost_usd     = _mean([r.get("cost_usd",0.0) for r in filt.valid])
 
-    # ── degradation: baseline - fault (positive = fault made things worse) ─────
-    if m.pass_at_1_baseline is not None and m.pass_at_1_fault is not None:
-        m.degradation = round(m.pass_at_1_baseline - m.pass_at_1_fault, 4)
+    # ── degradation: paired-baseline − fault (positive = fault made things worse) ─
+    # Only use baselines whose pair_id matches a valid fault record so that
+    # orphaned, invalid, or untriggered pairs do not skew the comparison.
+    if filt.valid and filt.baseline and m.pass_at_1_fault is not None:
+        valid_pair_ids = {r["pair_id"] for r in filt.valid if r.get("pair_id")}
+        if valid_pair_ids:
+            paired_baselines = [
+                r for r in filt.baseline if r.get("pair_id") in valid_pair_ids
+            ]
+            if paired_baselines:
+                paired_base_pass = (
+                    sum(r["success"] for r in paired_baselines) / len(paired_baselines)
+                )
+                m.degradation = round(paired_base_pass - m.pass_at_1_fault, 4)
+        elif m.pass_at_1_baseline is not None:
+            # Legacy records with no pair_id: fall back to global baseline
+            m.degradation = round(m.pass_at_1_baseline - m.pass_at_1_fault, 4)
 
     # ── Injection rates ────────────────────────────────────────────────────────
     m.trigger_rate       = filt.trigger_rate

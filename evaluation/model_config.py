@@ -187,9 +187,11 @@ def load_model_config(cfg: dict) -> ModelConfig:
     if not cfg:
         cfg = {}
 
+    yaml_name = str(cfg.get("name", cfg.get("model", "gpt-4o-mini")))
+
     mc = ModelConfig(
         provider=str(cfg.get("provider", "openai_compatible")),
-        name=str(cfg.get("name", cfg.get("model", "gpt-4o-mini"))),
+        name=yaml_name,
         api_key_env=str(cfg.get("api_key_env", "")),
         temperature=float(cfg.get("temperature", 0.0)),
         max_tokens=int(cfg.get("max_tokens", 2048)),
@@ -222,20 +224,22 @@ def load_model_config(cfg: dict) -> ModelConfig:
 def require_api_key(mc: ModelConfig) -> None:
     """Raise RuntimeError when no valid API key is available for a remote endpoint.
 
-    Local endpoints (``127.0.0.1`` / ``localhost``) and ``dummy`` keys are
-    accepted without raising.
+    Local endpoints (``127.0.0.1`` / ``localhost``) and dry-run mode (no URL)
+    are accepted without a key.  Remote endpoints require a non-empty, non-dummy
+    key — ``"dummy"`` is explicitly rejected so mis-configured runs fail fast
+    instead of silently wasting quota or producing invalid results.
     """
     key      = mc.resolved_api_key()
     endpoint = mc.current_base_url
-    is_local = (
-        not endpoint
-        or "127.0.0.1" in endpoint
-        or "localhost" in endpoint
-        or key not in ("", "dummy")
+    is_remote = (
+        bool(endpoint)
+        and "127.0.0.1" not in endpoint
+        and "localhost" not in endpoint
     )
-    if not is_local and not key:
+    if is_remote and key in ("", "dummy"):
         env_var = mc.api_key_env or "CJ_EVAL_API_KEY"
         raise RuntimeError(
-            f"API key is required for non-local endpoint {endpoint!r}. "
+            f"A real API key is required for non-local endpoint {endpoint!r}. "
+            f"'dummy' is not accepted for remote endpoints. "
             f"Export {env_var} or add it to .env before running real-agent experiments."
         )

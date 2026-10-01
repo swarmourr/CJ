@@ -205,6 +205,10 @@ def _build_agent(system_name: str, yaml_model_cfg: dict, dry_run: bool):
     if uses_mc:
         from evaluation.model_config import load_model_config, require_api_key
         mc = load_model_config(yaml_model_cfg)
+        # CLI --model flag (CJ_EVAL_MODEL) overrides the YAML model name.
+        env_model = os.environ.get("CJ_EVAL_MODEL")
+        if env_model:
+            mc.name = env_model
         if not dry_run:
             require_api_key(mc)
         return agent_cls(model_config=mc, max_turns=10)
@@ -247,7 +251,8 @@ def run_single_experiment(
     # Build agent
     agent = _build_agent(system_name, yaml_model_cfg, dry_run)
 
-    # Load tasks
+    # Load tasks — fail-closed: never silently substitute a smaller task set.
+    # Running fewer tasks than requested would invalidate comparisons.
     _SMOKE_MAX = 5
     if tasks <= _SMOKE_MAX:
         loader = BENCH_REGISTRY[benchmark_name](subset="smoke")
@@ -256,17 +261,9 @@ def run_single_experiment(
     else:
         loader = BENCH_REGISTRY[benchmark_name](subset="development")
         loader.development_n = tasks
-        try:
-            task_list = loader.load(seed=seed)
-        except ImportError:
-            print(
-                f"[eval] Warning: evalplus not installed; cannot load {tasks} tasks. "
-                f"Falling back to smoke subset (up to {_SMOKE_MAX} bundled tasks). "
-                "Install with: pip install evalplus==0.3.1"
-            )
-            loader = BENCH_REGISTRY[benchmark_name](subset="smoke")
-            loader.smoke_n = _SMOKE_MAX
-            task_list = loader.load(seed=seed)
+        # Do NOT catch ImportError here: if evalplus is unavailable the run
+        # must fail loudly.  Install with: pip install evalplus==0.3.1
+        task_list = loader.load(seed=seed)
     print(f"[eval] Loaded {len(task_list)} tasks from {benchmark_name}")
 
     # Run protocol
@@ -278,13 +275,17 @@ def run_single_experiment(
         exec_timeout_s=exec_timeout,
     )
     records = proto.run_campaign(task_list, seed=seed, repeats=repeats)
-    print(f"\n[eval] Completed {len(records)} run records → {results_dir}/runs.jsonl")
+    jsonl_path = proto._jsonl_path
+    print(f"\n[eval] Completed {len(records)} run records → {jsonl_path} "
+          f"(campaign {proto.campaign_id[:8]})")
 
     generate_all_outputs(results_dir)
 
     from evaluation.analysis.metrics import compute_metrics
     from evaluation.output import load_jsonl
-    all_recs = load_jsonl(os.path.join(results_dir, "runs.jsonl"))
+    # Load only records from this campaign to avoid mixing reruns
+    all_recs = [r for r in load_jsonl(jsonl_path)
+                if r.get("campaign_id") == proto.campaign_id or not r.get("campaign_id")]
     m = compute_metrics(all_recs)
     print("\n[eval] Summary:")
     for line in m.summary_lines():

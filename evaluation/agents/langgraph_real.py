@@ -82,7 +82,8 @@ class LangGraphRealAgent(AgentSystem):
         final_code = ""
         exception_str = ""
 
-        # Fresh LLM client — binds to the current (possibly proxy) URL
+        # Fresh LLM client — binds to the current (possibly proxy) URL.
+        # seed is passed to the OpenAI API for reproducible completions.
         llm = ChatOpenAI(
             model=cfg.name,
             base_url=base_url,
@@ -91,6 +92,7 @@ class LangGraphRealAgent(AgentSystem):
             max_tokens=cfg.max_tokens,
             timeout=cfg.request_timeout_s,
             max_retries=cfg.transport_retries,
+            seed=seed,
         )
 
         @lc_tool

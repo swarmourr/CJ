@@ -80,6 +80,7 @@ class CrewAIRealAgent(AgentSystem):
         trace: list[dict] = []
         prompt_tokens = completion_tokens = 0
         tool_calls = 0
+        llm_calls = 0   # counted via step_callback
         termination_reason = "completed"
         reported_error = 0.0
         final_code = ""
@@ -89,6 +90,7 @@ class CrewAIRealAgent(AgentSystem):
         # Strip /v1 from base_url for LiteLLM (it appends the path itself).
         litellm_base_url = base_url.removesuffix("/v1") if base_url.endswith("/v1") else base_url
 
+        # seed passed for reproducible completions.
         llm = LLM(
             model=f"openai/{cfg.name}",
             base_url=litellm_base_url,
@@ -97,6 +99,7 @@ class CrewAIRealAgent(AgentSystem):
             max_tokens=cfg.max_tokens,
             timeout=cfg.request_timeout_s,
             max_retries=cfg.transport_retries,
+            seed=seed,
         )
 
         # Code-execution tool using CrewAI's BaseTool protocol
@@ -143,11 +146,16 @@ class CrewAIRealAgent(AgentSystem):
             agent=coder,
         )
 
+        def _step_callback(step_output) -> None:
+            nonlocal llm_calls
+            llm_calls += 1
+
         crew = Crew(
             agents=[coder],
             tasks=[coding_task],
             process=Process.sequential,
             verbose=False,
+            step_callback=_step_callback,
         )
 
         try:
@@ -161,10 +169,12 @@ class CrewAIRealAgent(AgentSystem):
             if isinstance(raw_output, str):
                 final_code = self._extract_code(raw_output)
 
-            # Token usage — available as usage_metrics in recent CrewAI
-            usage = getattr(crew_result, "token_usage", None) or getattr(crew_result, "usage_metrics", None)
+            # Token usage — available as usage_metrics or token_usage in CrewAI
+            usage = (
+                getattr(crew_result, "token_usage", None)
+                or getattr(crew_result, "usage_metrics", None)
+            )
             if usage:
-                # CrewAI stores usage in various formats; handle both
                 if hasattr(usage, "prompt_tokens"):
                     prompt_tokens     = int(usage.prompt_tokens)
                     completion_tokens = int(getattr(usage, "completion_tokens", 0))
@@ -186,19 +196,23 @@ class CrewAIRealAgent(AgentSystem):
         duration_s   = time.time() - t0
         total_tokens = prompt_tokens + completion_tokens
         cost         = cfg.compute_cost(prompt_tokens, completion_tokens)
+        # Report -1.0 for cost when pricing is not configured so analysis can
+        # distinguish "not measured" from "free".  Reporting 0.0 would silently
+        # under-count real spend.
+        cost_usd = cost if cost is not None else -1.0
 
         return AgentRunResult(
             success=0.0,
             duration_s=round(duration_s, 3),
             reported_error=reported_error,
             retries=0,
-            llm_calls=1,                        # crew abstracts LLM call count
+            llm_calls=max(llm_calls, 1) if not exception_str else llm_calls,
             tool_calls=tool_calls,
-            turns=1,
+            turns=max(llm_calls, 1) if not exception_str else llm_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            cost_usd=cost if cost is not None else 0.0,
+            cost_usd=cost_usd,
             generated_code=final_code,
             execution_trace=trace,
             termination_reason=termination_reason,
