@@ -139,6 +139,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── Model config (override env vars) ──────────────────────────────────────
     p.add_argument("--base-url", help="Override CJ_EVAL_BASE_URL")
+    p.add_argument(
+        "--container-base-url",
+        help=(
+            "Container-reachable direct model URL for publication Docker runs. "
+            "Defaults to CJ_EVAL_CONTAINER_BASE_URL, then --base-url/CJ_EVAL_BASE_URL."
+        ),
+    )
     p.add_argument("--api-key",  help="Override CJ_EVAL_API_KEY")
     p.add_argument("--model",    help="Override CJ_EVAL_MODEL")
 
@@ -450,6 +457,11 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
                 fault_name=fault_name,
                 fault=fault,
                 repetition=rep,
+                container_direct_base_url=(
+                    args.container_base_url
+                    or os.environ.get("CJ_EVAL_CONTAINER_BASE_URL")
+                    or None
+                ),
             )
             total += 3
 

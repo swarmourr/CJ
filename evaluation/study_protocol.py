@@ -11,6 +11,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from chaos_jungle import ChaosRunner, Scenario
 from chaos_jungle.faults.llm import _proxy_script_path
@@ -142,6 +143,7 @@ class PublicationStudyOrchestrator:
         fault_name: str,
         fault=None,
         repetition: int = 0,
+        container_direct_base_url: str | None = None,
     ) -> list[dict[str, Any]]:
         pair_id = make_pair_id(
             study_id=self.study_id,
@@ -159,6 +161,21 @@ class PublicationStudyOrchestrator:
         base_exec = {**execution_config, "agent_level": agent_level}
         definition = default_experiment_definition(fault_name)
         records: list[dict[str, Any]] = []
+        direct_base_url = (
+            container_direct_base_url
+            or model_config.get("container_base_url")
+            or model_config.get("base_url")
+            or os.environ.get("CJ_EVAL_CONTAINER_BASE_URL")
+            or os.environ.get("CJ_EVAL_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or ""
+        )
+        proxy_url = self._docker_reachable_proxy_url()
+        routing = {
+            "host_upstream_base_url": _redact_url(str(model_config.get("base_url", ""))),
+            "container_direct_base_url": _redact_url(str(direct_base_url)),
+            "container_proxy_base_url": _redact_url(proxy_url),
+        }
 
         records.append(self._run_condition(
             condition="direct_baseline",
@@ -170,13 +187,14 @@ class PublicationStudyOrchestrator:
             execution_config=base_exec,
             campaign_id=campaign_id,
             pair_id=pair_id,
-            extra_env=self._base_env(model_config),
+            extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": str(direct_base_url)} if direct_base_url else None),
             definition=definition,
             benchmark_task=task,
             fault_name="none",
             fault_parameters={},
             lifecycle=_no_fault_lifecycle("direct_baseline"),
             validity="valid",
+            routing=routing,
         ))
 
         control_proc = self._start_passthrough_proxy(model_config)
@@ -191,13 +209,14 @@ class PublicationStudyOrchestrator:
                 execution_config=base_exec,
                 campaign_id=campaign_id,
                 pair_id=pair_id,
-                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": self._docker_reachable_proxy_url()}),
+                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": proxy_url}),
                 definition=definition,
                 benchmark_task=task,
                 fault_name="passthrough",
                 fault_parameters={},
                 lifecycle=_control_lifecycle(),
                 validity="valid",
+                routing=routing,
             ))
         finally:
             self._stop_process(control_proc)
@@ -223,7 +242,7 @@ class PublicationStudyOrchestrator:
                 execution_config=base_exec,
                 campaign_id=campaign_id,
                 pair_id=pair_id,
-                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": self._docker_reachable_proxy_url()}),
+                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": proxy_url}),
                 definition=definition,
                 benchmark_task=task,
                 fault_name=fault_name,
@@ -231,6 +250,7 @@ class PublicationStudyOrchestrator:
                 lifecycle=lifecycle,
                 validity=validity,
                 persist=False,
+                routing=routing,
             )
         except Exception as exc:
             lifecycle["details"] = f"fault execution failed: {exc!r}"
@@ -250,6 +270,7 @@ class PublicationStudyOrchestrator:
                     lifecycle=lifecycle,
                     definition=definition,
                     error=repr(exc),
+                    routing=routing,
                 )
         finally:
             try:
@@ -288,6 +309,7 @@ class PublicationStudyOrchestrator:
         lifecycle: dict[str, Any],
         validity: str,
         persist: bool = True,
+        routing: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
         context = RunContext(
@@ -347,6 +369,7 @@ class PublicationStudyOrchestrator:
             "docker_image_digest": result.image_digest,
             "container_resource_limits": result.resource_limits,
             "experiment_definition": definition.to_dict(),
+            "routing": routing or {},
         })
         if persist:
             self._append_jsonl(record)
@@ -369,6 +392,7 @@ class PublicationStudyOrchestrator:
         lifecycle: dict[str, Any],
         definition: ChaosExperimentDefinition,
         error: str,
+        routing: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
         return {
@@ -410,6 +434,7 @@ class PublicationStudyOrchestrator:
             "docker_image_digest": "",
             "container_resource_limits": self.docker_runner.config.resource_limits(),
             "experiment_definition": definition.to_dict(),
+            "routing": routing or {},
         }
 
     def _start_passthrough_proxy(self, model_config: dict[str, Any]) -> subprocess.Popen:
@@ -697,3 +722,19 @@ def _endpoint_type(url: str) -> str:
     if "openai.com" in url:
         return "openai"
     return "openai_compat"
+
+
+def _redact_url(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return "[invalid-url]"
+    host = parsed.hostname or ""
+    if not host:
+        return url
+    netloc = host
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/"), "", ""))

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from chaos_jungle.faults.base import VerificationResult
+from chaos_jungle.faults.llm import LLMLatency
 from chaos_jungle.scripts.llm_proxy import llm_proxy
 from chaos_jungle.targets.docker import DockerContainerControllerTarget, DockerTarget
 from evaluation.analysis.statistics import (
@@ -486,6 +487,117 @@ def test_publication_condition_fails_closed_without_container_scoring(tmp_path):
     assert "host fallback scoring is disabled" in record["scorer_error"]
     assert record["scoring_evidence"]["score_location"] == "container"
     assert record["scoring_evidence"]["valid"] is False
+
+
+def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatch):
+    class FakeRunner:
+        config = DockerExecutionConfig(image="cj:test")
+
+        def __init__(self):
+            self.envs = []
+
+        def run(self, **kwargs):
+            self.envs.append(dict(kwargs["run_context"].environment))
+            return DockerAgentRunResult(
+                container_id="abc123",
+                exit_code=0,
+                timed_out=False,
+                duration_s=0.5,
+                stdout="",
+                stderr="",
+                result={
+                    "generated_code": "def solution():\n    return None\n",
+                    "duration_s": 0.4,
+                    "llm_calls": 1,
+                    "success": 1.0,
+                    "tests_passed": 1,
+                    "tests_total": 1,
+                    "scorer_status": "ok",
+                    "scorer_error": "",
+                    "scoring_evidence": {"strict_evalplus": False},
+                },
+                image="cj:test",
+                image_digest="sha256:test",
+                resource_limits={"cpus": 1.0, "memory": "2g"},
+                artifact_paths={"result_json": "/tmp/result.json"},
+            )
+
+    class FakeDB:
+        def get_session(self, session_id):
+            return {"verdict": "valid"}
+
+        def get_llm_calls(self, session_id, phase):
+            return [{
+                "was_blocked": 0,
+                "was_modified": 1,
+                "triggered_faults_json": '["llm_latency"]',
+                "configured_faults_json": '["llm_latency"]',
+                "fault_evidence_json": '{"delay_s": 0.1}',
+            }]
+
+        def export_session(self, session_id):
+            return {
+                "faults": [{
+                    "kind": "llm_latency",
+                    "status": "reverted",
+                    "verified_active": True,
+                    "verified_recovered": True,
+                    "verification_note": "ok",
+                }]
+            }
+
+    class FakeChaosRunner:
+        def __init__(self, *args, **kwargs):
+            self._session_id = "session-1"
+            self.db = FakeDB()
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+    monkeypatch.setattr("evaluation.study_protocol.ChaosRunner", FakeChaosRunner)
+
+    task = BenchmarkTask(
+        task_id="toy/0",
+        benchmark="toy",
+        prompt="Write solution.",
+        entry_point="solution",
+        test_code="assert solution() is None\n",
+        metadata={"source": "bundled"},
+    )
+    fake_runner = FakeRunner()
+    orch = PublicationStudyOrchestrator(
+        fake_runner,
+        study_id="study-x",
+        results_dir=str(tmp_path),
+        proxy_port=18099,
+    )
+    monkeypatch.setattr(orch, "_start_passthrough_proxy", lambda model_config: object())
+    monkeypatch.setattr(orch, "_stop_process", lambda proc: None)
+    records = orch.run_pair(
+        agent_system="autogen",
+        agent_level="individual",
+        topology="single",
+        task=task,
+        seed=0,
+        model_config={"name": "fake", "base_url": "http://127.0.0.1:9999"},
+        execution_config={"score_timeout_s": 2},
+        fault_name="llm_latency",
+        fault=LLMLatency(
+            delay_s=0.1,
+            upstream="http://127.0.0.1:9999",
+            base_url_env="CJ_EVAL_BASE_URL",
+        ),
+        container_direct_base_url="http://host.docker.internal:9999",
+    )
+    assert fake_runner.envs[0]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:9999"
+    assert fake_runner.envs[1]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:18099/v1"
+    assert fake_runner.envs[2]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:18099/v1"
+    assert records[0]["routing"]["host_upstream_base_url"] == "http://127.0.0.1:9999"
+    assert records[0]["routing"]["container_direct_base_url"] == "http://host.docker.internal:9999"
+    assert records[2]["validity"] == "valid"
 
 
 def test_container_scoped_fault_orchestration_sequence(monkeypatch):
