@@ -54,6 +54,7 @@ Available faults
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import time
@@ -93,10 +94,12 @@ class _LLMProxyFault(Fault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
         self.port = port
         self.upstream = upstream
         self.base_url_env = base_url_env
+        self.selector = dict(selector or {})
         self._proc: subprocess.Popen | None = None
         self._saved_env: str | None = None
         self._extra_args = []
@@ -107,7 +110,10 @@ class _LLMProxyFault(Fault):
 
     def _fault_config(self) -> dict:
         """Return the JSON config dict for this fault in a --fault-chain payload."""
-        return {"fault": self._fault_name, **self._chain_args}
+        cfg = {"fault": self._fault_name, **self._chain_args}
+        if self.selector:
+            cfg["selector"] = self.selector
+        return cfg
 
     # ------------------------------------------------------------------
     # Fault lifecycle
@@ -122,8 +128,14 @@ class _LLMProxyFault(Fault):
             script,
             "--port", str(self.port),
             "--upstream", self.upstream,
-            "--fault", self._fault_name,
-        ] + self._extra_args
+        ]
+        if self.selector:
+            # Selectors are represented only in the chain payload so the proxy
+            # can apply the same matching path for single and compound faults.
+            cmd += ["--fault-chain", json.dumps([self._fault_config()])]
+        else:
+            cmd += ["--fault", self._fault_name]
+            cmd += self._extra_args
 
         # Pass session context to proxy for LLM call capture (best-effort)
         _session_id = getattr(target, "_session_id", None)
@@ -309,6 +321,7 @@ class _LLMProxyFault(Fault):
             "port": self.port,
             "upstream": self.upstream,
             "base_url_env": self.base_url_env,
+            "selector": self.selector,
         }
 
 
@@ -357,6 +370,7 @@ class LLMLatency(_LLMProxyFault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
         # Accept human-readable strings like "500ms", "1.5s", "2s"
         if isinstance(delay_s, str):
@@ -369,7 +383,7 @@ class LLMLatency(_LLMProxyFault):
                 delay_s = float(s)
         if delay_s < 0:
             raise ValueError(f"LLMLatency 'delay_s' must be >= 0, got {delay_s}.")
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.delay_s = delay_s
         self._extra_args = ["--latency-s", str(delay_s)]
         self._chain_args = {"delay_s": delay_s}
@@ -413,10 +427,11 @@ class LLMRateLimit(_LLMProxyFault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
         if n < 0:
             raise ValueError(f"LLMRateLimit 'n' must be >= 0, got {n}.")
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.n = n
         self._extra_args = ["--rate-limit-n", str(n)]
         self._chain_args = {"n": n}
@@ -516,6 +531,7 @@ class LLMBudgetExceeded(_LLMProxyFault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
         if max_cost_usd <= 0:
             raise ValueError(
@@ -539,7 +555,7 @@ class LLMBudgetExceeded(_LLMProxyFault):
                 "'input_price_per_1k' and 'output_price_per_1k'."
             )
 
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.max_cost_usd = max_cost_usd
         self.model = model
         self.input_price_per_1k = in_p
@@ -595,12 +611,14 @@ class LLMTimeout(_LLMProxyFault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
         if timeout_s <= 0:
             raise ValueError(f"LLMTimeout 'timeout_s' must be > 0, got {timeout_s}.")
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.timeout_s = timeout_s
         self._extra_args = ["--timeout-s", str(timeout_s)]
+        self._chain_args = {"timeout_s": timeout_s}
 
     def _parameters(self) -> dict:
         return {**super()._parameters(), "timeout_s": self.timeout_s}
@@ -651,14 +669,16 @@ class LLMResponseCorrupt(_LLMProxyFault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
         if mode not in _CORRUPT_MODES:
             raise ValueError(
                 f"LLMResponseCorrupt 'mode' must be one of {_CORRUPT_MODES}, got {mode!r}."
             )
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.mode = mode
         self._extra_args = ["--corrupt-mode", mode]
+        self._chain_args = {"mode": mode}
 
     def _parameters(self) -> dict:
         return {**super()._parameters(), "mode": self.mode}
@@ -694,8 +714,9 @@ class LLMUnavailable(_LLMProxyFault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
 
 
 # ---------------------------------------------------------------------------
@@ -744,10 +765,12 @@ class ToolFault(_LLMProxyFault):
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.tool_name = tool_name
         self._extra_args = ["--tool-name", tool_name] if tool_name else []
+        self._chain_args = {"tool_name": tool_name}
 
     def _parameters(self) -> dict:
         return {**super()._parameters(), "tool_name": self.tool_name}

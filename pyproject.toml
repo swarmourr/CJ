@@ -76,6 +76,7 @@ testpaths = ["tests", "evaluation/tests"]
 addopts = "-v --tb=short -m 'not real_eval'"
 markers = [
     "real_eval: requires evaluation package dependencies (autogen-agentchat, langgraph, crewai)",
+    "docker: requires a local Docker daemon and a prebuilt local test image",
 ]
 
 [tool.black]

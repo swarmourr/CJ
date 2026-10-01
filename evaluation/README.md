@@ -128,6 +128,144 @@ python -m evaluation.run --config evaluation/configs/development.yaml
 
 **Estimate cost before running:**
 
+---
+
+## Publication CJ Evaluation Additions
+
+The publication protocol separates individual-agent and multi-agent-system
+records. Each task/fault group has exactly three paired conditions:
+
+- `direct_baseline`
+- `cj_control`
+- `cj_fault`
+
+Records must share `study_id`, `campaign_id`, and exact `pair_id` across the
+three conditions. Derived outputs should be generated with a selected
+`study_id`; legacy rows without that ID are excluded.
+
+### Docker backend
+
+Host-side orchestration uses `evaluation.docker_runner.DockerAgentRunner`.
+It prepares one fresh container per execution, then runs:
+
+```bash
+python -m evaluation.container_entrypoint \
+  --request /cj/input/request.json \
+  --output /cj/output/result.json
+```
+
+Build the evaluation image with a pinned base image digest:
+
+```bash
+docker build \
+  --build-arg BASE_IMAGE='python:3.12-slim@sha256:<digest>' \
+  -f evaluation/docker/Dockerfile \
+  -t cj-eval-agent:<tag> .
+```
+
+The runner records the resolved image digest, Python/framework versions,
+exit code, timeout status, stdout/stderr, structured `AgentRunResult`, and
+container CPU/memory/user limits. Secrets are not accepted as Docker command
+arguments; use `.env`/`--env-file` or provider-specific secret injection.
+
+### Safe infrastructure faults
+
+Network and resource faults must be applied with `DockerTarget` against the
+experiment container. `evaluation.infrastructure_orchestrator.run_container_scoped_fault`
+implements the safe order:
+
+1. prepare idle container;
+2. activate fault inside the container;
+3. verify activation;
+4. execute workload in the same container;
+5. revert and verify recovery;
+6. remove the container.
+
+`ContainerKill` uses `DockerContainerControllerTarget`, a host-side controller
+restricted to the exact experiment container ID. The Docker socket is never
+mounted into the agent container.
+
+### Multi-agent traces
+
+`evaluation.multi_agent` defines the shared roles and schema:
+
+- Planner
+- Coder
+- Reviewer/Tester
+
+Topologies:
+
+- `linear`: Planner -> Coder -> Reviewer -> Final
+- `closed_loop`: reviewer can request at most two revisions
+
+Every event includes `study_id`, `run_id`, `pair_id`, role, step index,
+timestamp, trace ID, and span ID. Role-scoped proxy faults use internal
+headers `X-CJ-Run-ID`, `X-CJ-Agent-Role`, and `X-CJ-Step`; the proxy consumes
+them for selector matching and strips them before forwarding upstream.
+
+### Output generation
+
+Generate derived outputs for one selected study only:
+
+```bash
+python - <<'PY'
+from evaluation.output import generate_all_outputs
+generate_all_outputs("results/pilot", study_id="study-...")
+PY
+```
+
+Outputs include task-level CSV, condition summary, lifecycle validity summary,
+CJ overhead summary, multi-agent process summary, statistical summary, plots,
+LaTeX tables, and `study_manifest.json`.
+
+### Tests
+
+Unit and proxy integration:
+
+```bash
+/opt/homebrew/bin/python3.12 -m pytest -q evaluation/tests/test_publication_eval.py
+/opt/homebrew/bin/python3.12 -m pytest -q evaluation/tests/test_integration.py
+```
+
+Docker integration is marked and requires a local image. It does not pull from
+the network automatically:
+
+```bash
+export CJ_EVAL_TEST_IMAGE=python:3.12-slim
+/opt/homebrew/bin/python3.12 -m pytest -q -m docker evaluation/tests/test_docker_integration.py
+```
+
+### Cost and pilot sizing
+
+Use `evaluation.costing` before any paid run:
+
+```bash
+python - <<'PY'
+from evaluation.costing import PILOT_PROFILE, estimate_condition_count, estimate_cost_usd
+
+executions = estimate_condition_count(
+    tasks_per_benchmark=PILOT_PROFILE.tasks_per_benchmark,
+    repetitions=PILOT_PROFILE.repetitions,
+    frameworks=len(PILOT_PROFILE.frameworks),
+    individual_faults=len(PILOT_PROFILE.individual_faults),
+    multi_agent_faults=len(PILOT_PROFILE.multi_agent_faults),
+    multi_agent_topologies=2,
+)
+print("executions:", executions)
+print("estimated_usd:", estimate_cost_usd(
+    executions=executions,
+    avg_prompt_tokens=1500,
+    avg_completion_tokens=800,
+    llm_calls_per_execution=4,
+    input_price_per_1k=0.00015,
+    output_price_per_1k=0.0006,
+))
+PY
+```
+
+Do not launch the full paid campaign until the Docker image digest, credentials,
+pilot confidence intervals, and safety limits are reviewed.
+
 ```bash
 # Rough estimate: tasks × repeats × conditions × avg_tokens × price_per_token
 # For gpt-4o-mini: ~164 tasks × 5 repeats × 18 conditions × 500 tokens ≈ $3-5

@@ -42,17 +42,20 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
         return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     cols = [
-        "run_id", "campaign_id", "pair_id", "timestamp", "cj_commit",
-        "agent_system", "benchmark", "task_id",
+        "study_id", "run_id", "campaign_id", "pair_id", "condition",
+        "agent_level", "topology", "fault_target_role",
+        "timestamp", "cj_commit",
+        "agent_system", "framework", "benchmark", "task_id",
         "model", "endpoint_type", "config_hash",
         "seed", "fault_type", "phase", "validity",
         "success", "duration_s", "reported_error", "retries",
         "llm_calls", "tool_calls", "turns",
         "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd",
         "tests_passed", "tests_total", "termination_reason",
-        "lifecycle.triggered", "lifecycle.manifested", "lifecycle.recovered",
+        "lifecycle.triggered", "lifecycle.manifested", "lifecycle.reverted", "lifecycle.recovered",
         "lifecycle.activated", "lifecycle.verdict",
         "framework_version", "python_version",
+        "docker_image", "docker_image_digest",
     ]
 
     def _flatten(r: dict) -> dict:
@@ -61,6 +64,7 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
         if isinstance(lc, dict):
             out["lifecycle.triggered"]  = lc.get("triggered", "")
             out["lifecycle.manifested"] = lc.get("manifested", "")
+            out["lifecycle.reverted"]   = lc.get("reverted", "")
             out["lifecycle.recovered"]  = lc.get("recovered", "")
             out["lifecycle.activated"]  = lc.get("activated", "")
             out["lifecycle.verdict"]    = lc.get("verdict", "")
@@ -145,6 +149,100 @@ def write_condition_summary_csv(
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
+
+
+def write_cj_overhead_summary_csv(records: list[dict], path: str) -> None:
+    """Compare direct_baseline with cj_control by exact pair_id."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    direct = {r.get("pair_id"): r for r in records if r.get("condition") == "direct_baseline"}
+    controls = [r for r in records if r.get("condition") == "cj_control"]
+    rows = []
+    for ctrl in controls:
+        base = direct.get(ctrl.get("pair_id"))
+        if not base:
+            continue
+        rows.append({
+            "pair_id": ctrl.get("pair_id", ""),
+            "agent_level": ctrl.get("agent_level", ""),
+            "framework": ctrl.get("framework") or ctrl.get("agent_system", ""),
+            "topology": ctrl.get("topology", ""),
+            "benchmark": ctrl.get("benchmark", ""),
+            "task_id": ctrl.get("task_id", ""),
+            "duration_overhead_s": float(ctrl.get("duration_s", 0) or 0) - float(base.get("duration_s", 0) or 0),
+            "llm_call_overhead": int(ctrl.get("llm_calls", 0) or 0) - int(base.get("llm_calls", 0) or 0),
+            "token_overhead": int(ctrl.get("total_tokens", 0) or 0) - int(base.get("total_tokens", 0) or 0),
+            "correctness_difference": float(ctrl.get("success", 0) or 0) - float(base.get("success", 0) or 0),
+        })
+    fields = list(rows[0].keys()) if rows else [
+        "pair_id", "agent_level", "framework", "topology", "benchmark", "task_id",
+        "duration_overhead_s", "llm_call_overhead", "token_overhead", "correctness_difference",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_multi_agent_process_summary_csv(records: list[dict], path: str) -> None:
+    """Summarize process metrics from multi-agent execution traces."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    rows = []
+    for r in records:
+        if r.get("agent_level") != "multi_agent":
+            continue
+        result = r.get("result") if isinstance(r.get("result"), dict) else r
+        trace = result.get("execution_trace") or []
+        roles = {
+            e.get("agent_role")
+            for e in trace
+            if isinstance(e, dict) and e.get("agent_role")
+        }
+        revisions = sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "revision_request")
+        handoffs = sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "handoff")
+        detections = sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "error_detection")
+        repairs = sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "attempted_recovery")
+        rows.append({
+            "study_id": r.get("study_id", ""),
+            "pair_id": r.get("pair_id", ""),
+            "run_id": r.get("run_id", ""),
+            "condition": r.get("condition", ""),
+            "framework": r.get("framework") or r.get("agent_system", ""),
+            "topology": r.get("topology", ""),
+            "task_id": r.get("task_id", ""),
+            "message_count": len(trace),
+            "affected_roles": len(roles),
+            "successful_handoff_count": handoffs,
+            "revision_rounds": revisions,
+            "fault_detection_events": detections,
+            "attempted_recovery_events": repairs,
+            "final_pass1": result.get("success", r.get("success", "")),
+        })
+    fields = list(rows[0].keys()) if rows else [
+        "study_id", "pair_id", "run_id", "condition", "framework", "topology",
+        "task_id", "message_count", "affected_roles", "successful_handoff_count",
+        "revision_rounds", "fault_detection_events", "attempted_recovery_events",
+        "final_pass1",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_study_manifest(records: list[dict], path: str, study_id: str | None) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    manifest = {
+        "study_id": study_id or (records[0].get("study_id") if records else ""),
+        "record_count": len(records),
+        "conditions": sorted({r.get("condition", "") for r in records if r.get("condition")}),
+        "campaign_ids": sorted({r.get("campaign_id", "") for r in records if r.get("campaign_id")}),
+        "agent_levels": sorted({r.get("agent_level", "") for r in records if r.get("agent_level")}),
+        "frameworks": sorted({(r.get("framework") or r.get("agent_system", "")) for r in records}),
+        "benchmarks": sorted({r.get("benchmark", "") for r in records if r.get("benchmark")}),
+        "task_ids": sorted({r.get("task_id", "") for r in records if r.get("task_id")}),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
 
 
 def write_validity_summary_csv(records: list[dict], path: str) -> None:
@@ -327,11 +425,15 @@ def generate_all_outputs(
     figures_dir: str | None = None,
     latex_dir:   str | None = None,
     campaign_id: str | None = None,
+    study_id: str | None = None,
 ) -> None:
     """Load runs.jsonl and generate all output files.
 
     Parameters
     ----------
+    study_id : str, optional
+        When provided, only records from this exact study are processed. Legacy
+        records without a study_id are excluded.
     campaign_id : str, optional
         When provided, only records from this campaign are processed.
         Prevents mixing data from old and new runs in the same JSONL file.
@@ -346,10 +448,12 @@ def generate_all_outputs(
         print(f"[output] No records found in {jsonl_path}. Run an experiment first.")
         return
 
-    if campaign_id:
-        records = [r for r in all_records
-                   if r.get("campaign_id") == campaign_id
-                   or not r.get("campaign_id")]
+    if study_id:
+        records = [r for r in all_records if r.get("study_id") == study_id]
+        print(f"[output] Loaded {len(records)}/{len(all_records)} records "
+              f"for study {study_id} from {jsonl_path}")
+    elif campaign_id:
+        records = [r for r in all_records if r.get("campaign_id") == campaign_id]
         print(f"[output] Loaded {len(records)}/{len(all_records)} records "
               f"for campaign {campaign_id[:8]} from {jsonl_path}")
     else:
@@ -360,7 +464,10 @@ def generate_all_outputs(
     write_condition_summary_csv(records, os.path.join(results_dir, "condition_summary.csv"))
     write_validity_summary_csv(records, os.path.join(results_dir, "validity_summary.csv"))
     write_group_summary_csv(records, os.path.join(results_dir, "group_summary.csv"))
+    write_cj_overhead_summary_csv(records, os.path.join(results_dir, "cj_overhead_summary.csv"))
+    write_multi_agent_process_summary_csv(records, os.path.join(results_dir, "multi_agent_process_summary.csv"))
     write_stats_summary_csv(records, os.path.join(results_dir, "stats_summary.csv"))
+    write_study_manifest(records, os.path.join(results_dir, "study_manifest.json"), study_id)
 
     fig_dir = figures_dir or os.path.join(results_dir, "figures")
     plot_degradation(

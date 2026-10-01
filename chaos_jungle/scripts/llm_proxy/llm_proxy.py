@@ -108,6 +108,16 @@ _fault_start_lock: Lock = Lock()
 _recent_prompts: list[tuple[int, float]] = []
 _recent_prompts_lock: Lock = Lock()
 
+# Request metadata used for scoped multi-agent injection. These headers are
+# consumed by CJ for evidence and selector matching and are intentionally not
+# forwarded to model providers.
+_CJ_INTERNAL_HEADERS = {
+    "x-cj-run-id",
+    "x-cj-agent-role",
+    "x-cj-step",
+}
+_SUPPORTED_SELECTOR_KEYS = {"agent_role", "run_id", "step"}
+
 # ---------------------------------------------------------------------------
 # Pricing table — (input_per_1k_usd, output_per_1k_usd)
 # ---------------------------------------------------------------------------
@@ -189,6 +199,7 @@ def _build_lifecycle_chain(
     fault_evidence: "dict",
     call_index: int,
     req_body: "dict | None" = None,
+    request_meta: "dict | None" = None,
 ) -> "list[dict]":
     """Build full causal-chain lifecycle records for one LLM call.
 
@@ -203,12 +214,15 @@ def _build_lifecycle_chain(
     fault_evidence : per-fault evidence dict from _mutate_request/_mutate_response
     call_index : the CJ trace/call index for this request
     req_body : parsed request body (for target description)
+    request_meta : CJ-internal run/role/step headers consumed by the proxy
     """
     records = []
+    request_meta = request_meta or {}
     for cfg in chain:
         fault_type = cfg.get("fault", "")
         ev = fault_evidence.get(fault_type, {})
         triggered = fault_type in triggered_faults
+        target_matched = _selector_matches(cfg, request_meta)
 
         # Determine manifestation using canonical payload comparison.
         # A fault manifested if the response was semantically different after
@@ -242,6 +256,12 @@ def _build_lifecycle_chain(
             target_info["model"] = model
         if fault_type == "tool_fault":
             target_info["tool_name"] = cfg.get("tool_name", "*")
+        if request_meta:
+            target_info.update({
+                "run_id": request_meta.get("run_id", ""),
+                "agent_role": request_meta.get("agent_role", ""),
+                "step": request_meta.get("step", ""),
+            })
 
         # Human-readable expected/observed
         expected = _describe_expected(fault_type, cfg)
@@ -261,7 +281,7 @@ def _build_lifecycle_chain(
             "target": target_info,
             "configured": True,
             "activated": True,   # proxy running = activated
-            "target_matched": triggered,
+            "target_matched": target_matched,
             "triggered": triggered,
             "applied": triggered,
             "manifested": manifested,
@@ -270,6 +290,8 @@ def _build_lifecycle_chain(
                 "method": "proxy_interception",
                 "expected": expected,
                 "observed": observed,
+                "selector": cfg.get("selector", {}),
+                "request_meta": request_meta,
                 **{k: v for k, v in ev.items()
                    if k not in {"original_canonical", "mutated_canonical"}},
             },
@@ -869,11 +891,51 @@ def _build_upstream_url(path: str) -> str:
 def _build_fwd_headers(src_headers, body: bytes) -> dict:
     hdrs = {
         k: v for k, v in src_headers.items()
-        if k.lower() not in ("host", "content-length", "transfer-encoding")
+        if k.lower() not in (
+            "host",
+            "content-length",
+            "transfer-encoding",
+            *_CJ_INTERNAL_HEADERS,
+        )
     }
     if body:
         hdrs["Content-Length"] = str(len(body))
     return hdrs
+
+
+def _request_meta(src_headers) -> dict:
+    """Return CJ-internal request metadata used for scoped injections."""
+    def _get(name: str) -> str:
+        return (src_headers.get(name) or "").strip()
+
+    return {
+        "run_id": _get("X-CJ-Run-ID"),
+        "agent_role": _get("X-CJ-Agent-Role"),
+        "step": _get("X-CJ-Step"),
+    }
+
+
+def _selector_matches(cfg: dict, meta: dict) -> bool:
+    """Return True when a fault selector matches the CJ request metadata.
+
+    Missing selectors preserve legacy behavior and match every request. Unknown
+    selector keys fail closed so a mistyped scoped fault is not silently applied
+    to all agents.
+    """
+    selector = cfg.get("selector") or {}
+    if not selector:
+        return True
+    if any(k not in _SUPPORTED_SELECTOR_KEYS for k in selector):
+        return False
+    for key, expected in selector.items():
+        actual = meta.get(key, "")
+        if str(expected) != str(actual):
+            return False
+    return True
+
+
+def _filter_chain_for_request(chain: list[dict], meta: dict) -> list[dict]:
+    return [cfg for cfg in chain if _selector_matches(cfg, meta)]
 
 
 def _lookup_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
@@ -1569,7 +1631,9 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             count = _request_count
 
         # Build active fault chain (supports both single-fault and multi-fault modes)
-        chain = _effective_chain()
+        configured_chain = _effective_chain()
+        _meta = _request_meta(self.headers)
+        chain = _filter_chain_for_request(configured_chain, _meta)
 
         # Read request body
         content_length = int(self.headers.get("Content-Length", 0) or 0)
@@ -1645,10 +1709,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if not _DB_PATH or not _SESSION_ID:
                 return
             _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "")
-            _cfg_json = json.dumps([c["fault"] for c in chain])
+            _cfg_json = json.dumps([c["fault"] for c in configured_chain])
             _trg_json = json.dumps(_triggered_faults)
             _lifecycle = _build_lifecycle_chain(
-                chain, _triggered_faults, _fault_evidence, _trace_id, req_body
+                configured_chain, _triggered_faults, _fault_evidence, _trace_id, req_body, _meta
             )
             _ev_json  = json.dumps(_lifecycle)
             _record_llm_call(
@@ -1704,7 +1768,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self, upstream_url, fwd_hdrs, raw_body,
                 interrupt_after=stream_cfg.get("interrupt_after", 3),
                 call_index=_trace_id,
-                configured_faults_json=json.dumps([c["fault"] for c in chain]),
+                configured_faults_json=json.dumps([c["fault"] for c in configured_chain]),
             )
             return
 
@@ -1745,10 +1809,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     and _resp["response_tool_calls"] == 0
                 )
                 _fn = ",".join(_triggered_faults) if _triggered_faults else (chain[0]["fault"] if chain else "passthrough")
-                _cfg_json = json.dumps([c["fault"] for c in chain])
+                _cfg_json = json.dumps([c["fault"] for c in configured_chain])
                 _trg_json = json.dumps(_triggered_faults)
                 _lifecycle = _build_lifecycle_chain(
-                    chain, _triggered_faults, _fault_evidence, _trace_id, req_body
+                    configured_chain, _triggered_faults, _fault_evidence, _trace_id, req_body, _meta
                 )
                 _ev_json  = json.dumps(_lifecycle)
                 _llm_call_id = _record_llm_call(

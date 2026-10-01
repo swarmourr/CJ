@@ -13,6 +13,7 @@ to be installed (which it is, since we're inside chaos-jungle-pkg).
 from __future__ import annotations
 
 import os
+import socket
 import time
 
 import pytest
@@ -36,6 +37,12 @@ def _wait_proxy_ready(port: int, timeout: float = 5.0) -> bool:
         except Exception:
             time.sleep(0.05)
     return False
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -129,6 +136,43 @@ class TestProxyRouting:
         assert len(fake_server.calls) >= 1, (
             "No calls reached the FakeModelServer — proxy routing is broken"
         )
+
+    def test_role_scoped_unavailable_affects_only_selected_role(
+        self, fake_server, monkeypatch
+    ):
+        """A selector-scoped LLM fault blocks only the matching agent role."""
+        monkeypatch.setenv("CJ_EVAL_BASE_URL", fake_server.base_url)
+        fake_server.reset_calls()
+
+        from chaos_jungle.faults.llm import LLMUnavailable
+        from chaos_jungle.targets.local import LocalTarget
+
+        port = _free_port()
+        fault = LLMUnavailable(
+            port=port,
+            upstream=fake_server.base_url.removesuffix("/v1"),
+            base_url_env="CJ_EVAL_BASE_URL",
+            selector={"agent_role": "planner"},
+        )
+        target = LocalTarget()
+        try:
+            fault.start(target)
+            client = ModelClient()
+
+            monkeypatch.setenv("CJ_RUN_ID", "role-scope-test")
+            monkeypatch.setenv("CJ_STEP", "1")
+            monkeypatch.setenv("CJ_AGENT_ROLE", "planner")
+            with pytest.raises(RuntimeError) as excinfo:
+                client.chat([{"role": "user", "content": "planner should be blocked"}])
+            assert "503" in str(excinfo.value)
+
+            monkeypatch.setenv("CJ_AGENT_ROLE", "coder")
+            resp = client.chat([{"role": "user", "content": "coder should pass"}])
+            assert "choices" in resp
+        finally:
+            fault.stop(target)
+
+        assert len(fake_server.calls) == 1
 
     def test_pair_id_shared_between_baseline_and_fault_records(
         self, fake_server, monkeypatch, tmp_path

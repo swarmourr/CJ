@@ -63,6 +63,7 @@ class AgentRunResult:
             "tests_passed":      self.tests_passed,
             "tests_total":       self.tests_total,
             "generated_code":    self.generated_code,
+            "execution_trace":   self.execution_trace,
             "termination_reason":self.termination_reason,
             "exception":         self.exception,
         }
@@ -161,13 +162,22 @@ class ModelClient:
             payload["seed"] = seed
 
         data = json.dumps(payload).encode()
+        headers = {
+            "Content-Type":  "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        for env_name, header_name in (
+            ("CJ_RUN_ID", "X-CJ-Run-ID"),
+            ("CJ_AGENT_ROLE", "X-CJ-Agent-Role"),
+            ("CJ_STEP", "X-CJ-Step"),
+        ):
+            value = os.environ.get(env_name)
+            if value:
+                headers[header_name] = value
         req  = urllib.request.Request(
             f"{base_url}/chat/completions",
             data=data,
-            headers={
-                "Content-Type":  "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
+            headers=headers,
             method="POST",
         )
         try:

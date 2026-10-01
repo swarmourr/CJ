@@ -51,9 +51,13 @@ class LifecycleEvidence:
     activated:    bool | None = None   # None = not checked
     triggered:    bool | None = None
     manifested:   bool | None = None
+    reverted:     bool | None = None
     recovered:    bool | None = None
     verdict:      str = "pending"      # VALID / INVALID / INCONCLUSIVE
     session_id:   int | None = None
+    evidence_source: str = ""
+    timestamps:   dict = field(default_factory=dict)
+    diagnostics:  dict = field(default_factory=dict)
     details:      str = ""
 
 
@@ -115,6 +119,14 @@ class RunRecord:
     # Enables filtering out reruns that were appended to the same results_dir.
     campaign_id:     str = ""
 
+    # Study protocol: direct_baseline, cj_control, and cj_fault executions
+    # share a pair_id and one selected study_id.
+    study_id:        str = ""
+    condition:       str = ""          # direct_baseline / cj_control / cj_fault
+    agent_level:     str = "individual"  # individual / multi_agent
+    topology:        str = "single"
+    fault_target_role: str = ""
+
     # Artifact location
     artifact_path:   str = ""
 
@@ -122,6 +134,11 @@ class RunRecord:
     framework_version: str = ""   # e.g. "autogen-agentchat 0.4.9"
     python_version:    str = ""   # e.g. "3.13.1"
     config_hash:       str = ""   # sha256[:12] of the model configuration
+    docker_image:       str = ""
+    docker_image_digest: str = ""
+    container_resource_limits: dict = field(default_factory=dict)
+    scoring_evidence:  dict = field(default_factory=dict)
+    artifact_paths:    dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -221,6 +238,8 @@ def _make_baseline_record(
     exec_output: str,
     pair_id: str = "",
     campaign_id: str = "",
+    study_id: str = "",
+    condition: str = "direct_baseline",
 ) -> RunRecord:
     return RunRecord(
         run_id=str(uuid.uuid4()),
@@ -236,6 +255,7 @@ def _make_baseline_record(
         fault_parameters={},
         target="local",
         phase="baseline",
+        condition=condition,
         success=1.0 if ok else 0.0,
         duration_s=result.duration_s,
         reported_error=result.reported_error,
@@ -255,9 +275,16 @@ def _make_baseline_record(
         validity="unchecked",
         pair_id=pair_id,
         campaign_id=campaign_id,
+        study_id=study_id,
         framework_version=_framework_version(agent),
         python_version=_python_version(),
         config_hash=_config_hash_for(agent),
+        scoring_evidence={
+            "scorer": "local_evalplus_or_task_tests",
+            "tests_passed": tests_passed,
+            "tests_total": tests_total,
+            "exec_output_preview": exec_output[:1000],
+        },
     )
 
 
@@ -297,6 +324,7 @@ class ExperimentProtocol:
         dry_run: bool = False,
         exec_timeout_s: float = 10.0,
         agent_factory: Callable[[], AgentSystem] | None = None,
+        study_id: str | None = None,
     ) -> None:
         if agent_factory is None and agent is None:
             raise ValueError("Either agent or agent_factory must be provided")
@@ -313,6 +341,7 @@ class ExperimentProtocol:
         # that reruns appended to the same results_dir can be separated during
         # analysis by filtering on campaign_id.
         self.campaign_id    = str(uuid.uuid4())
+        self.study_id       = study_id or str(uuid.uuid4())
         self._jsonl_path    = os.path.join(output_dir, "runs.jsonl")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -347,7 +376,7 @@ class ExperimentProtocol:
             )
             b_rec = _make_baseline_record(
                 b_agent, task, b_result, task_seed, b_ok, b_tp, b_tt, b_out,
-                pair_id=pair_id, campaign_id=self.campaign_id,
+                pair_id=pair_id, campaign_id=self.campaign_id, study_id=self.study_id,
             )
             records.append(b_rec)
             self._append_jsonl(b_rec)
@@ -438,8 +467,10 @@ class ExperimentProtocol:
 
             try:
                 runner.stop()
+                ev.reverted = True
                 ev.recovered = True
             except RuntimeError as exc:
+                ev.reverted = False
                 ev.recovered = False
                 ev.details   = f"stop() errors: {exc}"
 
@@ -500,6 +531,7 @@ class ExperimentProtocol:
             fault_parameters=spec["parameters"],
             target="local",
             phase="fault",
+            condition="cj_fault",
             success=1.0 if f_ok else 0.0,
             duration_s=f_result.duration_s,
             reported_error=f_result.reported_error,
@@ -521,9 +553,15 @@ class ExperimentProtocol:
             oracle_outcome={"silent_failure": silent_failure},
             pair_id=pair_id,
             campaign_id=campaign_id,
+            study_id=self.study_id,
             framework_version=_framework_version(f_agent),
             python_version=_python_version(),
             config_hash=_config_hash_for(f_agent),
+            scoring_evidence={
+                "scorer": "local_evalplus_or_task_tests",
+                "tests_passed": f_tp,
+                "tests_total": f_tt,
+            },
         )
 
     def _error_fault_record(
@@ -544,6 +582,7 @@ class ExperimentProtocol:
             fault_parameters=spec["parameters"],
             target="local",
             phase="fault",
+            condition="cj_fault",
             success=0.0,
             duration_s=0.0,
             reported_error=1.0,
@@ -564,6 +603,7 @@ class ExperimentProtocol:
             validity="invalid",
             pair_id=pair_id,
             campaign_id=campaign_id,
+            study_id=self.study_id,
             python_version=_python_version(),
         )
 
