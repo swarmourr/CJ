@@ -324,7 +324,106 @@ def test_container_entrypoint_dry_run_individual(tmp_path, monkeypatch):
     assert (tmp_path / "execution_trace.json").exists()
 
 
+def test_container_entrypoint_keeps_condition_specific_base_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("CJ_EVAL_BASE_URL", "http://condition-proxy.invalid/v1")
+    req = {
+        "agent_system": "autogen",
+        "topology": "single",
+        "task": {
+            "task_id": "toy/0",
+            "benchmark": "toy",
+            "prompt": "Write a function named solution returning None.",
+            "entry_point": "solution",
+            "test_code": "assert solution() is None\n",
+            "metadata": {"source": "bundled"},
+        },
+        "seed": 0,
+        "model_config": {"name": "fake", "base_url": "http://direct-upstream.invalid/v1"},
+        "execution_config": {"dry_run": True, "agent_level": "individual", "score_timeout_s": 2},
+        "run_context": {"study_id": "s", "pair_id": "p", "run_id": "r"},
+    }
+    request_path = tmp_path / "request.json"
+    output_path = tmp_path / "result.json"
+    request_path.write_text(json.dumps(req), encoding="utf-8")
+    code = container_main(["--request", str(request_path), "--output", str(output_path)])
+    assert code == 0
+    assert os.environ["CJ_EVAL_BASE_URL"] == "http://condition-proxy.invalid/v1"
+
+
 def test_publication_condition_flattens_scores_and_persists(tmp_path):
+    class FakeRunner:
+        config = DockerExecutionConfig(image="cj:test")
+
+        def run(self, **kwargs):
+            return DockerAgentRunResult(
+                container_id="abc123",
+                exit_code=0,
+                timed_out=False,
+                duration_s=0.5,
+                stdout="",
+                stderr="",
+                result={
+                    "generated_code": "def solution():\n    return None\n",
+                    "duration_s": 0.4,
+                    "llm_calls": 1,
+                    "success": 1.0,
+                    "tests_passed": 1,
+                    "tests_total": 1,
+                    "scorer_status": "ok",
+                    "scorer_error": "",
+                    "scoring_evidence": {"strict_evalplus": False},
+                },
+                image="cj:test",
+                image_digest="sha256:test",
+                resource_limits={"cpus": 1.0, "memory": "2g"},
+                artifact_paths={"result_json": "/tmp/result.json"},
+            )
+
+    task = BenchmarkTask(
+        task_id="toy/0",
+        benchmark="toy",
+        prompt="Write solution.",
+        entry_point="solution",
+        test_code="assert solution() is None\n",
+        metadata={"source": "bundled"},
+    )
+    orch = PublicationStudyOrchestrator(FakeRunner(), study_id="study-x", results_dir=str(tmp_path))
+    record = orch._run_condition(
+        condition="direct_baseline",
+        agent_system="autogen",
+        topology="single",
+        task={
+            "task_id": task.task_id,
+            "benchmark": task.benchmark,
+            "prompt": task.prompt,
+            "entry_point": task.entry_point,
+            "test_code": task.test_code,
+            "metadata": task.metadata,
+        },
+        seed=0,
+        model_config={"name": "fake", "base_url": "http://fake/v1"},
+        execution_config={"agent_level": "individual", "score_timeout_s": 2},
+        campaign_id="campaign-x",
+        pair_id="pair-x",
+        extra_env={"CJ_EVAL_BASE_URL": "http://fake/v1"},
+        definition=default_experiment_definition("llm_latency"),
+        benchmark_task=task,
+        fault_name="none",
+        fault_parameters={},
+        lifecycle={"verdict": "valid"},
+        validity="valid",
+    )
+    assert record["success"] == 1.0
+    assert record["tests_total"] == 1
+    assert record["llm_calls"] == 1
+    rows = (tmp_path / "runs.jsonl").read_text().strip().splitlines()
+    assert len(rows) == 1
+    persisted = json.loads(rows[0])
+    assert persisted["study_id"] == "study-x"
+    assert persisted["success"] == 1.0
+
+
+def test_publication_condition_fails_closed_without_container_scoring(tmp_path):
     class FakeRunner:
         config = DockerExecutionConfig(image="cj:test")
 
@@ -381,14 +480,12 @@ def test_publication_condition_flattens_scores_and_persists(tmp_path):
         lifecycle={"verdict": "valid"},
         validity="valid",
     )
-    assert record["success"] == 1.0
-    assert record["tests_total"] == 1
-    assert record["llm_calls"] == 1
-    rows = (tmp_path / "runs.jsonl").read_text().strip().splitlines()
-    assert len(rows) == 1
-    persisted = json.loads(rows[0])
-    assert persisted["study_id"] == "study-x"
-    assert persisted["success"] == 1.0
+    assert record["success"] == 0.0
+    assert record["tests_total"] == 0
+    assert record["scorer_status"] == "error"
+    assert "host fallback scoring is disabled" in record["scorer_error"]
+    assert record["scoring_evidence"]["score_location"] == "container"
+    assert record["scoring_evidence"]["valid"] is False
 
 
 def test_container_scoped_fault_orchestration_sequence(monkeypatch):

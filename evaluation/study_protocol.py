@@ -16,7 +16,6 @@ from chaos_jungle import ChaosRunner, Scenario
 from chaos_jungle.faults.llm import _proxy_script_path
 from chaos_jungle.targets import LocalTarget
 from evaluation.benchmarks.base import BenchmarkTask
-from evaluation.benchmarks.executor import score_task
 from evaluation.docker_runner import (
     DockerAgentRunResult,
     DockerAgentRunner,
@@ -256,7 +255,6 @@ class PublicationStudyOrchestrator:
             try:
                 runner.stop()
                 lifecycle["reverted"] = True
-                lifecycle["recovered"] = True
             except Exception as exc:  # noqa: BLE001
                 lifecycle["reverted"] = False
                 lifecycle["recovered"] = False
@@ -311,7 +309,7 @@ class PublicationStudyOrchestrator:
             run_context=context,
         )
         record = _flatten_docker_result(result)
-        _apply_host_scoring(record, benchmark_task, execution_config)
+        _validate_container_scoring(record, benchmark_task)
         effective_agent_system = _effective_agent_system(
             requested=agent_system,
             agent_level=str(execution_config.get("agent_level", "individual")),
@@ -545,38 +543,30 @@ def _flatten_docker_result(result: DockerAgentRunResult) -> dict[str, Any]:
     return payload
 
 
-def _apply_host_scoring(
+def _validate_container_scoring(
     record: dict[str, Any],
     task: BenchmarkTask,
-    execution_config: dict[str, Any],
 ) -> None:
     if record.get("scorer_status") == "ok" and int(record.get("tests_total") or 0) > 0:
         evidence = record.setdefault("scoring_evidence", {})
         if isinstance(evidence, dict):
             evidence.setdefault("host_scored", False)
+            evidence.setdefault("score_location", "container")
         return
-    code = str(record.get("generated_code") or "")
-    if not code.strip():
-        record.setdefault("scorer_status", "error")
-        record.setdefault("scorer_error", "agent produced no generated_code")
-        record.setdefault("success", 0.0)
-        record.setdefault("tests_passed", 0)
-        record.setdefault("tests_total", 0)
-        return
-    ok, passed, total, output = score_task(
-        task,
-        code,
-        timeout_s=float(execution_config.get("score_timeout_s", 10.0)),
-    )
-    record["success"] = 1.0 if ok else 0.0
-    record["tests_passed"] = passed
-    record["tests_total"] = total
-    record["scorer_status"] = "ok" if total > 0 else "error"
-    record["scorer_error"] = "" if total > 0 else output
+    record["success"] = 0.0
+    record.setdefault("tests_passed", 0)
+    record.setdefault("tests_total", 0)
+    record["scorer_status"] = "error"
+    if not record.get("scorer_error"):
+        record["scorer_error"] = (
+            "container did not produce valid scoring evidence; "
+            "host fallback scoring is disabled"
+        )
     record["scoring_evidence"] = {
-        "host_scored": True,
+        "host_scored": False,
+        "score_location": "container",
         "strict_evalplus": task.metadata.get("source") == "evalplus",
-        "output_preview": output[:2000],
+        "valid": False,
     }
 
 
@@ -643,6 +633,8 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
         if sess and "verdict" in sess.keys():
             lifecycle["verdict"] = str(sess["verdict"]).lower()
         calls = runner.db.get_llm_calls(session_id, phase="fault")
+        export = runner.db.export_session(session_id)
+        faults = export.get("faults", [])
         lifecycle["proxy_call_count"] = len(calls)
         lifecycle["triggered"] = len(calls) > 0
         lifecycle["manifested"] = any(
@@ -652,6 +644,16 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
             for row in calls
         )
         lifecycle["evidence"] = {
+            "faults": [
+                {
+                    "kind": f.get("kind"),
+                    "status": f.get("status"),
+                    "verified_active": bool(f.get("verified_active")),
+                    "verified_recovered": bool(f.get("verified_recovered")),
+                    "verification_note": f.get("verification_note", ""),
+                }
+                for f in faults
+            ],
             "configured_faults": [
                 row.get("configured_faults_json", "[]")
                 for row in calls[:5]
@@ -665,6 +667,10 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
                 for row in calls[:5]
             ],
         }
+        if faults:
+            lifecycle["activated"] = all(bool(f.get("verified_active")) for f in faults)
+            lifecycle["recovered"] = all(bool(f.get("verified_recovered")) for f in faults)
+            lifecycle["reverted"] = all(str(f.get("status")) == "reverted" for f in faults)
     except Exception as exc:  # noqa: BLE001
         lifecycle["verdict"] = "inconclusive"
         lifecycle["details"] = f"failed to read CJ evidence: {exc!r}"

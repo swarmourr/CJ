@@ -131,7 +131,7 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
     run_context = req.get("run_context") or {}
     execution_config = req.get("execution_config") or {}
     model_cfg_raw = dict(req.get("model_config") or {})
-    if model_cfg_raw.get("base_url"):
+    if model_cfg_raw.get("base_url") and not os.environ.get("CJ_EVAL_BASE_URL"):
         os.environ["CJ_EVAL_BASE_URL"] = str(model_cfg_raw["base_url"]).rstrip("/")
     model_config = load_model_config(model_cfg_raw)
 
