@@ -114,7 +114,7 @@ def plot_degradation(
             for c in real
         ]
         x = range(len(labels))
-        hatches = ["//" if d > 0 else ""] * len(labels)
+        hatches = ["//" if d > 0 else "" for d in degrad]
         bars = ax.bar(x, degrad, color=["#444444"] * len(labels), edgecolor="black")
         for bar, h in zip(bars, hatches):
             bar.set_hatch(h)

@@ -14,6 +14,7 @@ from evaluation.output import (
     write_validity_summary_csv,
     write_group_summary_csv,
 )
+from evaluation.analysis.plots import plot_degradation
 
 
 def _make_records():
@@ -147,6 +148,20 @@ class TestCSVOutput:
         for row in rows:
             if row.get("pass_at_1_baseline") not in (None, "None", ""):
                 float(row["pass_at_1_baseline"])  # must be parseable
+
+    def test_plot_degradation_valid_data_does_not_crash(self, tmp_path):
+        path = tmp_path / "degradation.pdf"
+        out = plot_degradation(
+            [{
+                "fault_type": "llm_latency",
+                "pass_at_1_baseline": 1.0,
+                "pass_at_1_fault": 0.0,
+                "n_fault_valid": 1,
+            }],
+            output_path=str(path),
+        )
+        if out is not None:
+            assert path.exists()
 
 
 # ── CLI dry-run ───────────────────────────────────────────────────────────────
