@@ -157,16 +157,46 @@ python -m evaluation.container_entrypoint \
 Build the evaluation image with a pinned base image digest:
 
 ```bash
+export CJ_COMMIT="$(git rev-parse HEAD)"
 docker build \
   --build-arg BASE_IMAGE='python:3.12-slim@sha256:<digest>' \
+  --build-arg CJ_COMMIT="$CJ_COMMIT" \
   -f evaluation/docker/Dockerfile \
-  -t cj-eval-agent:<tag> .
+  -t cj-eval-agent:"$CJ_COMMIT" .
 ```
 
 The runner records the resolved image digest, Python/framework versions,
 exit code, timeout status, stdout/stderr, structured `AgentRunResult`, and
 container CPU/memory/user limits. Secrets are not accepted as Docker command
 arguments; use `.env`/`--env-file` or provider-specific secret injection.
+The Docker build writes the build-time commit into `/cj/work/COMMIT`; `.env`
+and `.git` are excluded from the image context by `.dockerignore`.
+
+### One publication triplet
+
+Run one end-to-end paired triplet before launching any pilot:
+
+```bash
+python -m evaluation.run \
+  --publication-study \
+  --docker-image cj-eval-agent:"$CJ_COMMIT" \
+  --system autogen-real \
+  --agent-level individual \
+  --topology single \
+  --benchmark humanevalplus \
+  --fault llm_latency \
+  --tasks 1 \
+  --repeats 1 \
+  --seed 42 \
+  --base-url http://127.0.0.1:8000/v1 \
+  --model gpt-4o-mini \
+  --env-file .env \
+  --results-dir results/publication-smoke
+```
+
+This produces exactly three records per selected task: `direct_baseline`,
+`cj_control`, and `cj_fault`. Derived outputs are generated once at the end
+and filtered to the new `study_id`.
 
 ### Safe infrastructure faults
 
@@ -175,9 +205,13 @@ experiment container. `evaluation.infrastructure_orchestrator.run_container_scop
 implements the safe order:
 
 1. prepare idle container;
-2. activate fault inside the container;
-3. verify activation;
-4. execute workload in the same container;
+2. start the idle container;
+3. connect `DockerTarget`;
+4. activate fault inside the running container namespace;
+5. verify activation;
+6. execute workload in the same container;
+7. revert and verify recovery;
+8. clean up the container.
 5. revert and verify recovery;
 6. remove the container.
 
@@ -289,7 +323,7 @@ python -m evaluation.run \
 ### Regenerate outputs from existing results
 
 ```bash
-python -m evaluation.run --generate-outputs --results-dir results/
+python -m evaluation.run --generate-outputs --results-dir results/ --study-id study-...
 ```
 
 ---
@@ -425,6 +459,9 @@ python -m evaluation.run --generate-outputs --results-dir results/full
 #   results/full/task_results.csv
 #   results/full/condition_summary.csv
 #   results/full/validity_summary.csv
+#   results/full/cj_overhead_summary.csv
+#   results/full/multi_agent_process_summary.csv
+#   results/full/inferential_summary.csv
 #   results/full/group_summary.csv
 #   results/full/figures/degradation.pdf     (requires matplotlib)
 #   results/full/figures/validity.pdf        (requires matplotlib)

@@ -45,7 +45,8 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
         "study_id", "run_id", "campaign_id", "pair_id", "condition",
         "agent_level", "topology", "fault_target_role",
         "timestamp", "cj_commit",
-        "agent_system", "framework", "benchmark", "task_id",
+        "agent_system", "framework", "requested_framework", "framework_native",
+        "multi_agent_impl", "benchmark", "task_id",
         "model", "endpoint_type", "config_hash",
         "seed", "fault_type", "phase", "validity",
         "success", "duration_s", "reported_error", "retries",
@@ -90,7 +91,7 @@ def write_condition_summary_csv(
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     # Separate baselines from fault records
-    baselines  = [r for r in records if r.get("phase") == "baseline"]
+    baselines  = [r for r in records if r.get("condition") == "direct_baseline"]
     fault_recs = [r for r in records if r.get("phase") == "fault"]
 
     # Index baselines by pair_id (exact pairing) and by (agent_system, benchmark)
@@ -379,7 +380,7 @@ def write_stats_summary_csv(records: list[dict], path: str) -> None:
         return (r.get("agent_system", ""), r.get("benchmark", ""), r.get("fault_type", "none"))
 
     all_fault_recs = [r for r in records if r.get("phase") == "fault"]
-    all_base_recs  = [r for r in records if r.get("phase") == "baseline"]
+    all_base_recs  = [r for r in records if r.get("condition") == "direct_baseline"]
 
     rows: list[dict] = []
     for (sys, bench, fault), group_recs in groupby(
@@ -418,6 +419,109 @@ def write_stats_summary_csv(records: list[dict], path: str) -> None:
         w.writeheader()
         w.writerows(rows)
     print(f"[output] Stats summary → {path}")
+
+
+def write_inferential_summary_csv(records: list[dict], path: str) -> None:
+    """Write paired, task-aware inferential tests for valid fault records."""
+    from evaluation.analysis.statistics import (
+        holm_correction,
+        mcnemar_exact,
+        paired_permutation_test,
+        task_clustered_bootstrap_ci,
+    )
+    from evaluation.analysis.validity import classify_records
+    from itertools import groupby
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    direct = [r for r in records if r.get("condition") == "direct_baseline"]
+    faults = [r for r in records if r.get("phase") == "fault"]
+
+    def key(r: dict):
+        return (
+            r.get("agent_level", ""),
+            r.get("agent_system", ""),
+            r.get("topology", ""),
+            r.get("benchmark", ""),
+            r.get("fault_type", "none"),
+        )
+
+    rows: list[dict[str, Any]] = []
+    for (level, system, topology, bench, fault), group_recs in groupby(
+        sorted(faults, key=key), key=key
+    ):
+        valid_faults = classify_records(list(group_recs)).valid
+        pair_ids = {r.get("pair_id") for r in valid_faults if r.get("pair_id")}
+        base = [
+            r for r in direct
+            if r.get("pair_id") in pair_ids
+            and r.get("agent_system") == system
+            and r.get("benchmark") == bench
+        ]
+        if not valid_faults or not base:
+            continue
+
+        mcn = mcnemar_exact(base, valid_faults, metric="success")
+        boot = task_clustered_bootstrap_ci(base, valid_faults, metric="success")
+        rows.append({
+            "agent_level": level,
+            "agent_system": system,
+            "topology": topology,
+            "benchmark": bench,
+            "fault_type": fault,
+            "metric": "success",
+            "test": "mcnemar_exact",
+            "n_pairs": mcn.get("n_pairs"),
+            "n_tasks": boot.get("n_tasks"),
+            "effect": boot.get("mean_diff"),
+            "ci_low": boot.get("ci_low"),
+            "ci_high": boot.get("ci_high"),
+            "p_value": mcn.get("p_value"),
+            "missing_pairs": mcn.get("missing_pairs"),
+            "baseline_only_success": mcn.get("baseline_only_success"),
+            "condition_only_success": mcn.get("condition_only_success"),
+        })
+
+        for metric in ("duration_s", "llm_calls", "tool_calls", "turns", "total_tokens"):
+            perm = paired_permutation_test(base, valid_faults, metric=metric)
+            boot = task_clustered_bootstrap_ci(base, valid_faults, metric=metric)
+            rows.append({
+                "agent_level": level,
+                "agent_system": system,
+                "topology": topology,
+                "benchmark": bench,
+                "fault_type": fault,
+                "metric": metric,
+                "test": "paired_permutation",
+                "n_pairs": perm.get("n_pairs"),
+                "n_tasks": boot.get("n_tasks"),
+                "effect": boot.get("mean_diff"),
+                "ci_low": boot.get("ci_low"),
+                "ci_high": boot.get("ci_high"),
+                "p_value": perm.get("p_value"),
+                "missing_pairs": perm.get("missing_pairs"),
+                "baseline_only_success": "",
+                "condition_only_success": "",
+            })
+
+    p_adjusted = holm_correction([
+        float(r["p_value"]) if r.get("p_value") is not None else None
+        for r in rows
+    ])
+    for row, p_holm in zip(rows, p_adjusted):
+        row["p_value_holm"] = p_holm
+
+    fields = [
+        "agent_level", "agent_system", "topology", "benchmark", "fault_type",
+        "metric", "test", "n_pairs", "n_tasks", "effect", "ci_low", "ci_high",
+        "p_value", "p_value_holm", "missing_pairs",
+        "baseline_only_success", "condition_only_success",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[output] Inferential summary → {path}")
 
 
 def generate_all_outputs(
@@ -467,6 +571,7 @@ def generate_all_outputs(
     write_cj_overhead_summary_csv(records, os.path.join(results_dir, "cj_overhead_summary.csv"))
     write_multi_agent_process_summary_csv(records, os.path.join(results_dir, "multi_agent_process_summary.csv"))
     write_stats_summary_csv(records, os.path.join(results_dir, "stats_summary.csv"))
+    write_inferential_summary_csv(records, os.path.join(results_dir, "inferential_summary.csv"))
     write_study_manifest(records, os.path.join(results_dir, "study_manifest.json"), study_id)
 
     fig_dir = figures_dir or os.path.join(results_dir, "figures")

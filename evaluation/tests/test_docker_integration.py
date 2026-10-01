@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from chaos_jungle.targets.docker import DockerTarget
+from evaluation.docker_runner import DockerAgentRunner, DockerExecutionConfig, RunContext
 
 
 pytestmark = pytest.mark.docker
@@ -22,6 +23,19 @@ def _docker_available() -> bool:
 
 def _local_image() -> str | None:
     image = os.environ.get("CJ_EVAL_TEST_IMAGE", "python:3.12-slim")
+    proc = subprocess.run(
+        ["docker", "image", "inspect", image],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return image if proc.returncode == 0 else None
+
+
+def _cj_eval_image() -> str | None:
+    image = os.environ.get("CJ_EVAL_IMAGE")
+    if not image:
+        return None
     proc = subprocess.run(
         ["docker", "image", "inspect", image],
         capture_output=True,
@@ -87,3 +101,49 @@ def test_docker_target_real_container_non_root_timeout_and_cleanup():
         subprocess.run(["docker", "rm", "-f", cid], capture_output=True, text=True, timeout=20)
     gone = subprocess.run(["docker", "inspect", cid], capture_output=True, text=True, timeout=10)
     assert gone.returncode != 0
+
+
+@docker_available
+def test_cj_evaluation_image_runs_structured_protocol(tmp_path):
+    image = _cj_eval_image()
+    if not image:
+        pytest.skip("set CJ_EVAL_IMAGE to a built CJ evaluation image to run this test")
+
+    runner = DockerAgentRunner(
+        DockerExecutionConfig(
+            image=image,
+            timeout_s=60,
+            preserve_io=True,
+            cpus=0.5,
+            memory="512m",
+        )
+    )
+    result = runner.run(
+        agent_system="autogen",
+        topology="single",
+        task={
+            "task_id": "toy/0",
+            "benchmark": "toy",
+            "prompt": "Write a function named solution returning None.",
+            "entry_point": "solution",
+            "test_code": "assert solution() is None\n",
+            "metadata": {"source": "bundled"},
+        },
+        seed=0,
+        model_config={"name": "fake"},
+        execution_config={"dry_run": True, "agent_level": "individual", "score_timeout_s": 2},
+        run_context=RunContext(
+            study_id="study",
+            campaign_id="campaign",
+            pair_id="pair",
+            run_id="docker-image-protocol",
+            condition="direct_baseline",
+            output_root=str(tmp_path / "run"),
+        ),
+    )
+    assert result.exit_code == 0, result.stderr
+    assert result.result["executor_status"] == "ok"
+    assert result.result["scorer_status"] == "ok"
+    assert result.result["success"] == 1.0
+    assert result.result["python_version"]
+    assert result.image_digest

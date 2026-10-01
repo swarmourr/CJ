@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -26,19 +27,30 @@ from evaluation.docker_runner import (
     redact_secrets,
 )
 from evaluation.infrastructure_orchestrator import run_container_scoped_fault
+from evaluation.benchmarks.base import BenchmarkTask
 from evaluation.multi_agent import TraceEvent, validate_event_schema
 from evaluation.output import generate_all_outputs
-from evaluation.study_protocol import make_pair_id
+from evaluation.study_protocol import (
+    PublicationStudyOrchestrator,
+    default_experiment_definition,
+    make_pair_id,
+)
 
 
 def test_secret_redaction_nested_values():
     value = {
         "api_key": "sk-secret",
+        "api_key_env": "OPENAI_API_KEY",
+        "max_tokens": 2048,
+        "input_price_per_1k_tokens": 0.01,
         "nested": {"token": "Bearer abc", "safe": "ok"},
         "list": [{"password": "pw"}],
     }
     assert redact_secrets(value) == {
         "api_key": "[REDACTED]",
+        "api_key_env": "OPENAI_API_KEY",
+        "max_tokens": 2048,
+        "input_price_per_1k_tokens": 0.01,
         "nested": {"token": "[REDACTED]", "safe": "ok"},
         "list": [{"password": "[REDACTED]"}],
     }
@@ -142,11 +154,30 @@ def test_proxy_selector_matching_and_header_stripping():
 
 
 def test_study_pair_id_is_stable_and_specific():
-    a = make_pair_id(study_id="s", framework="autogen", topology="linear", task_id="t", seed=1)
-    b = make_pair_id(study_id="s", framework="autogen", topology="linear", task_id="t", seed=1)
-    c = make_pair_id(study_id="s", framework="langgraph", topology="linear", task_id="t", seed=1)
+    a = make_pair_id(
+        study_id="s", framework="autogen", topology="linear", task_id="t", seed=1,
+        fault_name="llm_latency", fault_parameters={"delay_s": 0.5}, repetition=0,
+    )
+    b = make_pair_id(
+        study_id="s", framework="autogen", topology="linear", task_id="t", seed=1,
+        fault_name="llm_latency", fault_parameters={"delay_s": 0.5}, repetition=0,
+    )
+    c = make_pair_id(
+        study_id="s", framework="langgraph", topology="linear", task_id="t", seed=1,
+        fault_name="llm_latency", fault_parameters={"delay_s": 0.5}, repetition=0,
+    )
+    d = make_pair_id(
+        study_id="s", framework="autogen", topology="linear", task_id="t", seed=1,
+        fault_name="llm_unavailable", fault_parameters={}, repetition=0,
+    )
+    e = make_pair_id(
+        study_id="s", framework="autogen", topology="linear", task_id="t", seed=1,
+        fault_name="llm_latency", fault_parameters={"delay_s": 0.5}, repetition=1,
+    )
     assert a == b
     assert a != c
+    assert a != d
+    assert a != e
 
 
 def test_costing_helpers_are_explicit():
@@ -255,18 +286,27 @@ def test_generate_outputs_filters_exact_study_id(tmp_path, monkeypatch):
     assert "selected" in task_csv
     assert "other" not in task_csv
     assert "legacy" not in task_csv
+    assert (tmp_path / "inferential_summary.csv").exists()
     manifest = json.loads((tmp_path / "study_manifest.json").read_text())
     assert manifest["record_count"] == 1
 
 
 def test_container_entrypoint_dry_run_individual(tmp_path, monkeypatch):
+    monkeypatch.delenv("CJ_EVAL_BASE_URL", raising=False)
     req = {
         "agent_system": "autogen",
         "topology": "single",
-        "task": {"prompt": "Write a function."},
+        "task": {
+            "task_id": "toy/0",
+            "benchmark": "toy",
+            "prompt": "Write a function named solution returning None.",
+            "entry_point": "solution",
+            "test_code": "assert solution() is None\n",
+            "metadata": {"source": "bundled"},
+        },
         "seed": 0,
-        "model_config": {"name": "fake"},
-        "execution_config": {"dry_run": True, "agent_level": "individual"},
+        "model_config": {"name": "fake", "base_url": "http://example.invalid/v1"},
+        "execution_config": {"dry_run": True, "agent_level": "individual", "score_timeout_s": 2},
         "run_context": {"study_id": "s", "pair_id": "p", "run_id": "r"},
     }
     request_path = tmp_path / "request.json"
@@ -277,7 +317,78 @@ def test_container_entrypoint_dry_run_individual(tmp_path, monkeypatch):
     result = json.loads(output_path.read_text())
     assert result["executor_status"] == "ok"
     assert result["agent_level"] == "individual"
+    assert result["scorer_status"] == "ok"
+    assert result["success"] == 1.0
+    assert result["tests_total"] == 1
+    assert os.environ["CJ_EVAL_BASE_URL"] == "http://example.invalid/v1"
     assert (tmp_path / "execution_trace.json").exists()
+
+
+def test_publication_condition_flattens_scores_and_persists(tmp_path):
+    class FakeRunner:
+        config = DockerExecutionConfig(image="cj:test")
+
+        def run(self, **kwargs):
+            return DockerAgentRunResult(
+                container_id="abc123",
+                exit_code=0,
+                timed_out=False,
+                duration_s=0.5,
+                stdout="",
+                stderr="",
+                result={
+                    "generated_code": "def solution():\n    return None\n",
+                    "duration_s": 0.4,
+                    "llm_calls": 1,
+                },
+                image="cj:test",
+                image_digest="sha256:test",
+                resource_limits={"cpus": 1.0, "memory": "2g"},
+                artifact_paths={"result_json": "/tmp/result.json"},
+            )
+
+    task = BenchmarkTask(
+        task_id="toy/0",
+        benchmark="toy",
+        prompt="Write solution.",
+        entry_point="solution",
+        test_code="assert solution() is None\n",
+        metadata={"source": "bundled"},
+    )
+    orch = PublicationStudyOrchestrator(FakeRunner(), study_id="study-x", results_dir=str(tmp_path))
+    record = orch._run_condition(
+        condition="direct_baseline",
+        agent_system="autogen",
+        topology="single",
+        task={
+            "task_id": task.task_id,
+            "benchmark": task.benchmark,
+            "prompt": task.prompt,
+            "entry_point": task.entry_point,
+            "test_code": task.test_code,
+            "metadata": task.metadata,
+        },
+        seed=0,
+        model_config={"name": "fake", "base_url": "http://fake/v1"},
+        execution_config={"agent_level": "individual", "score_timeout_s": 2},
+        campaign_id="campaign-x",
+        pair_id="pair-x",
+        extra_env={"CJ_EVAL_BASE_URL": "http://fake/v1"},
+        definition=default_experiment_definition("llm_latency"),
+        benchmark_task=task,
+        fault_name="none",
+        fault_parameters={},
+        lifecycle={"verdict": "valid"},
+        validity="valid",
+    )
+    assert record["success"] == 1.0
+    assert record["tests_total"] == 1
+    assert record["llm_calls"] == 1
+    rows = (tmp_path / "runs.jsonl").read_text().strip().splitlines()
+    assert len(rows) == 1
+    persisted = json.loads(rows[0])
+    assert persisted["study_id"] == "study-x"
+    assert persisted["success"] == 1.0
 
 
 def test_container_scoped_fault_orchestration_sequence(monkeypatch):
@@ -311,6 +422,10 @@ def test_container_scoped_fault_orchestration_sequence(monkeypatch):
                 resource_limits={},
                 created_at=0.0,
             )
+
+        def start_container(self, container):
+            events.append(("start_container", container.container_id))
+            return subprocess.CompletedProcess(["docker", "start", container.container_id], 0, "", "")
 
         def exec_agent(self, container):
             events.append(("exec", container.container_id))
@@ -357,6 +472,7 @@ def test_container_scoped_fault_orchestration_sequence(monkeypatch):
     assert result.lifecycle["verdict"] == "valid"
     assert events == [
         ("prepare", "r"),
+        ("start_container", "abc123"),
         ("start", "abc123"),
         ("verify_active", "abc123"),
         ("exec", "abc123"),

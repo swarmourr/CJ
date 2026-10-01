@@ -86,6 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Run without a real model API (stub responses, no CJ proxy)")
     p.add_argument("--generate-outputs", action="store_true",
                    help="Load existing runs.jsonl and regenerate all output files")
+    p.add_argument("--publication-study", action="store_true",
+                   help="Run the Docker publication triplet protocol")
     p.add_argument("--config", metavar="YAML",
                    help="Load all settings from a YAML config file")
 
@@ -108,8 +110,32 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Output ─────────────────────────────────────────────────────────────────
     p.add_argument("--results-dir", default="results",
                    help="Directory for output files")
+    p.add_argument("--study-id",
+                   help="Exact study_id to run or filter when generating outputs")
     p.add_argument("--exec-timeout", type=float, default=10.0,
                    help="Sandbox execution timeout (seconds)")
+
+    # ── Docker publication protocol ───────────────────────────────────────────
+    p.add_argument("--docker-image",
+                   help="CJ evaluation image for --publication-study")
+    p.add_argument("--env-file",
+                   help="Docker --env-file containing model secrets; defaults to .env when present")
+    p.add_argument("--agent-level", choices=["individual", "multi_agent"], default="individual",
+                   help="Publication study level")
+    p.add_argument("--topology", default="single",
+                   help="single, linear, or closed_loop")
+    p.add_argument("--max-turns", type=int, default=10,
+                   help="Maximum agent turns inside the container")
+    p.add_argument("--score-timeout", type=float, default=10.0,
+                   help="Scoring timeout inside the container")
+    p.add_argument("--container-timeout", type=float, default=300.0,
+                   help="Docker workload timeout in seconds")
+    p.add_argument("--cpus", type=float, default=1.0,
+                   help="Docker CPU limit")
+    p.add_argument("--memory", default="2g",
+                   help="Docker memory limit")
+    p.add_argument("--proxy-port", type=int, default=18000,
+                   help="Host CJ proxy port for publication study runs")
 
     # ── Model config (override env vars) ──────────────────────────────────────
     p.add_argument("--base-url", help="Override CJ_EVAL_BASE_URL")
@@ -313,6 +339,124 @@ def run_from_yaml(config_path: str, dry_run: bool) -> None:
         )
 
 
+def _publication_model_config(args: argparse.Namespace, yaml_model_cfg: dict | None = None) -> dict:
+    cfg = dict(yaml_model_cfg or {})
+    if args.base_url:
+        cfg["base_url"] = args.base_url
+    elif os.environ.get("CJ_EVAL_BASE_URL"):
+        cfg.setdefault("base_url", os.environ["CJ_EVAL_BASE_URL"])
+    elif os.environ.get("OPENAI_BASE_URL"):
+        cfg.setdefault("base_url", os.environ["OPENAI_BASE_URL"])
+    if args.model:
+        cfg["name"] = args.model
+    elif os.environ.get("CJ_EVAL_MODEL"):
+        cfg.setdefault("name", os.environ["CJ_EVAL_MODEL"])
+    cfg.setdefault("api_key_env", "CJ_EVAL_API_KEY")
+    cfg.setdefault("transport_retries", 0)
+    return cfg
+
+
+def _default_env_file() -> str | None:
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(repo_root, ".env")
+    return path if os.path.exists(path) else None
+
+
+def _load_task_subset(benchmark_name: str, tasks: int, seed: int):
+    from evaluation.benchmarks import REGISTRY as BENCH_REGISTRY
+
+    if tasks <= 0:
+        raise ValueError("--tasks must be positive")
+    if tasks <= 5:
+        loader = BENCH_REGISTRY[benchmark_name](subset="smoke")
+        loader.smoke_n = tasks
+    else:
+        loader = BENCH_REGISTRY[benchmark_name](subset="development")
+        loader.development_n = tasks
+    return loader.load(seed=seed)
+
+
+def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None = None) -> None:
+    """Run direct baseline, CJ control, and CJ fault in Docker for each task."""
+    if not args.docker_image:
+        raise SystemExit("--docker-image is required with --publication-study")
+    if not args.system:
+        raise SystemExit("--system is required with --publication-study")
+    if not args.benchmark:
+        raise SystemExit("--benchmark is required with --publication-study")
+    fault_name = args.fault or ""
+    if fault_name in ("", "none"):
+        raise SystemExit("--publication-study requires a concrete --fault for the triplet")
+
+    from evaluation.docker_runner import DockerAgentRunner, DockerExecutionConfig
+    from evaluation.experiments.fault_campaign import build_cj_fault
+    from evaluation.output import generate_all_outputs
+    from evaluation.study_protocol import PublicationStudyOrchestrator
+
+    model_cfg = _publication_model_config(args, yaml_model_cfg)
+    if model_cfg.get("base_url"):
+        os.environ["CJ_EVAL_BASE_URL"] = str(model_cfg["base_url"])
+    if model_cfg.get("name"):
+        os.environ["CJ_EVAL_MODEL"] = str(model_cfg["name"])
+
+    task_list = _load_task_subset(args.benchmark, args.tasks, args.seed)
+    env_file = args.env_file if args.env_file is not None else _default_env_file()
+    if env_file:
+        env_file = os.path.abspath(env_file)
+
+    docker_cfg = DockerExecutionConfig(
+        image=args.docker_image,
+        cpus=args.cpus,
+        memory=args.memory,
+        timeout_s=args.container_timeout,
+        env_file=env_file,
+        preserve_io=True,
+    )
+    orchestrator = PublicationStudyOrchestrator(
+        DockerAgentRunner(docker_cfg),
+        study_id=args.study_id,
+        results_dir=args.results_dir,
+        proxy_port=args.proxy_port,
+    )
+    execution_cfg = {
+        "dry_run": args.dry_run,
+        "max_turns": args.max_turns,
+        "score_timeout_s": args.score_timeout,
+        "agent_level": args.agent_level,
+    }
+
+    total = 0
+    print("\n[eval] === Docker publication study ===")
+    print(f"  study_id  : {orchestrator.study_id}")
+    print(f"  image     : {args.docker_image}")
+    print(f"  system    : {args.system}")
+    print(f"  level     : {args.agent_level}")
+    print(f"  topology  : {args.topology}")
+    print(f"  benchmark : {args.benchmark} ({len(task_list)} tasks)")
+    print(f"  fault     : {fault_name}")
+    print(f"  results   : {args.results_dir}")
+
+    for rep in range(args.repeats):
+        for task in task_list:
+            fault = build_cj_fault(fault_name)
+            orchestrator.run_pair(
+                agent_system=args.system,
+                agent_level=args.agent_level,
+                topology=args.topology,
+                task=task,
+                seed=args.seed + rep,
+                model_config=model_cfg,
+                execution_config=execution_cfg,
+                fault_name=fault_name,
+                fault=fault,
+                repetition=rep,
+            )
+            total += 3
+
+    print(f"[eval] Wrote {total} paired condition records to {args.results_dir}/runs.jsonl")
+    generate_all_outputs(args.results_dir, study_id=orchestrator.study_id)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -324,11 +468,20 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.generate_outputs:
         from evaluation.output import generate_all_outputs
-        generate_all_outputs(args.results_dir)
+        generate_all_outputs(args.results_dir, study_id=args.study_id)
         return 0
 
     if args.config:
-        run_from_yaml(args.config, dry_run=args.dry_run)
+        cfg = _load_yaml_config(args.config)
+        _apply_model_config(cfg, args.dry_run)
+        if args.publication_study:
+            run_publication_study(args, cfg.get("model", {}))
+        else:
+            run_from_yaml(args.config, dry_run=args.dry_run)
+        return 0
+
+    if args.publication_study:
+        run_publication_study(args)
         return 0
 
     if not args.system:

@@ -16,7 +16,15 @@ from pathlib import Path
 from typing import Any
 
 
-_SECRET_NAME_RE = re.compile(r"(key|token|secret|password|credential)", re.I)
+_SECRET_NAME_RE = re.compile(r"(secret|password|credential)", re.I)
+_SECRET_ENV_NAME_RE = re.compile(r"(api[_-]?key|token|secret|password|credential)", re.I)
+_SECRET_EXACT_KEYS = {
+    "api_key",
+    "access_token",
+    "refresh_token",
+    "secret_key",
+    "password",
+}
 _SAFE_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -25,7 +33,8 @@ def redact_secrets(value: Any) -> Any:
     if isinstance(value, dict):
         redacted = {}
         for key, item in value.items():
-            if _SECRET_NAME_RE.search(str(key)):
+            key_l = str(key).lower()
+            if key_l in _SECRET_EXACT_KEYS or _SECRET_NAME_RE.search(key_l):
                 redacted[key] = "[REDACTED]"
             else:
                 redacted[key] = redact_secrets(item)
@@ -55,6 +64,7 @@ class DockerExecutionConfig:
     docker_bin: str = "docker"
     preserve_io: bool = False
     env_file: str | None = None
+    add_host_gateway: bool = True
 
     def resource_limits(self) -> dict[str, Any]:
         return {
@@ -64,6 +74,7 @@ class DockerExecutionConfig:
             "network": self.network,
             "read_only_root": self.read_only_root,
             "capabilities": sorted(self.capabilities),
+            "add_host_gateway": self.add_host_gateway,
         }
 
 
@@ -200,17 +211,18 @@ class DockerAgentRunner:
         output_path: str = "/cj/output/result.json",
     ) -> DockerExecution:
         start = time.time()
-        start_proc = self._run([self.config.docker_bin, "start", container.container_id], timeout=60)
-        if start_proc.returncode != 0:
-            return DockerExecution(
-                container=container,
-                exec_command=[self.config.docker_bin, "start", container.container_id],
-                exit_code=start_proc.returncode,
-                stdout=start_proc.stdout,
-                stderr=start_proc.stderr,
-                timed_out=False,
-                duration_s=time.time() - start,
-            )
+        if not self.is_running(container):
+            start_proc = self.start_container(container)
+            if start_proc.returncode != 0:
+                return DockerExecution(
+                    container=container,
+                    exec_command=[self.config.docker_bin, "start", container.container_id],
+                    exit_code=start_proc.returncode,
+                    stdout=start_proc.stdout,
+                    stderr=start_proc.stderr,
+                    timed_out=False,
+                    duration_s=time.time() - start,
+                )
 
         cmd = [
             self.config.docker_bin,
@@ -297,6 +309,22 @@ class DockerAgentRunner:
             if root.name.startswith("cj-docker-run-"):
                 shutil.rmtree(root, ignore_errors=True)
 
+    def start_container(self, container: PreparedContainer) -> subprocess.CompletedProcess:
+        return self._run([self.config.docker_bin, "start", container.container_id], timeout=60)
+
+    def is_running(self, container: PreparedContainer) -> bool:
+        proc = self._run(
+            [
+                self.config.docker_bin,
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                container.container_id,
+            ],
+            timeout=30,
+        )
+        return proc.returncode == 0 and proc.stdout.strip().lower() == "true"
+
     def run(
         self,
         *,
@@ -354,6 +382,8 @@ class DockerAgentRunner:
             "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m",
         ]
+        if self.config.add_host_gateway:
+            cmd += ["--add-host", "host.docker.internal:host-gateway"]
         if self.config.read_only_root:
             cmd.append("--read-only")
         for cap in sorted(set(self.config.capabilities)):
@@ -363,7 +393,7 @@ class DockerAgentRunner:
         for key, value in sorted(env.items()):
             if not _SAFE_ENV_NAME_RE.match(key):
                 raise ValueError(f"unsafe environment variable name: {key!r}")
-            if _SECRET_NAME_RE.search(key):
+            if _SECRET_ENV_NAME_RE.search(key):
                 # Let callers provide secrets through env-file or host secret
                 # mechanisms; do not bake them into command arguments.
                 raise ValueError(f"secret environment value cannot be passed as an argument: {key}")

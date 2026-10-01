@@ -46,9 +46,10 @@ def run_container_scoped_fault(
 ) -> InfrastructureFaultResult:
     """Run one Docker execution under a fault applied inside that container.
 
-    The sequence is prepare container -> create DockerTarget -> activate and
-    verify -> execute workload inside the same container -> revert and verify
-    -> cleanup. The host is never used as a target for network/resource faults.
+    The sequence is prepare container -> start idle container -> create
+    DockerTarget -> activate and verify -> execute workload inside the same
+    container -> revert and verify -> cleanup. The host is never used as a
+    target for network/resource faults.
     """
     container: PreparedContainer = docker_runner.prepare(
         agent_system=agent_system,
@@ -76,6 +77,12 @@ def run_container_scoped_fault(
     result: DockerAgentRunResult | None = None
     target = DockerTarget(container.container_id, timeout_s=target_timeout_s)
     try:
+        start_proc = docker_runner.start_container(container)
+        if start_proc.returncode != 0:
+            raise RuntimeError(
+                "failed to start experiment container before fault activation: "
+                f"{start_proc.stderr or start_proc.stdout}"
+            )
         target.connect()
         fault.start(target)
         lifecycle["timestamps"]["activated"] = time.time()

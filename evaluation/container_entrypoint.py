@@ -14,6 +14,8 @@ from typing import Any
 
 from evaluation.agents import REGISTRY
 from evaluation.agents.base import AgentRunResult, ModelClient
+from evaluation.benchmarks.base import BenchmarkTask
+from evaluation.benchmarks.executor import score_task
 from evaluation.model_config import load_model_config
 from evaluation.multi_agent import MultiAgentWorkflow
 
@@ -66,6 +68,47 @@ def _task_prompt(task: dict[str, Any]) -> str:
     return str(task.get("prompt") or task.get("input") or "")
 
 
+def _score_result(task_data: dict[str, Any], result: AgentRunResult, timeout_s: float) -> dict[str, Any]:
+    """Score generated code when benchmark evidence is present in the request."""
+    if not result.generated_code:
+        return {
+            "scorer_status": "error",
+            "scorer_error": "agent produced no generated_code",
+            "tests_passed": 0,
+            "tests_total": 0,
+            "success": 0.0,
+        }
+    if not task_data.get("test_code") and not (
+        isinstance(task_data.get("metadata"), dict)
+        and task_data["metadata"].get("source") == "evalplus"
+    ):
+        return {
+            "scorer_status": "not_available",
+            "scorer_error": "request did not include test_code or EvalPlus metadata",
+        }
+    task = BenchmarkTask(
+        task_id=str(task_data.get("task_id", "")),
+        benchmark=str(task_data.get("benchmark", "")),
+        prompt=str(task_data.get("prompt") or task_data.get("input") or ""),
+        entry_point=str(task_data.get("entry_point", "")),
+        test_code=str(task_data.get("test_code", "")),
+        canonical_solution=str(task_data.get("canonical_solution", "")),
+        metadata=dict(task_data.get("metadata") or {}),
+    )
+    ok, passed, total, output = score_task(task, result.generated_code, timeout_s=timeout_s)
+    return {
+        "scorer_status": "ok" if total > 0 else "error",
+        "scorer_error": "" if total > 0 else output,
+        "success": 1.0 if ok else 0.0,
+        "tests_passed": passed,
+        "tests_total": total,
+        "scoring_evidence": {
+            "output_preview": output[:2000],
+            "strict_evalplus": task.metadata.get("source") == "evalplus",
+        },
+    }
+
+
 def _write_artifacts(output_path: Path, result: dict[str, Any]) -> dict[str, str]:
     output_dir = output_path.parent
     artifacts: dict[str, str] = {}
@@ -87,7 +130,10 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
 
     run_context = req.get("run_context") or {}
     execution_config = req.get("execution_config") or {}
-    model_config = load_model_config(req.get("model_config") or {})
+    model_cfg_raw = dict(req.get("model_config") or {})
+    if model_cfg_raw.get("base_url"):
+        os.environ["CJ_EVAL_BASE_URL"] = str(model_cfg_raw["base_url"]).rstrip("/")
+    model_config = load_model_config(model_cfg_raw)
 
     os.environ["CJ_EVAL_MODEL"] = model_config.name
     os.environ["CJ_EVAL_TEMPERATURE"] = str(model_config.temperature)
@@ -99,6 +145,7 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
     agent_level = str(execution_config.get("agent_level", "individual"))
     max_turns = int(execution_config.get("max_turns", 10))
     dry_run = bool(execution_config.get("dry_run", False))
+    score_timeout_s = float(execution_config.get("score_timeout_s", 10.0))
 
     t0 = time.time()
     if agent_level == "multi_agent":
@@ -123,6 +170,8 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
         result = agent.run(prompt, seed=seed)
 
     payload = result.to_dict() if isinstance(result, AgentRunResult) else dict(result)
+    if isinstance(result, AgentRunResult):
+        payload.update(_score_result(task, result, timeout_s=score_timeout_s))
     payload.update({
         "executor_status": "ok",
         "executor_duration_s": time.time() - t0,
@@ -131,6 +180,9 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
         "agent_system": req["agent_system"],
         "topology": req.get("topology"),
         "agent_level": agent_level,
+        "requested_framework": req["agent_system"],
+        "framework_native": agent_level != "multi_agent",
+        "multi_agent_impl": "reference-multi-agent" if agent_level == "multi_agent" else "",
     })
     return payload
 
