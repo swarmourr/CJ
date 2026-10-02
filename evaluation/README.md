@@ -488,8 +488,12 @@ python -m evaluation.run --generate-outputs --results-dir results/full
 # Outputs:
 #   results/full/task_results.csv
 #   results/full/condition_summary.csv
+#   results/full/scientific_summary.csv
 #   results/full/validity_summary.csv
+#   results/full/fault_fidelity_summary.csv
 #   results/full/cj_overhead_summary.csv
+#   results/full/agent_resilience_summary.csv
+#   results/full/data_quality_summary.csv
 #   results/full/multi_agent_process_summary.csv
 #   results/full/inferential_summary.csv
 #   results/full/group_summary.csv
@@ -497,6 +501,14 @@ python -m evaluation.run --generate-outputs --results-dir results/full
 #   results/full/figures/validity.pdf        (requires matplotlib)
 #   results/full/latex/table_resilience.tex
 ```
+
+`scientific_summary.csv` is the principal result table. It keeps agent quality,
+CJ validity, fault effect, CJ overhead, and data quality separate: complete
+triplets, valid pairs, baseline-eligible pairs, baseline/control/fault pass@1,
+conditional robustness, `C-F` fault-specific degradation, bootstrap confidence
+intervals, trigger/recovery rates, and CJ overhead are reported as separate
+columns. `fault_fidelity_summary.csv` reports whether the injected fault matched
+the requested severity, such as configured versus observed latency.
 
 ---
 

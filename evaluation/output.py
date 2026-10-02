@@ -12,11 +12,231 @@ from __future__ import annotations
 
 import csv
 import json
+import random
 import os
 from typing import Any
 
 from evaluation.analysis.metrics import AggregationMetrics, compute_metrics
 from evaluation.analysis.validity import classify_records
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_bool_success(record: dict) -> int:
+    return 1 if _as_float(record.get("success"), 0.0) >= 0.5 else 0
+
+
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    vals = sorted(values)
+    n = len(vals)
+    return vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+
+
+def _ratio(num: float, den: float) -> float | None:
+    return num / den if den else None
+
+
+def _json_or(value: Any, default: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if not isinstance(value, str) or not value:
+        return default
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
+
+
+def _condition_index(records: list[dict]) -> dict[str, dict[str, dict]]:
+    by_pair: dict[str, dict[str, dict]] = {}
+    for record in records:
+        pair_id = record.get("pair_id")
+        condition = record.get("condition")
+        if not pair_id or not condition:
+            continue
+        by_pair.setdefault(str(pair_id), {})[str(condition)] = record
+    return by_pair
+
+
+def _fault_records(records: list[dict]) -> list[dict]:
+    return [
+        r for r in records
+        if r.get("condition") == "cj_fault"
+        or (r.get("phase") == "fault" and r.get("fault_type") not in ("", "none", "passthrough"))
+    ]
+
+
+def _severity_label(record: dict) -> str:
+    params = record.get("fault_parameters") if isinstance(record.get("fault_parameters"), dict) else {}
+    for key in ("severity", "delay_s", "timeout_s", "max_tokens", "mode", "n"):
+        if key in params:
+            return f"{key}={params[key]}"
+    if params:
+        return json.dumps(params, sort_keys=True)
+    return ""
+
+
+def _science_key(record: dict) -> tuple:
+    return (
+        record.get("agent_level", ""),
+        record.get("agent_system", ""),
+        record.get("topology", ""),
+        record.get("benchmark", ""),
+        record.get("model", ""),
+        record.get("fault_type", "none"),
+        _severity_label(record),
+    )
+
+
+def _ci_from_triplet_diffs(
+    triplets: list[tuple[dict, dict, dict]],
+    diff_fn,
+    *,
+    iterations: int = 2000,
+    seed: int = 0,
+) -> dict[str, Any]:
+    clusters: dict[str, list[float]] = {}
+    for base, control, fault in triplets:
+        task_id = str(fault.get("task_id") or base.get("task_id") or fault.get("pair_id"))
+        clusters.setdefault(task_id, []).append(float(diff_fn(base, control, fault)))
+    task_ids = sorted(clusters)
+    values = [v for vals in clusters.values() for v in vals]
+    if not values:
+        return {"mean": None, "ci_low": None, "ci_high": None, "n_tasks": 0}
+    observed = sum(values) / len(values)
+    rng = random.Random(seed)
+    samples: list[float] = []
+    for _ in range(iterations):
+        picked = [rng.choice(task_ids) for _ in task_ids]
+        vals = [v for task_id in picked for v in clusters[task_id]]
+        samples.append(sum(vals) / len(vals))
+    samples.sort()
+    low_idx = max(0, int(0.025 * iterations) - 1)
+    high_idx = min(iterations - 1, int(0.975 * iterations) - 1)
+    return {
+        "mean": observed,
+        "ci_low": samples[low_idx],
+        "ci_high": samples[high_idx],
+        "n_tasks": len(task_ids),
+    }
+
+
+def _lifecycle(record: dict) -> dict:
+    lifecycle = record.get("lifecycle")
+    return lifecycle if isinstance(lifecycle, dict) else {}
+
+
+def _evidence_entries(record: dict) -> list[dict]:
+    evidence = _lifecycle(record).get("evidence")
+    if not isinstance(evidence, dict):
+        return []
+    raw_items = evidence.get("fault_evidence") or []
+    entries: list[dict] = []
+    if isinstance(raw_items, (str, dict)):
+        raw_items = [raw_items]
+    for item in raw_items:
+        parsed = _json_or(item, {})
+        if isinstance(parsed, dict):
+            # Old proxy evidence can be a fault->quantity mapping.
+            if {"fault_id", "fault_type", "target", "evidence"} & set(parsed):
+                entries.append(parsed)
+            else:
+                for fault_type, ev in parsed.items():
+                    if isinstance(ev, dict):
+                        entries.append({"fault_type": fault_type, "evidence": ev})
+                    else:
+                        entries.append({"fault_type": fault_type, "observed": ev})
+        elif isinstance(parsed, list):
+            entries.extend(x for x in parsed if isinstance(x, dict))
+    return entries
+
+
+def _affected_call_count(record: dict) -> int:
+    entries = _evidence_entries(record)
+    if entries:
+        return sum(
+            1 for entry in entries
+            if entry.get("triggered", True) is not False
+            and entry.get("applied", True) is not False
+        )
+    evidence = _lifecycle(record).get("evidence")
+    if isinstance(evidence, dict):
+        triggered = evidence.get("triggered_faults") or []
+        count = 0
+        for item in triggered:
+            parsed = _json_or(item, [])
+            if isinstance(parsed, list) and parsed:
+                count += 1
+        if count:
+            return count
+    return int(_lifecycle(record).get("proxy_call_count") or 0)
+
+
+def _validity_counts(records: list[dict]) -> dict[str, Any]:
+    configured = [r for r in records if _lifecycle(r).get("configured") is True]
+    activated = [r for r in configured if _lifecycle(r).get("activated") is True]
+    triggered = [r for r in activated if _lifecycle(r).get("triggered") is True]
+    manifested = [r for r in triggered if _lifecycle(r).get("manifested") is True]
+    reverted = [r for r in activated if _lifecycle(r).get("reverted") is True]
+    recovered = [r for r in reverted if _lifecycle(r).get("recovered") is True]
+    return {
+        "configured_count": len(configured),
+        "activated_count": len(activated),
+        "triggered_count": len(triggered),
+        "manifested_count": len(manifested),
+        "reverted_count": len(reverted),
+        "recovered_count": len(recovered),
+        "activation_rate": _ratio(len(activated), len(configured)),
+        "trigger_rate": _ratio(len(triggered), len(activated)),
+        "manifestation_rate": _ratio(len(manifested), len(triggered)),
+        "reversion_rate": _ratio(len(reverted), len(activated)),
+        "verified_recovery_rate": _ratio(len(recovered), len(reverted)),
+        "invalid_experiment_rate": _ratio(sum(1 for r in configured if r.get("validity") == "invalid"), len(configured)),
+        "inconclusive_rate": _ratio(sum(1 for r in configured if r.get("validity") == "inconclusive"), len(configured)),
+        "untriggered_rate": _ratio(sum(1 for r in configured if r.get("validity") == "untriggered"), len(configured)),
+    }
+
+
+def _selectivity_metrics(records: list[dict]) -> dict[str, Any]:
+    affected = 0
+    targeted_affected = 0
+    targeted_calls = 0
+    has_target = False
+    for record in records:
+        role = record.get("fault_target_role")
+        if not role:
+            continue
+        has_target = True
+        for entry in _evidence_entries(record):
+            target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+            evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else {}
+            request_meta = evidence.get("request_meta") if isinstance(evidence.get("request_meta"), dict) else {}
+            agent_role = target.get("agent_role") or request_meta.get("agent_role")
+            if agent_role == role:
+                targeted_calls += 1
+            if entry.get("applied", entry.get("triggered", True)):
+                affected += 1
+                if agent_role == role:
+                    targeted_affected += 1
+    if not has_target:
+        return {"selectivity_precision": None, "target_coverage": None}
+    return {
+        "selectivity_precision": _ratio(targeted_affected, affected),
+        "target_coverage": _ratio(targeted_affected, targeted_calls),
+    }
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -153,33 +373,482 @@ def write_condition_summary_csv(
 
 
 def write_cj_overhead_summary_csv(records: list[dict], path: str) -> None:
-    """Compare direct_baseline with cj_control by exact pair_id."""
+    """Compare direct_baseline with cj_control by exact pair_id.
+
+    Rows are stratified by system/model/topology/benchmark.  The primary
+    duration overhead is ``(T_C - T_B) / T_B``; negative medians are retained as
+    measurements but should be interpreted as noise, not evidence that CJ makes
+    workloads faster.
+    """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    direct = {r.get("pair_id"): r for r in records if r.get("condition") == "direct_baseline"}
-    controls = [r for r in records if r.get("condition") == "cj_control"]
-    rows = []
-    for ctrl in controls:
-        base = direct.get(ctrl.get("pair_id"))
-        if not base:
+    by_pair = _condition_index(records)
+    grouped: dict[tuple, list[tuple[dict, dict]]] = {}
+    for pair in by_pair.values():
+        base = pair.get("direct_baseline")
+        ctrl = pair.get("cj_control")
+        if not base or not ctrl:
             continue
+        key = (
+            ctrl.get("agent_level", ""),
+            ctrl.get("framework") or ctrl.get("agent_system", ""),
+            ctrl.get("topology", ""),
+            ctrl.get("benchmark", ""),
+            ctrl.get("model", ""),
+        )
+        grouped.setdefault(key, []).append((base, ctrl))
+    rows = []
+    for (level, framework, topology, benchmark, model), pairs in sorted(grouped.items()):
+        triplets = [(base, ctrl, ctrl) for base, ctrl in pairs]
+        duration_rel = [
+            (_as_float(ctrl.get("duration_s")) - _as_float(base.get("duration_s"))) / _as_float(base.get("duration_s"))
+            for base, ctrl in pairs
+            if _as_float(base.get("duration_s")) > 0
+        ]
+        ci = _ci_from_triplet_diffs(
+            triplets,
+            lambda base, control, _fault: (
+                (_as_float(control.get("duration_s")) - _as_float(base.get("duration_s")))
+                / _as_float(base.get("duration_s"))
+            ) if _as_float(base.get("duration_s")) > 0 else 0.0,
+        )
         rows.append({
-            "pair_id": ctrl.get("pair_id", ""),
-            "agent_level": ctrl.get("agent_level", ""),
-            "framework": ctrl.get("framework") or ctrl.get("agent_system", ""),
-            "topology": ctrl.get("topology", ""),
-            "benchmark": ctrl.get("benchmark", ""),
-            "task_id": ctrl.get("task_id", ""),
-            "duration_overhead_s": float(ctrl.get("duration_s", 0) or 0) - float(base.get("duration_s", 0) or 0),
-            "llm_call_overhead": int(ctrl.get("llm_calls", 0) or 0) - int(base.get("llm_calls", 0) or 0),
-            "token_overhead": int(ctrl.get("total_tokens", 0) or 0) - int(base.get("total_tokens", 0) or 0),
-            "correctness_difference": float(ctrl.get("success", 0) or 0) - float(base.get("success", 0) or 0),
+            "agent_level": level,
+            "framework": framework,
+            "topology": topology,
+            "benchmark": benchmark,
+            "model": model,
+            "n_pairs": len(pairs),
+            "median_duration_overhead_ratio": _median(duration_rel),
+            "mean_duration_overhead_ratio": _mean(duration_rel),
+            "duration_overhead_ci_low": ci.get("ci_low"),
+            "duration_overhead_ci_high": ci.get("ci_high"),
+            "median_duration_overhead_s": _median([
+                _as_float(ctrl.get("duration_s")) - _as_float(base.get("duration_s"))
+                for base, ctrl in pairs
+            ]),
+            "correctness_overhead": _mean([
+                _as_float(base.get("success")) - _as_float(ctrl.get("success"))
+                for base, ctrl in pairs
+            ]),
+            "llm_call_overhead": _mean([
+                _as_float(ctrl.get("llm_calls")) - _as_float(base.get("llm_calls"))
+                for base, ctrl in pairs
+            ]),
+            "tool_call_overhead": _mean([
+                _as_float(ctrl.get("tool_calls")) - _as_float(base.get("tool_calls"))
+                for base, ctrl in pairs
+            ]),
+            "token_overhead": _mean([
+                _as_float(ctrl.get("total_tokens")) - _as_float(base.get("total_tokens"))
+                for base, ctrl in pairs
+            ]),
+            "cost_overhead_usd": _mean([
+                _as_float(ctrl.get("cost_usd")) - _as_float(base.get("cost_usd"))
+                for base, ctrl in pairs
+            ]),
+            "cpu_usage_overhead": _mean([
+                _as_float(ctrl.get("cpu_usage")) - _as_float(base.get("cpu_usage"))
+                for base, ctrl in pairs
+                if "cpu_usage" in ctrl or "cpu_usage" in base
+            ]),
+            "peak_memory_overhead": _mean([
+                _as_float(ctrl.get("peak_memory_bytes")) - _as_float(base.get("peak_memory_bytes"))
+                for base, ctrl in pairs
+                if "peak_memory_bytes" in ctrl or "peak_memory_bytes" in base
+            ]),
+            "network_bytes_overhead": _mean([
+                _as_float(ctrl.get("network_bytes")) - _as_float(base.get("network_bytes"))
+                for base, ctrl in pairs
+                if "network_bytes" in ctrl or "network_bytes" in base
+            ]),
         })
     fields = list(rows[0].keys()) if rows else [
-        "pair_id", "agent_level", "framework", "topology", "benchmark", "task_id",
-        "duration_overhead_s", "llm_call_overhead", "token_overhead", "correctness_difference",
+        "agent_level", "framework", "topology", "benchmark", "model", "n_pairs",
+        "median_duration_overhead_ratio", "mean_duration_overhead_ratio",
+        "duration_overhead_ci_low", "duration_overhead_ci_high",
+        "median_duration_overhead_s", "correctness_overhead",
+        "llm_call_overhead", "tool_call_overhead", "token_overhead",
+        "cost_overhead_usd", "cpu_usage_overhead", "peak_memory_overhead",
+        "network_bytes_overhead",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_scientific_summary_csv(records: list[dict], path: str) -> None:
+    """Write the principal scientific result table.
+
+    Fault-effect estimates use only complete triplets whose fault record is
+    classified ``valid``.  Invalid, inconclusive, and untriggered experiments
+    are counted separately in the data-quality fields.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    by_pair = _condition_index(records)
+    grouped: dict[tuple, list[tuple[dict | None, dict | None, dict]]] = {}
+    for fault in _fault_records(records):
+        pair = by_pair.get(str(fault.get("pair_id")), {})
+        grouped.setdefault(_science_key(fault), []).append((
+            pair.get("direct_baseline"),
+            pair.get("cj_control"),
+            fault,
+        ))
+
+    rows: list[dict[str, Any]] = []
+    for key, triplet_like in sorted(grouped.items()):
+        level, system, topology, benchmark, model, fault_type, severity = key
+        complete = [(b, c, f) for b, c, f in triplet_like if b and c]
+        valid = [(b, c, f) for b, c, f in complete if f.get("validity") == "valid"]
+        baseline_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(b)]
+        conditional_success = [f for _b, _c, f in baseline_eligible if _as_bool_success(f)]
+        fault_deg_ci = _ci_from_triplet_diffs(
+            valid,
+            lambda _b, c, f: _as_float(c.get("success")) - _as_float(f.get("success")),
+        )
+        counts = _validity_counts([f for _b, _c, f in triplet_like])
+        selectivity = _selectivity_metrics([f for _b, _c, f in triplet_like])
+        overhead_ratios = [
+            (_as_float(c.get("duration_s")) - _as_float(b.get("duration_s"))) / _as_float(b.get("duration_s"))
+            for b, c, _f in complete
+            if _as_float(b.get("duration_s")) > 0
+        ]
+        rows.append({
+            "agent_level": level,
+            "system": system,
+            "model": model,
+            "fault": fault_type,
+            "severity": severity,
+            "topology": topology,
+            "benchmark": benchmark,
+            "tasks": len({(f.get("task_id") or "") for _b, _c, f in complete}),
+            "unique_tasks": len({(f.get("task_id") or "") for _b, _c, f in complete}),
+            "complete_triplets": len(complete),
+            "missing_pair_count": len(triplet_like) - len(complete),
+            "valid_pairs": len(valid),
+            "baseline_eligible_pairs": len(baseline_eligible),
+            "baseline_pass_at_1": _mean([_as_float(b.get("success")) for b, _c, _f in valid]),
+            "control_pass_at_1": _mean([_as_float(c.get("success")) for _b, c, _f in valid]),
+            "fault_pass_at_1": _mean([_as_float(f.get("success")) for _b, _c, f in valid]),
+            "total_degradation": _mean([
+                _as_float(b.get("success")) - _as_float(f.get("success"))
+                for b, _c, f in valid
+            ]),
+            "fault_specific_degradation": fault_deg_ci.get("mean"),
+            "cj_correctness_overhead": _mean([
+                _as_float(b.get("success")) - _as_float(c.get("success"))
+                for b, c, _f in valid
+            ]),
+            "conditional_robustness": _ratio(len(conditional_success), len(baseline_eligible)),
+            "catastrophic_failure_rate": _ratio(len(baseline_eligible) - len(conditional_success), len(baseline_eligible)),
+            "fault_degradation_ci_low": fault_deg_ci.get("ci_low"),
+            "fault_degradation_ci_high": fault_deg_ci.get("ci_high"),
+            "trigger_rate": counts["trigger_rate"],
+            "manifestation_rate": counts["manifestation_rate"],
+            "recovery_rate": counts["verified_recovery_rate"],
+            "cj_overhead": _median(overhead_ratios),
+            "activation_rate": counts["activation_rate"],
+            "invalid_experiment_rate": counts["invalid_experiment_rate"],
+            "inconclusive_rate": counts["inconclusive_rate"],
+            "untriggered_rate": counts["untriggered_rate"],
+            "excluded_invalid_count": sum(1 for _b, _c, f in triplet_like if f.get("validity") == "invalid"),
+            "excluded_inconclusive_count": sum(1 for _b, _c, f in triplet_like if f.get("validity") == "inconclusive"),
+            "excluded_untriggered_count": sum(1 for _b, _c, f in triplet_like if f.get("validity") == "untriggered"),
+            "selectivity_precision": selectivity["selectivity_precision"],
+            "target_coverage": selectivity["target_coverage"],
+            "framework_versions": json.dumps(_first_nonempty([f.get("framework_versions") for _b, _c, f in triplet_like]), sort_keys=True),
+            "cj_commit": _first_nonempty([f.get("cj_commit") for _b, _c, f in triplet_like]),
+            "docker_image_digest": _first_nonempty([f.get("docker_image_digest") or f.get("image_digest") for _b, _c, f in triplet_like]),
+            "fault_parameters": json.dumps(_first_nonempty([f.get("fault_parameters") for _b, _c, f in triplet_like]) or {}, sort_keys=True),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "model", "fault", "severity", "topology",
+        "benchmark", "tasks", "unique_tasks", "complete_triplets",
+        "missing_pair_count", "valid_pairs", "baseline_eligible_pairs",
+        "baseline_pass_at_1", "control_pass_at_1", "fault_pass_at_1",
+        "total_degradation", "fault_specific_degradation",
+        "cj_correctness_overhead", "conditional_robustness",
+        "catastrophic_failure_rate", "fault_degradation_ci_low",
+        "fault_degradation_ci_high", "trigger_rate", "manifestation_rate",
+        "recovery_rate", "cj_overhead", "activation_rate",
+        "invalid_experiment_rate", "inconclusive_rate", "untriggered_rate",
+        "excluded_invalid_count", "excluded_inconclusive_count",
+        "excluded_untriggered_count", "selectivity_precision", "target_coverage",
+        "framework_versions", "cj_commit", "docker_image_digest",
+        "fault_parameters",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _first_nonempty(values: list[Any]) -> Any:
+    for value in values:
+        if value not in (None, "", {}, []):
+            return value
+    return ""
+
+
+def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
+    """Write fault-fidelity metrics from CJ evidence and paired controls."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    by_pair = _condition_index(records)
+    grouped: dict[tuple, list[tuple[dict | None, dict]]] = {}
+    for fault in _fault_records(records):
+        pair = by_pair.get(str(fault.get("pair_id")), {})
+        grouped.setdefault(_science_key(fault), []).append((pair.get("cj_control"), fault))
+
+    rows: list[dict[str, Any]] = []
+    for key, pairs in sorted(grouped.items()):
+        level, system, topology, benchmark, model, fault_type, severity = key
+        fault_records = [f for _c, f in pairs]
+        affected_calls = sum(_affected_call_count(f) for f in fault_records)
+        intercepted_calls = sum(int(_lifecycle(f).get("proxy_call_count") or 0) for f in fault_records)
+        observed_added = [
+            _as_float(f.get("duration_s")) - _as_float(c.get("duration_s"))
+            for c, f in pairs
+            if c is not None
+        ]
+        params = _first_nonempty([f.get("fault_parameters") for f in fault_records])
+        params = params if isinstance(params, dict) else {}
+        configured_delay = _as_float(params.get("delay_s"), 0.0)
+        expected_latency = affected_calls * configured_delay if fault_type == "llm_latency" else None
+        observed_latency = sum(observed_added) if fault_type == "llm_latency" and observed_added else None
+        evidence_values = _observed_evidence_values(fault_records)
+        rows.append({
+            "agent_level": level,
+            "system": system,
+            "topology": topology,
+            "benchmark": benchmark,
+            "model": model,
+            "fault": fault_type,
+            "severity": severity,
+            "configured_severity": json.dumps(params, sort_keys=True),
+            "intercepted_calls": intercepted_calls,
+            "affected_calls": affected_calls,
+            "observed_added_latency_s": observed_latency,
+            "expected_added_latency_s": expected_latency,
+            "latency_error_s": (
+                abs(float(observed_latency) - float(expected_latency))
+                if observed_latency is not None and expected_latency is not None
+                else None
+            ),
+            "observed_added_latency_per_affected_call_s": (
+                observed_latency / affected_calls
+                if observed_latency is not None and affected_calls
+                else None
+            ),
+            "observed_http_statuses": json.dumps(sorted(evidence_values.get("http_status", []))),
+            "observed_modes": json.dumps(sorted(evidence_values.get("mode", []))),
+            "observed_truncated_token_counts": json.dumps(sorted(evidence_values.get("truncated_tokens", []))),
+            "injection_point_timing": "",
+            "activation_verification_time_s": "",
+            "recovery_verification_time_s": "",
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "topology", "benchmark", "model", "fault",
+        "severity", "configured_severity", "intercepted_calls", "affected_calls",
+        "observed_added_latency_s", "expected_added_latency_s", "latency_error_s",
+        "observed_added_latency_per_affected_call_s", "observed_http_statuses",
+        "observed_modes", "observed_truncated_token_counts",
+        "injection_point_timing", "activation_verification_time_s",
+        "recovery_verification_time_s",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _observed_evidence_values(records: list[dict]) -> dict[str, set[str]]:
+    values: dict[str, set[str]] = {
+        "http_status": set(),
+        "mode": set(),
+        "truncated_tokens": set(),
+    }
+    for record in records:
+        for entry in _evidence_entries(record):
+            evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else entry
+            for key in values:
+                if key in evidence:
+                    values[key].add(str(evidence[key]))
+    return values
+
+
+def write_agent_resilience_summary_csv(records: list[dict], path: str) -> None:
+    """Write agent-recovery metrics, separate from CJ cleanup metrics."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    by_pair = _condition_index(records)
+    grouped: dict[tuple, list[tuple[dict, dict, dict]]] = {}
+    for fault in _fault_records(records):
+        pair = by_pair.get(str(fault.get("pair_id")), {})
+        base = pair.get("direct_baseline")
+        control = pair.get("cj_control")
+        if base and control and fault.get("validity") == "valid":
+            grouped.setdefault(_science_key(fault), []).append((base, control, fault))
+
+    rows: list[dict[str, Any]] = []
+    for key, triplets in sorted(grouped.items()):
+        level, system, topology, benchmark, model, fault_type, severity = key
+        baseline_success_faults = [(b, c, f) for b, c, f in triplets if _as_bool_success(b)]
+        fault_failures_after_baseline_success = [
+            (b, c, f) for b, c, f in baseline_success_faults if not _as_bool_success(f)
+        ]
+        detected = [f for _b, _c, f in triplets if _agent_detected_fault(f)]
+        continued = [f for _b, _c, f in triplets if _agent_continued(f)]
+        repair = [f for _b, _c, f in triplets if _agent_attempted_repair(f)]
+        successful_repair = [f for _b, _c, f in triplets if _agent_attempted_repair(f) and _as_bool_success(f)]
+        graceful = [f for _b, _c, f in triplets if not _as_bool_success(f) and _agent_detected_fault(f)]
+        silent = [
+            f for _b, _c, f in fault_failures_after_baseline_success
+            if not _agent_detected_fault(f)
+        ]
+        rows.append({
+            "agent_level": level,
+            "system": system,
+            "topology": topology,
+            "benchmark": benchmark,
+            "model": model,
+            "fault": fault_type,
+            "severity": severity,
+            "valid_pairs": len(triplets),
+            "baseline_eligible_pairs": len(baseline_success_faults),
+            "fault_detection_rate": _ratio(len(detected), len(triplets)),
+            "continued_operation_rate": _ratio(len(continued), len(triplets)),
+            "retry_repair_rate": _ratio(len(repair), len(triplets)),
+            "successful_repair_rate": _ratio(len(successful_repair), len(repair)),
+            "graceful_failure_rate": _ratio(len(graceful), len(triplets)),
+            "silent_failure_rate": _ratio(len(silent), len(fault_failures_after_baseline_success)),
+            "recovery_latency_s": "",
+            "extra_llm_calls": _mean([
+                _as_float(f.get("llm_calls")) - _as_float(c.get("llm_calls"))
+                for _b, c, f in triplets
+            ]),
+            "extra_tool_calls": _mean([
+                _as_float(f.get("tool_calls")) - _as_float(c.get("tool_calls"))
+                for _b, c, f in triplets
+            ]),
+            "extra_turns": _mean([
+                _as_float(f.get("turns")) - _as_float(c.get("turns"))
+                for _b, c, f in triplets
+            ]),
+            "extra_tokens": _mean([
+                _as_float(f.get("total_tokens")) - _as_float(c.get("total_tokens"))
+                for _b, c, f in triplets
+            ]),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "topology", "benchmark", "model", "fault",
+        "severity", "valid_pairs", "baseline_eligible_pairs",
+        "fault_detection_rate", "continued_operation_rate", "retry_repair_rate",
+        "successful_repair_rate", "graceful_failure_rate", "silent_failure_rate",
+        "recovery_latency_s", "extra_llm_calls", "extra_tool_calls",
+        "extra_turns", "extra_tokens",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _agent_detected_fault(record: dict) -> bool:
+    if _as_float(record.get("reported_error"), 0.0) > 0:
+        return True
+    if record.get("exception"):
+        return True
+    trace = record.get("execution_trace") or (record.get("result") or {}).get("execution_trace", [])
+    if isinstance(trace, list):
+        return any(
+            isinstance(event, dict)
+            and event.get("event_type") in {"error_detection", "attempted_recovery"}
+            for event in trace
+        )
+    return False
+
+
+def _agent_continued(record: dict) -> bool:
+    if record.get("executor_timed_out") is True:
+        return False
+    status = str(record.get("executor_status", "")).lower()
+    reason = str(record.get("termination_reason", "")).lower()
+    return status in {"", "ok"} and reason not in {"timeout", "killed", "container_killed"}
+
+
+def _agent_attempted_repair(record: dict) -> bool:
+    if _as_float(record.get("retries"), 0.0) > 0:
+        return True
+    trace = record.get("execution_trace") or (record.get("result") or {}).get("execution_trace", [])
+    if isinstance(trace, list):
+        return any(
+            isinstance(event, dict)
+            and event.get("event_type") in {"attempted_recovery", "revision_request"}
+            for event in trace
+        )
+    return False
+
+
+def write_data_quality_summary_csv(records: list[dict], path: str) -> None:
+    """Write reproducibility and data-quality counts per scientific stratum."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    by_pair = _condition_index(records)
+    grouped: dict[tuple, list[tuple[dict | None, dict | None, dict]]] = {}
+    for fault in _fault_records(records):
+        pair = by_pair.get(str(fault.get("pair_id")), {})
+        grouped.setdefault(_science_key(fault), []).append((
+            pair.get("direct_baseline"),
+            pair.get("cj_control"),
+            fault,
+        ))
+
+    rows: list[dict[str, Any]] = []
+    for key, triplet_like in sorted(grouped.items()):
+        level, system, topology, benchmark, model, fault_type, severity = key
+        complete = [(b, c, f) for b, c, f in triplet_like if b and c]
+        valid = [(b, c, f) for b, c, f in complete if f.get("validity") == "valid"]
+        baseline_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(b)]
+        fault_records = [f for _b, _c, f in triplet_like]
+        rows.append({
+            "agent_level": level,
+            "system": system,
+            "topology": topology,
+            "benchmark": benchmark,
+            "model": model,
+            "fault": fault_type,
+            "severity": severity,
+            "records": len(fault_records),
+            "tasks": len([f.get("task_id") for f in fault_records]),
+            "unique_tasks": len({f.get("task_id") for f in fault_records}),
+            "repetitions": len({(f.get("task_id"), f.get("seed")) for f in fault_records}),
+            "complete_triplets": len(complete),
+            "missing_pair_count": len(triplet_like) - len(complete),
+            "baseline_eligible_pair_count": len(baseline_eligible),
+            "valid_fault_pair_count": len(valid),
+            "excluded_invalid_count": sum(1 for f in fault_records if f.get("validity") == "invalid"),
+            "excluded_inconclusive_count": sum(1 for f in fault_records if f.get("validity") == "inconclusive"),
+            "excluded_untriggered_count": sum(1 for f in fault_records if f.get("validity") == "untriggered"),
+            "model_versions": model,
+            "framework_versions": json.dumps(_first_nonempty([f.get("framework_versions") for f in fault_records]), sort_keys=True),
+            "cj_commit": _first_nonempty([f.get("cj_commit") for f in fault_records]),
+            "docker_image_digest": _first_nonempty([f.get("docker_image_digest") or f.get("image_digest") for f in fault_records]),
+            "fault_parameters": json.dumps(_first_nonempty([f.get("fault_parameters") for f in fault_records]) or {}, sort_keys=True),
+            "resource_limits": json.dumps(_first_nonempty([f.get("container_resource_limits") for f in fault_records]) or {}, sort_keys=True),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "topology", "benchmark", "model", "fault",
+        "severity", "records", "tasks", "unique_tasks", "repetitions",
+        "complete_triplets", "missing_pair_count", "baseline_eligible_pair_count",
+        "valid_fault_pair_count", "excluded_invalid_count",
+        "excluded_inconclusive_count", "excluded_untriggered_count",
+        "model_versions", "framework_versions", "cj_commit",
+        "docker_image_digest", "fault_parameters", "resource_limits",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
 
@@ -202,6 +871,18 @@ def write_multi_agent_process_summary_csv(records: list[dict], path: str) -> Non
         handoffs = sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "handoff")
         detections = sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "error_detection")
         repairs = sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "attempted_recovery")
+        targeted_role = r.get("fault_target_role", "")
+        affected_roles = {
+            e.get("agent_role")
+            for e in trace
+            if isinstance(e, dict)
+            and e.get("agent_role")
+            and e.get("event_type") in {"error_detection", "attempted_recovery", "error", "fault_observed"}
+        }
+        propagation_roles = {
+            role for role in affected_roles
+            if targeted_role and role != targeted_role
+        }
         rows.append({
             "study_id": r.get("study_id", ""),
             "pair_id": r.get("pair_id", ""),
@@ -212,16 +893,51 @@ def write_multi_agent_process_summary_csv(records: list[dict], path: str) -> Non
             "task_id": r.get("task_id", ""),
             "message_count": len(trace),
             "affected_roles": len(roles),
+            "affected_role_count": len(affected_roles),
+            "affected_role_percentage": _ratio(len(affected_roles), len(roles)),
+            "fault_propagation_probability": 1.0 if propagation_roles else 0.0 if targeted_role else "",
+            "propagation_depth": len(propagation_roles) if targeted_role else "",
+            "time_to_propagation_s": "",
             "successful_handoff_count": handoffs,
+            "failed_handoff_count": sum(
+                1 for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "handoff_failed"
+            ),
+            "message_loss_count": sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "message_loss"),
+            "message_corruption_count": sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "message_corruption"),
+            "message_duplication_count": sum(1 for e in trace if isinstance(e, dict) and e.get("event_type") == "message_duplication"),
+            "detection_role": _first_nonempty([
+                e.get("agent_role")
+                for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "error_detection"
+            ]),
+            "repairing_role": _first_nonempty([
+                e.get("agent_role")
+                for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "attempted_recovery"
+            ]),
             "revision_rounds": revisions,
+            "coordination_overhead": "",
+            "topology_conditional_robustness": "",
+            "containment_rate": (
+                1.0 if targeted_role and not propagation_roles
+                else 0.0 if targeted_role
+                else ""
+            ),
             "fault_detection_events": detections,
             "attempted_recovery_events": repairs,
             "final_pass1": result.get("success", r.get("success", "")),
         })
     fields = list(rows[0].keys()) if rows else [
         "study_id", "pair_id", "run_id", "condition", "framework", "topology",
-        "task_id", "message_count", "affected_roles", "successful_handoff_count",
-        "revision_rounds", "fault_detection_events", "attempted_recovery_events",
+        "task_id", "message_count", "affected_roles", "affected_role_count",
+        "affected_role_percentage", "fault_propagation_probability",
+        "propagation_depth", "time_to_propagation_s", "successful_handoff_count",
+        "failed_handoff_count", "message_loss_count", "message_corruption_count",
+        "message_duplication_count", "detection_role", "repairing_role",
+        "revision_rounds", "coordination_overhead",
+        "topology_conditional_robustness", "containment_rate",
+        "fault_detection_events", "attempted_recovery_events",
         "final_pass1",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -241,9 +957,43 @@ def write_study_manifest(records: list[dict], path: str, study_id: str | None) -
         "frameworks": sorted({(r.get("framework") or r.get("agent_system", "")) for r in records}),
         "benchmarks": sorted({r.get("benchmark", "") for r in records if r.get("benchmark")}),
         "task_ids": sorted({r.get("task_id", "") for r in records if r.get("task_id")}),
+        "models": sorted({r.get("model", "") for r in records if r.get("model")}),
+        "seeds": sorted({r.get("seed") for r in records if r.get("seed") is not None}),
+        "faults": sorted({r.get("fault_type", "") for r in records if r.get("fault_type")}),
+        "cj_commits": sorted({r.get("cj_commit", "") for r in records if r.get("cj_commit")}),
+        "docker_images": sorted({r.get("docker_image", "") for r in records if r.get("docker_image")}),
+        "docker_image_digests": sorted({
+            r.get("docker_image_digest") or r.get("image_digest", "")
+            for r in records
+            if r.get("docker_image_digest") or r.get("image_digest")
+        }),
+        "resource_limits": _unique_json_values([
+            r.get("container_resource_limits") for r in records
+            if r.get("container_resource_limits")
+        ]),
+        "framework_versions": _unique_json_values([
+            r.get("framework_versions") for r in records
+            if r.get("framework_versions")
+        ]),
+        "fault_parameters": _unique_json_values([
+            r.get("fault_parameters") for r in records
+            if r.get("fault_parameters")
+        ]),
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
+
+
+def _unique_json_values(values: list[Any]) -> list[Any]:
+    seen: set[str] = set()
+    out: list[Any] = []
+    for value in values:
+        key = json.dumps(value, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
 
 
 def write_validity_summary_csv(records: list[dict], path: str) -> None:
@@ -260,18 +1010,34 @@ def write_validity_summary_csv(records: list[dict], path: str) -> None:
     for (sys, bench, fault), group_recs in groupby(sorted_recs, key=key):
         recs = list(group_recs)
         filt = classify_records(recs)
+        fault_recs = filt.all_fault
+        counts = _validity_counts(fault_recs)
+        selectivity = _selectivity_metrics(fault_recs)
         rows.append({
             "agent_system":        sys,
             "benchmark":           bench,
             "fault_type":          fault,
             "n_baseline":          len(filt.baseline),
+            "n_configured":         counts["configured_count"],
+            "n_activated":          counts["activated_count"],
+            "n_triggered":          counts["triggered_count"],
+            "n_manifested":         counts["manifested_count"],
+            "n_reverted":           counts["reverted_count"],
+            "n_recovered":          counts["recovered_count"],
             "n_valid":             len(filt.valid),
             "n_invalid":           len(filt.invalid),
             "n_inconclusive":      len(filt.inconclusive),
             "n_untriggered":       len(filt.untriggered),
-            "trigger_rate":        filt.trigger_rate,
-            "manifestation_rate":  filt.manifestation_rate,
-            "recovery_rate":       filt.recovery_rate,
+            "activation_rate":      counts["activation_rate"],
+            "trigger_rate":         counts["trigger_rate"],
+            "manifestation_rate":   counts["manifestation_rate"],
+            "reversion_rate":       counts["reversion_rate"],
+            "verified_recovery_rate": counts["verified_recovery_rate"],
+            "invalid_experiment_rate": counts["invalid_experiment_rate"],
+            "inconclusive_rate":    counts["inconclusive_rate"],
+            "untriggered_rate":     counts["untriggered_rate"],
+            "selectivity_precision": selectivity["selectivity_precision"],
+            "target_coverage":      selectivity["target_coverage"],
         })
 
     if not rows:
@@ -566,9 +1332,13 @@ def generate_all_outputs(
 
     write_task_results_csv(records, os.path.join(results_dir, "task_results.csv"))
     write_condition_summary_csv(records, os.path.join(results_dir, "condition_summary.csv"))
+    write_scientific_summary_csv(records, os.path.join(results_dir, "scientific_summary.csv"))
     write_validity_summary_csv(records, os.path.join(results_dir, "validity_summary.csv"))
+    write_fault_fidelity_summary_csv(records, os.path.join(results_dir, "fault_fidelity_summary.csv"))
     write_group_summary_csv(records, os.path.join(results_dir, "group_summary.csv"))
     write_cj_overhead_summary_csv(records, os.path.join(results_dir, "cj_overhead_summary.csv"))
+    write_agent_resilience_summary_csv(records, os.path.join(results_dir, "agent_resilience_summary.csv"))
+    write_data_quality_summary_csv(records, os.path.join(results_dir, "data_quality_summary.csv"))
     write_multi_agent_process_summary_csv(records, os.path.join(results_dir, "multi_agent_process_summary.csv"))
     write_stats_summary_csv(records, os.path.join(results_dir, "stats_summary.csv"))
     write_inferential_summary_csv(records, os.path.join(results_dir, "inferential_summary.csv"))

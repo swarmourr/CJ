@@ -13,7 +13,7 @@ trigger_rate      = triggered / attempted
 manifestation_rate= manifested / triggered
 recovery_rate     = recovered / manifested
 robustness_score  = fault_success_among_baseline_successes / baseline_successes
-silent_failure_rate = silent_incorrect / manifested
+silent_failure_rate = P(no explicit error | baseline passed, fault failed, valid fault)
 llm_call_amplification = fault_llm_calls / baseline_llm_calls
 """
 
@@ -43,7 +43,9 @@ class AggregationMetrics:
 
     # ── Robustness + silent failure ────────────────────────────────────────────
     robustness_score:     float | None = None
+    catastrophic_failure_rate: float | None = None
     silent_failure_rate:  float | None = None
+    baseline_eligible_pairs: int = 0
 
     # ── Amplification factors ──────────────────────────────────────────────────
     llm_call_amplification:   float | None = None
@@ -93,6 +95,8 @@ class AggregationMetrics:
             lines.append(f"  recovery rate        : {self.recovery_rate:.3f}")
         if self.robustness_score is not None:
             lines.append(f"  robustness score     : {self.robustness_score:.3f}")
+        if self.catastrophic_failure_rate is not None:
+            lines.append(f"  catastrophic failure : {self.catastrophic_failure_rate:.3f}")
         if self.silent_failure_rate is not None:
             lines.append(f"  silent failure rate  : {self.silent_failure_rate:.3f}")
         if self.llm_call_amplification is not None:
@@ -180,13 +184,14 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
     # Fault success restricted to tasks that succeeded at baseline.
     # Prefer pair_id for exact (task, repeat) matching; fall back to task_id
     # for legacy records without pair_id.
+    baseline_success_faults: list[dict] = []
     if filt.baseline and filt.valid:
         baseline_success_pairs = {
             r["pair_id"] for r in filt.baseline
             if r.get("success", 0.0) >= 0.5 and r.get("pair_id")
         }
         if baseline_success_pairs:
-            fault_among_baseline_success = [
+            baseline_success_faults = [
                 r for r in filt.valid if r.get("pair_id") in baseline_success_pairs
             ]
         else:
@@ -194,23 +199,35 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
             baseline_success_tasks = {
                 r["task_id"] for r in filt.baseline if r.get("success", 0.0) >= 0.5
             }
-            fault_among_baseline_success = [
+            baseline_success_faults = [
                 r for r in filt.valid if r.get("task_id") in baseline_success_tasks
             ]
-        if fault_among_baseline_success:
+        m.baseline_eligible_pairs = len(baseline_success_faults)
+        if baseline_success_faults:
             m.robustness_score = round(
-                sum(r["success"] for r in fault_among_baseline_success)
-                / len(fault_among_baseline_success),
+                sum(r["success"] for r in baseline_success_faults)
+                / len(baseline_success_faults),
                 4,
             )
+            m.catastrophic_failure_rate = round(1.0 - m.robustness_score, 4)
 
     # ── Silent failure rate ────────────────────────────────────────────────────
-    if filt.valid:
-        silent = [
-            r for r in filt.valid
-            if r.get("success", 1.0) < 0.5 and r.get("reported_error", 1.0) < 0.5
+    # Correct definition:
+    # P(no explicit error | B=1, F=0, valid fault).  Fault runs whose direct
+    # baseline already failed cannot demonstrate silent degradation caused by CJ.
+    if baseline_success_faults:
+        denominator = [
+            r for r in baseline_success_faults
+            if r.get("success", 1.0) < 0.5
         ]
-        m.silent_failure_rate = round(len(silent) / len(filt.valid), 4)
+        silent = [
+            r for r in denominator
+            if r.get("reported_error", 1.0) < 0.5
+        ]
+        if denominator:
+            m.silent_failure_rate = round(len(silent) / len(denominator), 4)
+        else:
+            m.silent_failure_rate = 0.0
 
     # ── Amplification factors ──────────────────────────────────────────────────
     m.llm_call_amplification  = _amplification(m.baseline_llm_calls,  m.fault_llm_calls)

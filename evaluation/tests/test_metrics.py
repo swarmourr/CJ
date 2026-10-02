@@ -146,6 +146,15 @@ class TestSilentFailure:
         m = compute_metrics(records)
         assert m.silent_failure_rate == 0.0
 
+    def test_baseline_failure_is_not_silent_failure_denominator(self):
+        records = [
+            _b("t1", success=0.0),
+            _f("t1", success=0.0, validity="valid", reported_error=0.0),
+        ]
+        m = compute_metrics(records)
+        assert m.baseline_eligible_pairs == 0
+        assert m.silent_failure_rate is None
+
 
 # ── Amplification ─────────────────────────────────────────────────────────────
 

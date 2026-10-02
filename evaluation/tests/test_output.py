@@ -13,6 +13,10 @@ from evaluation.output import (
     write_condition_summary_csv,
     write_validity_summary_csv,
     write_group_summary_csv,
+    write_scientific_summary_csv,
+    write_fault_fidelity_summary_csv,
+    write_agent_resilience_summary_csv,
+    write_data_quality_summary_csv,
 )
 from evaluation.analysis.plots import plot_degradation
 
@@ -54,6 +58,106 @@ def _make_records():
             "artifact_path": "",
         },
     ]
+
+
+def _make_exact_triplet_records():
+    common = {
+        "study_id": "study",
+        "campaign_id": "campaign",
+        "pair_id": "pair-1",
+        "agent_level": "individual",
+        "agent_system": "autogen-real",
+        "framework": "autogen-real",
+        "topology": "single",
+        "benchmark": "humanevalplus",
+        "task_id": "HumanEval/0",
+        "model": "qwen2.5:latest",
+        "seed": 7,
+        "cj_commit": "abc123",
+        "docker_image_digest": "sha256:test",
+        "framework_versions": {"python": "3.12"},
+    }
+    direct = {
+        **common,
+        "run_id": "b",
+        "condition": "direct_baseline",
+        "phase": "baseline",
+        "fault_type": "none",
+        "validity": "valid",
+        "success": 1.0,
+        "duration_s": 10.0,
+        "llm_calls": 1,
+        "tool_calls": 1,
+        "turns": 1,
+        "total_tokens": 100,
+        "cost_usd": 0.0,
+        "reported_error": 0.0,
+        "lifecycle": {"configured": False, "verdict": "valid"},
+    }
+    control = {
+        **common,
+        "run_id": "c",
+        "condition": "cj_control",
+        "phase": "baseline",
+        "fault_type": "passthrough",
+        "validity": "valid",
+        "success": 1.0,
+        "duration_s": 12.0,
+        "llm_calls": 1,
+        "tool_calls": 1,
+        "turns": 1,
+        "total_tokens": 110,
+        "cost_usd": 0.0,
+        "reported_error": 0.0,
+        "lifecycle": {
+            "configured": True,
+            "activated": True,
+            "triggered": False,
+            "manifested": False,
+            "reverted": True,
+            "recovered": True,
+            "verdict": "valid",
+        },
+    }
+    fault = {
+        **common,
+        "run_id": "f",
+        "condition": "cj_fault",
+        "phase": "fault",
+        "fault_type": "llm_latency",
+        "fault_parameters": {"delay_s": 3.0},
+        "validity": "valid",
+        "success": 0.0,
+        "duration_s": 15.0,
+        "llm_calls": 1,
+        "tool_calls": 1,
+        "turns": 1,
+        "total_tokens": 110,
+        "cost_usd": 0.0,
+        "reported_error": 0.0,
+        "retries": 0,
+        "lifecycle": {
+            "configured": True,
+            "activated": True,
+            "triggered": True,
+            "manifested": True,
+            "reverted": True,
+            "recovered": True,
+            "verdict": "valid",
+            "proxy_call_count": 1,
+            "evidence": {
+                "fault_evidence": [
+                    json.dumps([{
+                        "fault_type": "latency",
+                        "triggered": True,
+                        "applied": True,
+                        "evidence": {"delay_s": 3.0},
+                    }])
+                ]
+            },
+        },
+    }
+    return [direct, control, fault]
 
 
 # ── JSONL schema ──────────────────────────────────────────────────────────────
@@ -162,6 +266,58 @@ class TestCSVOutput:
         )
         if out is not None:
             assert path.exists()
+
+    def test_scientific_summary_has_triplet_metrics(self, tmp_path):
+        path = str(tmp_path / "scientific_summary.csv")
+        write_scientific_summary_csv(_make_exact_triplet_records(), path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["complete_triplets"] == "1"
+        assert row["valid_pairs"] == "1"
+        assert row["baseline_eligible_pairs"] == "1"
+        assert float(row["baseline_pass_at_1"]) == pytest.approx(1.0)
+        assert float(row["control_pass_at_1"]) == pytest.approx(1.0)
+        assert float(row["fault_pass_at_1"]) == pytest.approx(0.0)
+        assert float(row["fault_specific_degradation"]) == pytest.approx(1.0)
+        assert float(row["conditional_robustness"]) == pytest.approx(0.0)
+        assert float(row["catastrophic_failure_rate"]) == pytest.approx(1.0)
+        assert float(row["cj_overhead"]) == pytest.approx(0.2)
+
+    def test_fault_fidelity_latency_uses_control_fault_delta(self, tmp_path):
+        path = str(tmp_path / "fault_fidelity_summary.csv")
+        write_fault_fidelity_summary_csv(_make_exact_triplet_records(), path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        row = rows[0]
+        assert row["fault"] == "llm_latency"
+        assert int(row["intercepted_calls"]) == 1
+        assert int(row["affected_calls"]) == 1
+        assert float(row["observed_added_latency_s"]) == pytest.approx(3.0)
+        assert float(row["expected_added_latency_s"]) == pytest.approx(3.0)
+        assert float(row["latency_error_s"]) == pytest.approx(0.0)
+
+    def test_agent_resilience_silent_failure_is_baseline_conditioned(self, tmp_path):
+        path = str(tmp_path / "agent_resilience_summary.csv")
+        write_agent_resilience_summary_csv(_make_exact_triplet_records(), path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        row = rows[0]
+        assert float(row["silent_failure_rate"]) == pytest.approx(1.0)
+        assert row["baseline_eligible_pairs"] == "1"
+
+    def test_data_quality_summary_counts_triplets_and_provenance(self, tmp_path):
+        path = str(tmp_path / "data_quality_summary.csv")
+        write_data_quality_summary_csv(_make_exact_triplet_records(), path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        row = rows[0]
+        assert row["complete_triplets"] == "1"
+        assert row["missing_pair_count"] == "0"
+        assert row["valid_fault_pair_count"] == "1"
+        assert row["cj_commit"] == "abc123"
+        assert row["docker_image_digest"] == "sha256:test"
 
 
 # ── CLI dry-run ───────────────────────────────────────────────────────────────
