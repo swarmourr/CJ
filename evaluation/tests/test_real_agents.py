@@ -234,7 +234,7 @@ class TestLoadModelConfig:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             load_model_config({"api_key_env": "NONEXISTENT_KEY_XYZ"})
-        assert any("dummy" in str(x.message) for x in w)
+        assert any("local placeholder API key" in str(x.message) for x in w)
 
     def test_full_config_parsed(self):
         from evaluation.model_config import load_model_config

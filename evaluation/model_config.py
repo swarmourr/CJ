@@ -210,7 +210,7 @@ def load_model_config(cfg: dict) -> ModelConfig:
             import warnings
             warnings.warn(
                 f"[eval] model.api_key_env={mc.api_key_env!r} is not set. "
-                "Using 'dummy' as the API key — valid only for local endpoints.",
+                "Using a local placeholder API key valid only for local endpoints.",
                 UserWarning,
                 stacklevel=2,
             )
