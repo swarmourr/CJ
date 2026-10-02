@@ -89,7 +89,10 @@ echo "[cj-eval] commit    : ${commit}"
 echo "[cj-eval] image     : ${new_ref}"
 
 if [[ "${keep_old}" -eq 0 ]]; then
-  mapfile -t old_refs < <(
+  old_refs=()
+  while IFS= read -r ref; do
+    [[ -n "${ref}" ]] && old_refs+=("${ref}")
+  done < <(
     docker image ls "${image_name}" --format '{{.Repository}}:{{.Tag}}' \
       | grep -v ':<none>$' || true
   )
