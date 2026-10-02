@@ -279,6 +279,12 @@ class AgentSystem(ABC):
 
     # ── Shared utility ─────────────────────────────────────────────────────────
 
+    def _extract_tool_code(self, code: Any) -> str:
+        """Normalize Python source received through a framework tool argument."""
+        if code is None:
+            return ""
+        return self._extract_code(str(code))
+
     def _extract_code(self, text: str) -> str:
         """Extract the first Python code block from a markdown-fenced response."""
         import re

@@ -230,6 +230,7 @@ class InjectionGroupRunner:
         self._started = False
         self._stop_lock = threading.Lock()
         self._stopped = False
+        self._stop_done = threading.Event()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -414,23 +415,32 @@ class InjectionGroupRunner:
         """
         with self._stop_lock:
             if self._stopped:
-                return self._evidence  # type: ignore[return-value]
-            self._stopped = True
+                first_stopper = False
+            else:
+                self._stopped = True
+                first_stopper = True
 
-        if self._evidence is None:
-            from chaos_jungle.distributed.evidence import GroupActivationEvidence
-            self._evidence = GroupActivationEvidence(group_id=self.group.group_id)
-            self._evidence.verdict = "cancelled"
+        if not first_stopper:
+            self._stop_done.wait()
+            return self._evidence  # type: ignore[return-value]
+
+        try:
+            if self._evidence is None:
+                from chaos_jungle.distributed.evidence import GroupActivationEvidence
+                self._evidence = GroupActivationEvidence(group_id=self.group.group_id)
+                self._evidence.verdict = "cancelled"
+                return self._evidence
+
+            self._stop_event.set()
+
+            if self._evidence.verdict not in {"cancelled"}:
+                self._revert_all()
+                self._evidence.members = [s.evidence for s in self._states]
+                self._evidence.finalize()
+
             return self._evidence
-
-        self._stop_event.set()
-
-        if self._evidence.verdict not in {"cancelled"}:
-            self._revert_all()
-            self._evidence.members = [s.evidence for s in self._states]
-            self._evidence.finalize()
-
-        return self._evidence
+        finally:
+            self._stop_done.set()
 
     @property
     def evidence(self) -> "GroupActivationEvidence | None":

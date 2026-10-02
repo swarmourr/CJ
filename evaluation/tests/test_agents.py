@@ -77,6 +77,14 @@ class TestAutoGenStyleAgent:
         result = agent.run(SIMPLE_TASK, seed=0)
         assert result.turns <= 2
 
+    def test_extract_tool_code_preserves_raw_python(self, client):
+        agent = AutoGenStyleAgent(client=client, executor=_ok_executor, max_turns=2)
+        raw = "def add(a, b):\n    return a + b"
+        fenced = "```python\ndef add(a, b):\n    return a + b\n```"
+        assert agent._extract_tool_code(raw) == raw
+        assert agent._extract_tool_code(fenced) == raw
+        assert agent._extract_tool_code(None) == ""
+
 
 # ── 2. MAD-style ──────────────────────────────────────────────────────────────
 

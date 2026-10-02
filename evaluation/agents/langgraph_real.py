@@ -98,7 +98,11 @@ class LangGraphRealAgent(AgentSystem):
         @lc_tool
         def execute_python_code(code: str) -> str:
             """Execute Python code in an isolated sandbox. Returns exit code and output."""
+            nonlocal final_code
             from evaluation.benchmarks.executor import sandbox_exec
+            code_candidate = self._extract_tool_code(code)
+            if code_candidate:
+                final_code = code_candidate
             ok, output = sandbox_exec(code, timeout_s=10.0)
             return f"exit_code={'0' if ok else '1'}\n{output[:1500]}"
 

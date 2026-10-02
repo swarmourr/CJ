@@ -113,8 +113,11 @@ class CrewAIRealAgent(AgentSystem):
 
             def _run(self_, code: str) -> str:  # noqa: N805
                 from evaluation.benchmarks.executor import sandbox_exec
+                nonlocal final_code, tool_calls
+                code_candidate = self._extract_tool_code(code)
+                if code_candidate:
+                    final_code = code_candidate
                 ok, output = sandbox_exec(code, timeout_s=10.0)
-                nonlocal tool_calls
                 tool_calls += 1
                 return f"exit_code={'0' if ok else '1'}\n{output[:1500]}"
 
