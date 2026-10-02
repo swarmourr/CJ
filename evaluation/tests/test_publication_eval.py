@@ -99,6 +99,25 @@ def test_docker_runner_create_command_rejects_secret_env(tmp_path, monkeypatch):
         runner._create_command("name", tmp_path / "in", tmp_path / "out", {"OPENAI_API_KEY": "secret"})
 
 
+def test_docker_runner_image_digest_uses_inspect_format_before_image(monkeypatch):
+    runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
+    calls = []
+
+    def fake_run(cmd, timeout):
+        calls.append(cmd)
+        if "{{json .RepoDigests}}" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "[]\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "sha256:test\n", "")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+
+    assert runner._image_digest("cj:test") == "sha256:test"
+    assert calls == [
+        ["docker", "image", "inspect", "--format", "{{json .RepoDigests}}", "cj:test"],
+        ["docker", "image", "inspect", "--format", "{{.Id}}", "cj:test"],
+    ]
+
+
 def test_docker_runner_prepare_writes_redacted_request(tmp_path, monkeypatch):
     runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
     monkeypatch.setattr(runner, "_require_docker", lambda: None)

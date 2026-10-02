@@ -405,7 +405,7 @@ class DockerAgentRunner:
 
     def _image_digest(self, image: str) -> str:
         proc = self._run(
-            [self.config.docker_bin, "image", "inspect", image, "--format", "{{json .RepoDigests}}"],
+            [self.config.docker_bin, "image", "inspect", "--format", "{{json .RepoDigests}}", image],
             timeout=60,
         )
         if proc.returncode != 0:
@@ -417,7 +417,7 @@ class DockerAgentRunner:
         if digests:
             return str(digests[0])
         image_id = self._run(
-            [self.config.docker_bin, "image", "inspect", image, "--format", "{{.Id}}"],
+            [self.config.docker_bin, "image", "inspect", "--format", "{{.Id}}", image],
             timeout=60,
         )
         if image_id.returncode == 0 and image_id.stdout.strip():
