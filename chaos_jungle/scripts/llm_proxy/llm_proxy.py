@@ -1540,10 +1540,21 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
             triggered.append(fault)
             _orig_can = _canonical_json(_before)
             _mut_can  = _canonical_json(resp_body)
+            original_bytes = len(_before)
+            mutated_bytes = len(resp_body)
+            original_chars = len(_before.decode("utf-8", errors="replace"))
+            mutated_chars = len(resp_body.decode("utf-8", errors="replace"))
             evidence[fault] = {
                 "mode": mode,
                 "before_hash": hashlib.sha256(_before).hexdigest()[:16],
                 "after_hash":  hashlib.sha256(resp_body).hexdigest()[:16],
+                "original_response_bytes": original_bytes,
+                "mutated_response_bytes": mutated_bytes,
+                "original_response_length": original_chars,
+                "truncated_response_length": mutated_chars,
+                "truncation_ratio": (
+                    mutated_bytes / original_bytes if original_bytes else None
+                ),
                 "original_canonical": _orig_can,
                 "mutated_canonical":  _mut_can,
             }

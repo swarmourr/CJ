@@ -151,11 +151,34 @@ def _make_exact_triplet_records():
                 "fault_evidence": [
                     json.dumps([{
                         "fault_type": "latency",
+                        "fault_id": "latency_call0",
+                        "target": {"operation": "chat.completions", "call_index": 0},
+                        "target_matched": True,
                         "triggered": True,
                         "applied": True,
                         "evidence": {"delay_s": 3.0},
+                        "original_value": "x" * 400 + "full-response-tail",
+                        "mutated_value": "y" * 400 + "mutated-tail",
+                        "delivered_value": "y" * 400 + "mutated-tail",
                     }])
-                ]
+                ],
+                "proxy_calls": [{
+                    "id": 10,
+                    "phase": "fault",
+                    "call_index": 0,
+                    "timestamp": "2024-01-01T00:02:00Z",
+                    "model": "qwen2.5:latest",
+                    "latency_s": 3.1,
+                    "http_status": 200,
+                    "fault_name": "latency",
+                    "was_blocked": 0,
+                    "was_modified": 0,
+                    "fault_triggered": 1,
+                    "triggered_faults_json": json.dumps(["latency"]),
+                    "fault_evidence_json": json.dumps({"latency": {"delay_s": 3.0}}),
+                    "response_text": "model response should be summarized" * 20,
+                    "prompt_text": "prompt should be summarized" * 20,
+                }],
             },
         },
     }
@@ -312,6 +335,8 @@ class TestCSVOutput:
         assert float(row["observed_added_latency_s"]) == pytest.approx(3.0)
         assert float(row["expected_added_latency_s"]) == pytest.approx(3.0)
         assert float(row["latency_error_s"]) == pytest.approx(0.0)
+        assert float(row["affected_call_fraction"]) == pytest.approx(1.0)
+        assert float(row["affected_call_precision"]) == pytest.approx(1.0)
 
     def test_cj_evidence_csv_preserves_raw_cj_output(self, tmp_path):
         path = str(tmp_path / "cj_evidence.csv")
@@ -326,6 +351,45 @@ class TestCSVOutput:
         assert row["cj_proxy_calls_affected"] == "1"
         assert "delay_s" in row["cj_raw_evidence_json"]
         assert row["evidence_fault_type"] == "latency"
+        assert row["proxy_call_index"] == "0"
+        assert row["proxy_http_status"] == "200"
+        assert "sha256" in row["evidence_original_value"]
+        assert "full-response-tail" not in row["evidence_original_value"]
+        assert "sha256" in row["proxy_response_text_summary_json"]
+        assert "model response should be summarizedmodel response should be summarizedmodel response should be summarizedmodel response should be summarizedmodel response should be summarized" not in row["proxy_response_text_summary_json"]
+
+    def test_fault_fidelity_timeout_uses_proxy_latency_not_runtime_delta(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[2]["fault_type"] = "llm_timeout"
+        records[2]["fault_parameters"] = {"timeout_s": 5.0}
+        records[2]["duration_s"] = 99.0
+        records[2]["lifecycle"]["evidence"]["fault_evidence"] = [
+            json.dumps([{
+                "fault_type": "timeout",
+                "fault_id": "timeout_call0",
+                "target": {"operation": "chat.completions", "call_index": 0},
+                "target_matched": True,
+                "triggered": True,
+                "applied": True,
+                "evidence": {"http_status": 504},
+            }])
+        ]
+        records[2]["lifecycle"]["evidence"]["proxy_calls"] = [{
+            "call_index": 0,
+            "latency_s": 5.2,
+            "http_status": 504,
+            "fault_name": "timeout",
+            "triggered_faults_json": json.dumps(["timeout"]),
+        }]
+        path = str(tmp_path / "fault_fidelity_summary.csv")
+        write_fault_fidelity_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+        assert row["fault"] == "llm_timeout"
+        assert float(row["observed_timeout_duration_s"]) == pytest.approx(5.2)
+        assert float(row["expected_timeout_duration_s"]) == pytest.approx(5.0)
+        assert float(row["timeout_error_s"]) == pytest.approx(0.2)
+        assert row["timeout_fidelity_source"] == "cj_proxy_latency_s"
 
     def test_agent_resilience_silent_failure_is_baseline_conditioned(self, tmp_path):
         path = str(tmp_path / "agent_resilience_summary.csv")
@@ -356,6 +420,9 @@ class TestCSVOutput:
             rows = list(csv.DictReader(f))
         row = rows[0]
         assert row["complete_triplets"] == "1"
+        assert row["raw_fault_records"] == "1"
+        assert row["raw_condition_records"] == "3"
+        assert row["expected_condition_records_for_complete_triplets"] == "3"
         assert row["missing_pair_count"] == "0"
         assert row["valid_fault_pair_count"] == "1"
         assert row["cj_commit"] == "abc123"

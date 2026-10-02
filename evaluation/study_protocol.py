@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -198,7 +200,9 @@ class PublicationStudyOrchestrator:
             routing=routing,
         ))
 
+        control_lifecycle = _control_lifecycle()
         control_proc = self._start_passthrough_proxy(model_config)
+        control_lifecycle["timestamps"]["activated"] = _utc_now()
         try:
             records.append(self._run_condition(
                 condition="cj_control",
@@ -215,12 +219,14 @@ class PublicationStudyOrchestrator:
                 benchmark_task=task,
                 fault_name="passthrough",
                 fault_parameters={},
-                lifecycle=_control_lifecycle(),
+                lifecycle=control_lifecycle,
                 validity="valid",
                 routing=routing,
             ))
         finally:
             self._stop_process(control_proc)
+            control_lifecycle["timestamps"]["reverted"] = _utc_now()
+            control_lifecycle["timestamps"]["recovered"] = _utc_now()
 
         if fault is None:
             raise ValueError("cj_fault condition requires a concrete CJ fault instance")
@@ -232,6 +238,7 @@ class PublicationStudyOrchestrator:
         try:
             runner.start()
             lifecycle["activated"] = True
+            lifecycle.setdefault("timestamps", {})["activated"] = _utc_now()
             lifecycle["session_id"] = runner._session_id
             fault_record = self._run_condition(
                 condition="cj_fault",
@@ -277,11 +284,14 @@ class PublicationStudyOrchestrator:
             try:
                 runner.stop()
                 lifecycle["reverted"] = True
+                lifecycle.setdefault("timestamps", {})["reverted"] = _utc_now()
             except Exception as exc:  # noqa: BLE001
                 lifecycle["reverted"] = False
                 lifecycle["recovered"] = False
                 lifecycle["details"] = f"runner.stop failed: {exc!r}"
             _merge_runner_lifecycle(lifecycle, runner)
+            if lifecycle.get("recovered") is True:
+                lifecycle.setdefault("timestamps", {})["recovered"] = _utc_now()
             validity = _classify_lifecycle(lifecycle)
             lifecycle["verdict"] = validity
         fault_record["lifecycle"] = lifecycle
@@ -313,6 +323,9 @@ class PublicationStudyOrchestrator:
         routing: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
+        timestamps = lifecycle.setdefault("timestamps", {})
+        timestamps.setdefault("configured", _utc_now())
+        timestamps["workload_started"] = _utc_now()
         context = RunContext(
             study_id=self.study_id,
             campaign_id=campaign_id,
@@ -322,15 +335,18 @@ class PublicationStudyOrchestrator:
             output_root=os.path.join(self.results_dir, run_id),
             environment=extra_env,
         )
-        result: DockerAgentRunResult = self.docker_runner.run(
-            agent_system=agent_system,
-            topology=topology,
-            task=task,
-            seed=seed,
-            model_config=model_config,
-            execution_config=execution_config,
-            run_context=context,
-        )
+        try:
+            result: DockerAgentRunResult = self.docker_runner.run(
+                agent_system=agent_system,
+                topology=topology,
+                task=task,
+                seed=seed,
+                model_config=model_config,
+                execution_config=execution_config,
+                run_context=context,
+            )
+        finally:
+            timestamps["workload_finished"] = _utc_now()
         record = _flatten_docker_result(result)
         _validate_container_scoring(record, benchmark_task)
         effective_agent_system = _effective_agent_system(
@@ -526,9 +542,11 @@ def _jsonable(value: Any) -> Any:
         return repr(value)
 
 
-def _config_hash(model_config: dict[str, Any], execution_config: dict[str, Any]) -> str:
-    import hashlib
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+
+def _config_hash(model_config: dict[str, Any], execution_config: dict[str, Any]) -> str:
     safe = {
         "model_config": redact_secrets(model_config),
         "execution_config": redact_secrets(execution_config),
@@ -692,6 +710,10 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
                 row.get("fault_evidence_json", "{}")
                 for row in calls[:5]
             ],
+            "proxy_calls": [
+                _proxy_call_evidence(row)
+                for row in calls[:20]
+            ],
         }
         if faults:
             lifecycle["activated"] = all(bool(f.get("verified_active")) for f in faults)
@@ -700,6 +722,63 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
     except Exception as exc:  # noqa: BLE001
         lifecycle["verdict"] = "inconclusive"
         lifecycle["details"] = f"failed to read CJ evidence: {exc!r}"
+
+
+def _proxy_call_evidence(row: dict[str, Any]) -> dict[str, Any]:
+    """Return a bounded, secret-safe subset of a CJ proxy llm_calls row."""
+    safe = {
+        "id": row.get("id"),
+        "phase": row.get("phase", ""),
+        "call_index": row.get("call_index"),
+        "timestamp": row.get("timestamp", ""),
+        "model": row.get("model", ""),
+        "latency_s": row.get("latency_s"),
+        "http_status": row.get("http_status"),
+        "fault_name": row.get("fault_name", ""),
+        "was_blocked": row.get("was_blocked"),
+        "was_modified": row.get("was_modified"),
+        "fault_triggered": row.get("fault_triggered"),
+        "configured_faults_json": row.get("configured_faults_json", "[]"),
+        "triggered_faults_json": row.get("triggered_faults_json", "[]"),
+        "fault_evidence_json": row.get("fault_evidence_json", "{}"),
+        "prompt_tokens": row.get("prompt_tokens"),
+        "completion_tokens": row.get("completion_tokens"),
+        "total_tokens": row.get("total_tokens"),
+        "finish_reason": row.get("finish_reason", ""),
+        "error_type": row.get("error_type", ""),
+        "request_size_bytes": row.get("request_size_bytes"),
+        "response_size_bytes": row.get("response_size_bytes"),
+        "response_length_chars": row.get("response_length_chars"),
+        "max_tokens_requested": row.get("max_tokens_requested"),
+        "message_count": row.get("message_count"),
+        "tool_count": row.get("tool_count"),
+        "response_tool_calls": row.get("response_tool_calls"),
+        "is_retry": row.get("is_retry"),
+        "fault_offset_s": row.get("fault_offset_s"),
+        "agent_addr": row.get("agent_addr", ""),
+    }
+    safe["prompt_text"] = _text_digest(row.get("prompt_text", ""))
+    safe["response_text"] = _text_digest(row.get("response_text", ""))
+    safe["full_messages_json"] = _text_digest(row.get("full_messages_json", ""))
+    return safe
+
+
+def _text_digest(value: Any, *, preview_chars: int = 160) -> dict[str, Any]:
+    text = "" if value is None else str(value)
+    preview = text[:preview_chars]
+    for pattern in _SECRET_PATTERNS:
+        preview = pattern.sub("[REDACTED]", preview)
+    return {
+        "sha256": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest(),
+        "length": len(text),
+        "preview": preview,
+    }
+
+
+_SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"(?i)(api[_-]?key|authorization|bearer)\s*[:=]\s*['\"]?[^,'\"\s}]+"),
+]
 
 
 def _classify_lifecycle(lifecycle: dict[str, Any]) -> str:
