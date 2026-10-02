@@ -10,6 +10,8 @@ category="stage-c-docker-integration"
 name="${CJ_EVAL_RUN_NAME:-docker-integration-tests}"
 run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
 image="$(cj_eval_default_image)"
+export CJ_EVAL_IMAGE="${image}"
+export CJ_EVAL_DOCKER_IMAGE="${image}"
 cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
 
 cmd=(
