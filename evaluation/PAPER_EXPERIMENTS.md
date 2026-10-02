@@ -33,6 +33,39 @@ Every folder contains at least:
 | `evaluation/scripts/run_individual_resilience_pilot.sh` | `individual-resilience-pilot` | AutoGen/LangGraph/CrewAI individual-agent pilot |
 | `evaluation/scripts/run_multi_agent_reference_pilot.sh` | `multi-agent-reference-pilot` | Framework-neutral three-role multi-agent pilot |
 | `evaluation/scripts/run_all_paper_scenarios.sh` | multiple categories | Smoke or pilot wrapper |
+| `evaluation/scripts/run_evaluation_campaign.sh` | multiple categories | Main user-facing wrapper with modes, flags, and named scenarios |
+
+## Preconfigured Scenarios
+
+Use the main wrapper when you want a remembered preset instead of many
+environment variables:
+
+```bash
+cd evaluation
+scripts/run_evaluation_campaign.sh scenarios
+scripts/run_evaluation_campaign.sh scenario no-cost-verify
+scripts/run_evaluation_campaign.sh scenario real-minimax-one-fault
+```
+
+Scenario defaults can still be overridden with flags:
+
+```bash
+scripts/run_evaluation_campaign.sh scenario real-minimax-one-fault --tasks 2
+scripts/run_evaluation_campaign.sh scenario multi-reference-mini --topologies linear
+```
+
+| Scenario | Underlying Mode | Purpose |
+| --- | --- | --- |
+| `no-cost-verify` | `verify` | Static/unit validation plus Docker image readiness; no model calls |
+| `docker-check` | `docker` | Docker runner/target integration validation |
+| `local-ollama-one-fault` | `real-smoke` | One local Ollama latency triplet on one task |
+| `local-ollama-injector-all` | `injector` | All connected proxy faults against local Ollama |
+| `real-minimax-one-fault` | `real-smoke` | Tiny paid real-model latency triplet using ignored `.env` |
+| `real-minimax-all-faults` | `real-smoke` | One-task paid all-proxy-fault smoke using ignored `.env` |
+| `individual-mini` | `individual` | Smallest individual-agent resilience smoke |
+| `individual-framework-smoke` | `individual` | AutoGen, LangGraph, and CrewAI individual wiring smoke |
+| `multi-reference-mini` | `multi` | Reference multi-agent propagation smoke across both topologies |
+| `paper-smoke` | `smoke` | Small bundle across implemented paper categories |
 
 Default model routing is set for local Ollama-compatible endpoints:
 
