@@ -44,7 +44,7 @@ for system in ${systems}; do
   for topology in ${topologies}; do
     for benchmark in ${benchmarks}; do
       run_index=$((run_index + 1))
-      port=$((proxy_port_base + run_index))
+      port=$((proxy_port_base + run_index * 10))
       name="reference-${topology}-${benchmark}-${fault_suite}-${CJ_EVAL_MODEL}"
       run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
       cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
@@ -75,7 +75,7 @@ for system in ${systems}; do
       )
 
       cj_eval_write_command "${run_dir}/run_command.sh" "${cmd[@]}"
-      echo "[cj-eval] running ${topology} ${benchmark} -> ${run_dir}"
+      echo "[cj-eval] running ${topology} ${benchmark} on proxy ports ${port}/$((port + 1)) -> ${run_dir}"
       cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"
     done
   done

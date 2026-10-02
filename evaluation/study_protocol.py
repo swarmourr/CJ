@@ -469,6 +469,10 @@ class PublicationStudyOrchestrator:
         model_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
+        is_reference_multi_agent = agent_level == "multi_agent"
+        effective_agent_system = (
+            "reference-multi-agent" if is_reference_multi_agent else agent_system
+        )
         record = {
             "study_id": self.study_id,
             "campaign_id": campaign_id,
@@ -481,11 +485,11 @@ class PublicationStudyOrchestrator:
             "condition": condition,
             "phase": "fault",
             "agent_level": agent_level,
-            "agent_system": agent_system,
-            "framework": agent_system,
+            "agent_system": effective_agent_system,
+            "framework": effective_agent_system,
             "requested_framework": agent_system,
-            "framework_native": True,
-            "multi_agent_impl": "",
+            "framework_native": not is_reference_multi_agent,
+            "multi_agent_impl": "reference-multi-agent" if is_reference_multi_agent else "",
             "topology": topology,
             "benchmark": task.get("benchmark", ""),
             "task_id": task.get("task_id", ""),

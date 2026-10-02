@@ -3,10 +3,55 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+
+
+_CODE_FENCE_RE = re.compile(
+    r"```[ \t]*(?:python|py)?[ \t]*(?:\r?\n)?(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def extract_python_code(text: str | None) -> str:
+    """Extract Python source from common LLM markdown responses.
+
+    The publication scorer must receive source code, not chat prose.  Models
+    sometimes emit ordinary fenced blocks, indented fenced blocks, or malformed
+    fences such as `````pythondef ...````` with no newline after the language
+    tag.  This helper keeps the extraction policy shared across individual and
+    reference multi-agent executions.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+
+    match = _CODE_FENCE_RE.search(raw)
+    if match:
+        return match.group(1).strip()
+
+    raw = re.sub(
+        r"^\s*```[ \t]*(?:python|py)?[ \t]*(?:\r?\n)?",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = re.sub(r"\s*```\s*$", "", raw).strip()
+
+    line_marker = re.search(r"(?m)^\s*(?:def|class|from|import)\s+", raw)
+    if line_marker:
+        return raw[line_marker.start():].strip()
+
+    inline_marker = re.search(
+        r"(def\s+\w+\s*\(|class\s+\w+\s*[:(]|from\s+\S+\s+import\s+|import\s+\S+)",
+        raw,
+    )
+    if inline_marker:
+        return raw[inline_marker.start():].strip()
+    return raw
 
 
 @dataclass
@@ -288,12 +333,4 @@ class AgentSystem(ABC):
 
     def _extract_code(self, text: str) -> str:
         """Extract the first Python code block from a markdown-fenced response."""
-        import re
-        # Try ```python ... ``` first, then plain ``` ... ```
-        m = re.search(r"```(?:python)?\n(.*?)```", text, re.DOTALL)
-        if m:
-            return m.group(1).strip()
-        # Fallback: return whole text if it looks like code
-        if "def " in text or "return " in text:
-            return text.strip()
-        return text.strip()
+        return extract_python_code(text)

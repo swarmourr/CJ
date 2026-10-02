@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from evaluation.agents.base import AgentRunResult, ModelClient
+from evaluation.agents.base import AgentRunResult, ModelClient, extract_python_code
 
 
 ROLES = ("planner", "coder", "reviewer")
@@ -190,7 +190,7 @@ class MultiAgentWorkflow:
                     {"role": "user", "content": f"Task:\n{task}\n\nPlan:\n{plan}"},
                 ],
             )
-            final_code = code
+            final_code = extract_python_code(code)
             emit("coder", step, "handoff", to_role="reviewer")
             step += 1
 
@@ -199,7 +199,7 @@ class MultiAgentWorkflow:
                 step,
                 [
                     {"role": "system", "content": ROLE_PROMPTS["reviewer"]},
-                    {"role": "user", "content": f"Task:\n{task}\n\nSolution:\n{code}"},
+                    {"role": "user", "content": f"Task:\n{task}\n\nSolution:\n{final_code}"},
                 ],
             )
             needs_revision = "REVISION_REQUEST" in review.upper()
@@ -224,7 +224,7 @@ class MultiAgentWorkflow:
                         },
                     ],
                 )
-                final_code = code
+                final_code = extract_python_code(code)
                 emit("coder", step, "attempted_recovery", revision_round=revisions + 1)
                 step += 1
                 review = call_role(
@@ -232,7 +232,7 @@ class MultiAgentWorkflow:
                     step,
                     [
                         {"role": "system", "content": ROLE_PROMPTS["reviewer"]},
-                        {"role": "user", "content": f"Task:\n{task}\n\nSolution:\n{code}"},
+                        {"role": "user", "content": f"Task:\n{task}\n\nSolution:\n{final_code}"},
                     ],
                 )
                 needs_revision = "REVISION_REQUEST" in review.upper()

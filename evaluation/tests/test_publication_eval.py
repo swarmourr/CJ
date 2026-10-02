@@ -11,6 +11,7 @@ from chaos_jungle.faults.base import VerificationResult
 from chaos_jungle.faults.llm import LLMLatency
 from chaos_jungle.scripts.llm_proxy import llm_proxy
 from chaos_jungle.targets.docker import DockerContainerControllerTarget, DockerTarget
+from evaluation.agents.base import ModelClient, extract_python_code
 from evaluation.analysis.statistics import (
     holm_correction,
     mcnemar_exact,
@@ -29,7 +30,7 @@ from evaluation.docker_runner import (
 )
 from evaluation.infrastructure_orchestrator import run_container_scoped_fault
 from evaluation.benchmarks.base import BenchmarkTask
-from evaluation.multi_agent import TraceEvent, validate_event_schema
+from evaluation.multi_agent import LINEAR, MultiAgentWorkflow, TraceEvent, validate_event_schema
 from evaluation.output import generate_all_outputs
 from evaluation.run import _publication_fault_names, build_parser, run_publication_study
 from evaluation.schema import OUTPUT_SCHEMA_VERSION
@@ -555,6 +556,97 @@ def test_multi_agent_event_schema():
         validate_event_schema(event)
 
 
+def test_extract_python_code_handles_leading_and_malformed_fences():
+    assert extract_python_code("  ```python\n\ndef solution():\n    return 1\n```") == (
+        "def solution():\n    return 1"
+    )
+    assert extract_python_code("```pythondef solution():\n    return 2\n```") == (
+        "def solution():\n    return 2"
+    )
+    assert extract_python_code("Here is the answer:\ndef solution():\n    return 3") == (
+        "def solution():\n    return 3"
+    )
+
+
+def test_model_client_forwards_cj_trace_headers(monkeypatch):
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {},
+            }).encode()
+
+    def fake_urlopen(req, timeout):
+        seen["url"] = req.full_url
+        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+        seen["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setenv("CJ_EVAL_BASE_URL", "http://proxy.example/v1")
+    monkeypatch.setenv("CJ_EVAL_API_KEY", "dummy")
+    monkeypatch.setenv("CJ_EVAL_MODEL", "fake-model")
+    monkeypatch.setenv("CJ_RUN_ID", "run-123")
+    monkeypatch.setenv("CJ_AGENT_ROLE", "planner")
+    monkeypatch.setenv("CJ_STEP", "7")
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    response = ModelClient().chat([{"role": "user", "content": "hello"}])
+
+    assert response["choices"][0]["message"]["content"] == "ok"
+    assert seen["url"] == "http://proxy.example/v1/chat/completions"
+    assert seen["headers"]["x-cj-run-id"] == "run-123"
+    assert seen["headers"]["x-cj-agent-role"] == "planner"
+    assert seen["headers"]["x-cj-step"] == "7"
+
+
+def test_multi_agent_workflow_sets_role_metadata_and_extracts_code(monkeypatch):
+    monkeypatch.delenv("CJ_RUN_ID", raising=False)
+    monkeypatch.delenv("CJ_AGENT_ROLE", raising=False)
+    monkeypatch.delenv("CJ_STEP", raising=False)
+
+    class CapturingClient:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, messages, seed=None):
+            self.calls.append({
+                "run_id": os.environ.get("CJ_RUN_ID"),
+                "role": os.environ.get("CJ_AGENT_ROLE"),
+                "step": os.environ.get("CJ_STEP"),
+                "seed": seed,
+            })
+            if len(self.calls) == 1:
+                return "Plan the solution."
+            if len(self.calls) == 2:
+                return "```pythondef solution():\n    return None\n```"
+            return "ACCEPT"
+
+    client = CapturingClient()
+    workflow = MultiAgentWorkflow(
+        client,
+        topology=LINEAR,
+        study_id="study-1",
+        pair_id="pair-1",
+        run_id="run-1",
+    )
+    result = workflow.run("Write solution.", seed=13)
+
+    assert result.generated_code == "def solution():\n    return None"
+    assert [call["role"] for call in client.calls] == ["planner", "coder", "reviewer"]
+    assert [call["step"] for call in client.calls] == ["0", "1", "2"]
+    assert all(call["run_id"] == "run-1" for call in client.calls)
+    assert all(call["seed"] == 13 for call in client.calls)
+    assert os.environ.get("CJ_AGENT_ROLE") is None
+
+
 def test_paired_statistics_helpers():
     baseline = [
         {"pair_id": "p1", "task_id": "t1", "success": 1.0, "duration_s": 1.0},
@@ -844,6 +936,51 @@ def test_publication_condition_fails_closed_without_container_scoring(tmp_path):
     assert record["runner_observed_failure"] is False
     assert record["failure_detection_source"] == "none"
     assert record["silent_failure"] is True
+
+
+def test_failed_multi_agent_fault_record_uses_reference_labels(tmp_path):
+    class FakeRunner:
+        config = DockerExecutionConfig(image="cj:test")
+
+    task = BenchmarkTask(
+        task_id="toy/0",
+        benchmark="toy",
+        prompt="Write solution.",
+        entry_point="solution",
+        test_code="assert solution() is None\n",
+        metadata={"source": "bundled"},
+    )
+    orch = PublicationStudyOrchestrator(FakeRunner(), study_id="study-x", results_dir=str(tmp_path))
+    record = orch._failed_fault_record(
+        condition="cj_fault",
+        agent_system="autogen-real",
+        topology="linear",
+        task={
+            "task_id": task.task_id,
+            "benchmark": task.benchmark,
+            "prompt": task.prompt,
+            "entry_point": task.entry_point,
+            "test_code": task.test_code,
+            "metadata": task.metadata,
+        },
+        seed=0,
+        agent_level="multi_agent",
+        model_config={"name": "fake", "base_url": "http://fake/v1"},
+        campaign_id="campaign-x",
+        pair_id="pair-x",
+        fault_name="planner_llm_unavailable",
+        fault_parameters={"selector": {"agent_role": "planner"}},
+        lifecycle={"verdict": "invalid"},
+        definition=default_experiment_definition("planner_llm_unavailable"),
+        error="activation failed",
+    )
+
+    assert record["agent_system"] == "reference-multi-agent"
+    assert record["framework"] == "reference-multi-agent"
+    assert record["requested_framework"] == "autogen-real"
+    assert record["framework_native"] is False
+    assert record["multi_agent_impl"] == "reference-multi-agent"
+    assert record["validity"] == "invalid"
 
 
 def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatch):
