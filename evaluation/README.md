@@ -487,6 +487,7 @@ python -m evaluation.run --generate-outputs --results-dir results/full
 
 # Outputs:
 #   results/full/task_results.csv
+#   results/full/cj_evidence.csv
 #   results/full/condition_summary.csv
 #   results/full/scientific_summary.csv
 #   results/full/validity_summary.csv
@@ -509,6 +510,9 @@ conditional robustness, `C-F` fault-specific degradation, bootstrap confidence
 intervals, trigger/recovery rates, and CJ overhead are reported as separate
 columns. `fault_fidelity_summary.csv` reports whether the injected fault matched
 the requested severity, such as configured versus observed latency.
+`cj_evidence.csv` is the normalized CJ-native evidence table: lifecycle verdicts,
+session IDs, proxy-call counts, configured/triggered fault JSON, and per-call
+fault evidence are preserved there before any derived metric is computed.
 
 ---
 

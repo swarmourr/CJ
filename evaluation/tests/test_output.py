@@ -11,12 +11,14 @@ from evaluation.output import (
     load_jsonl,
     write_task_results_csv,
     write_condition_summary_csv,
+    write_cj_evidence_csv,
     write_validity_summary_csv,
     write_group_summary_csv,
     write_scientific_summary_csv,
     write_fault_fidelity_summary_csv,
     write_agent_resilience_summary_csv,
     write_data_quality_summary_csv,
+    write_inferential_summary_csv,
 )
 from evaluation.analysis.plots import plot_degradation
 
@@ -277,13 +279,26 @@ class TestCSVOutput:
         assert row["complete_triplets"] == "1"
         assert row["valid_pairs"] == "1"
         assert row["baseline_eligible_pairs"] == "1"
+        assert row["evaluation_scope"] == "agent_resilience"
         assert float(row["baseline_pass_at_1"]) == pytest.approx(1.0)
         assert float(row["control_pass_at_1"]) == pytest.approx(1.0)
         assert float(row["fault_pass_at_1"]) == pytest.approx(0.0)
         assert float(row["fault_specific_degradation"]) == pytest.approx(1.0)
         assert float(row["conditional_robustness"]) == pytest.approx(0.0)
         assert float(row["catastrophic_failure_rate"]) == pytest.approx(1.0)
+        assert row["inference_status"] == "insufficient_unique_tasks"
         assert float(row["cj_overhead"]) == pytest.approx(0.2)
+
+    def test_scientific_summary_suppresses_fault_effect_when_control_failed(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[1]["success"] = 0.0
+        path = str(tmp_path / "scientific_summary.csv")
+        write_scientific_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+        assert row["control_eligible_pairs"] == "0"
+        assert row["fault_specific_degradation"] == ""
+        assert row["evaluation_scope"] == "fault_injector_validation"
 
     def test_fault_fidelity_latency_uses_control_fault_delta(self, tmp_path):
         path = str(tmp_path / "fault_fidelity_summary.csv")
@@ -298,6 +313,20 @@ class TestCSVOutput:
         assert float(row["expected_added_latency_s"]) == pytest.approx(3.0)
         assert float(row["latency_error_s"]) == pytest.approx(0.0)
 
+    def test_cj_evidence_csv_preserves_raw_cj_output(self, tmp_path):
+        path = str(tmp_path / "cj_evidence.csv")
+        write_cj_evidence_csv(_make_exact_triplet_records(), path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        fault_rows = [r for r in rows if r["condition"] == "cj_fault"]
+        assert len(fault_rows) == 1
+        row = fault_rows[0]
+        assert row["cj_lifecycle_manifested"] == "True"
+        assert row["cj_proxy_calls_intercepted"] == "1"
+        assert row["cj_proxy_calls_affected"] == "1"
+        assert "delay_s" in row["cj_raw_evidence_json"]
+        assert row["evidence_fault_type"] == "latency"
+
     def test_agent_resilience_silent_failure_is_baseline_conditioned(self, tmp_path):
         path = str(tmp_path / "agent_resilience_summary.csv")
         write_agent_resilience_summary_csv(_make_exact_triplet_records(), path)
@@ -306,6 +335,19 @@ class TestCSVOutput:
         row = rows[0]
         assert float(row["silent_failure_rate"]) == pytest.approx(1.0)
         assert row["baseline_eligible_pairs"] == "1"
+
+    def test_agent_resilience_does_not_treat_exception_as_recovery(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[2]["exception"] = "framework exploded"
+        records[2]["termination_reason"] = "agent_exception"
+        records[2]["reported_error"] = 1.0
+        path = str(tmp_path / "agent_resilience_summary.csv")
+        write_agent_resilience_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+        assert float(row["fault_detection_rate"]) == pytest.approx(0.0)
+        assert float(row["continued_operation_rate"]) == pytest.approx(0.0)
+        assert float(row["graceful_failure_rate"]) == pytest.approx(0.0)
 
     def test_data_quality_summary_counts_triplets_and_provenance(self, tmp_path):
         path = str(tmp_path / "data_quality_summary.csv")
@@ -318,6 +360,16 @@ class TestCSVOutput:
         assert row["valid_fault_pair_count"] == "1"
         assert row["cj_commit"] == "abc123"
         assert row["docker_image_digest"] == "sha256:test"
+
+    def test_inferential_summary_marks_one_task_as_insufficient(self, tmp_path):
+        path = str(tmp_path / "inferential_summary.csv")
+        write_inferential_summary_csv(_make_exact_triplet_records(), path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 1
+        assert rows[0]["test"] == "not_run"
+        assert rows[0]["inference_status"] == "insufficient_unique_tasks"
+        assert rows[0]["p_value"] == ""
 
 
 # ── CLI dry-run ───────────────────────────────────────────────────────────────
