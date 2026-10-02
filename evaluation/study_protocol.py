@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from chaos_jungle import ChaosRunner, Scenario
-from chaos_jungle.faults.llm import _proxy_script_path
+from chaos_jungle.faults.llm import _LLMProxyFault, _proxy_script_path
 from chaos_jungle.targets import LocalTarget
 from evaluation.benchmarks.base import BenchmarkTask
 from evaluation.docker_runner import (
@@ -145,6 +145,7 @@ class PublicationStudyOrchestrator:
         repetition: int = 0,
         container_direct_base_url: str | None = None,
     ) -> list[dict[str, Any]]:
+        _configure_proxy_fault(fault, model_config, self.proxy_port)
         pair_id = make_pair_id(
             study_id=self.study_id,
             framework=agent_system,
@@ -738,3 +739,25 @@ def _redact_url(url: str) -> str:
     if parsed.port:
         netloc = f"{netloc}:{parsed.port}"
     return urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def _strip_openai_v1_suffix(url: str) -> str:
+    stripped = url.rstrip("/")
+    if stripped.endswith("/v1"):
+        return stripped[:-3]
+    return stripped
+
+
+def _configure_proxy_fault(fault: Any, model_config: dict[str, Any], proxy_port: int) -> None:
+    """Align host-side LLM proxy faults with the publication-study proxy route."""
+    if not isinstance(fault, _LLMProxyFault):
+        return
+    base_url = (
+        model_config.get("base_url")
+        or os.environ.get("CJ_EVAL_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+        or fault.upstream
+    )
+    fault.port = int(proxy_port)
+    fault.upstream = _strip_openai_v1_suffix(str(base_url))
+    fault.base_url_env = "CJ_EVAL_BASE_URL"

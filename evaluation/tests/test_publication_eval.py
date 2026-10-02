@@ -631,27 +631,33 @@ def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatc
     )
     monkeypatch.setattr(orch, "_start_passthrough_proxy", lambda model_config: object())
     monkeypatch.setattr(orch, "_stop_process", lambda proc: None)
+    fault = LLMLatency(
+        delay_s=0.1,
+        upstream="http://wrong-upstream.invalid",
+        base_url_env="OPENAI_BASE_URL",
+    )
     records = orch.run_pair(
         agent_system="autogen",
         agent_level="individual",
         topology="single",
         task=task,
         seed=0,
-        model_config={"name": "fake", "base_url": "http://127.0.0.1:9999"},
+        model_config={"name": "fake", "base_url": "http://127.0.0.1:9999/v1"},
         execution_config={"score_timeout_s": 2},
         fault_name="llm_latency",
-        fault=LLMLatency(
-            delay_s=0.1,
-            upstream="http://127.0.0.1:9999",
-            base_url_env="CJ_EVAL_BASE_URL",
-        ),
-        container_direct_base_url="http://host.docker.internal:9999",
+        fault=fault,
+        container_direct_base_url="http://host.docker.internal:9999/v1",
     )
-    assert fake_runner.envs[0]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:9999"
+    assert fake_runner.envs[0]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:9999/v1"
     assert fake_runner.envs[1]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:18099/v1"
     assert fake_runner.envs[2]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:18099/v1"
-    assert records[0]["routing"]["host_upstream_base_url"] == "http://127.0.0.1:9999"
-    assert records[0]["routing"]["container_direct_base_url"] == "http://host.docker.internal:9999"
+    assert fault.port == 18099
+    assert fault.upstream == "http://127.0.0.1:9999"
+    assert fault.base_url_env == "CJ_EVAL_BASE_URL"
+    assert records[0]["routing"]["host_upstream_base_url"] == "http://127.0.0.1:9999/v1"
+    assert records[0]["routing"]["container_direct_base_url"] == "http://host.docker.internal:9999/v1"
+    assert records[2]["fault_parameters"]["port"] == 18099
+    assert records[2]["fault_parameters"]["upstream"] == "http://127.0.0.1:9999"
     assert records[2]["validity"] == "valid"
 
 
