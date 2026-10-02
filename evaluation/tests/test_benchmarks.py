@@ -167,6 +167,7 @@ class TestScoreTask:
 
 # ── EvalPlus scorer unit tests ────────────────────────────────────────────────
 
+@pytest.mark.real_eval
 class TestEvalPlusScoring:
     """Verify score_task() with the official evalplus 0.3.1 evaluator.
 

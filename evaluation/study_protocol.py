@@ -14,8 +14,10 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from urllib import request as urlrequest
 
 from chaos_jungle import ChaosRunner, Scenario
+from chaos_jungle.db import SessionDB
 from chaos_jungle.faults.llm import _LLMProxyFault, _proxy_script_path
 from chaos_jungle.targets import LocalTarget
 from evaluation.benchmarks.base import BenchmarkTask
@@ -25,7 +27,8 @@ from evaluation.docker_runner import (
     RunContext,
     redact_secrets,
 )
-from evaluation.experiments.protocol import _CJ_COMMIT
+from evaluation.experiments.protocol import _CJ_COMMIT, _CJ_SOURCE_PROVENANCE
+from evaluation.schema import OUTPUT_SCHEMA_VERSION
 
 
 CONDITIONS = ("direct_baseline", "cj_control", "cj_fault")
@@ -147,7 +150,9 @@ class PublicationStudyOrchestrator:
         repetition: int = 0,
         container_direct_base_url: str | None = None,
     ) -> list[dict[str, Any]]:
-        _configure_proxy_fault(fault, model_config, self.proxy_port)
+        control_proxy_port = self.proxy_port
+        fault_proxy_port = self.proxy_port + 1
+        _configure_proxy_fault(fault, model_config, fault_proxy_port)
         pair_id = make_pair_id(
             study_id=self.study_id,
             framework=agent_system,
@@ -173,11 +178,16 @@ class PublicationStudyOrchestrator:
             or os.environ.get("OPENAI_BASE_URL")
             or ""
         )
-        proxy_url = self._docker_reachable_proxy_url()
+        control_proxy_url = self._docker_reachable_proxy_url(control_proxy_port)
+        fault_proxy_url = self._docker_reachable_proxy_url(fault_proxy_port)
+        model_provenance = _model_provenance(model_config)
         routing = {
             "host_upstream_base_url": _redact_url(str(model_config.get("base_url", ""))),
             "container_direct_base_url": _redact_url(str(direct_base_url)),
-            "container_proxy_base_url": _redact_url(proxy_url),
+            "container_control_proxy_base_url": _redact_url(control_proxy_url),
+            "container_fault_proxy_base_url": _redact_url(fault_proxy_url),
+            "control_proxy_port": control_proxy_port,
+            "fault_proxy_port": fault_proxy_port,
         }
 
         records.append(self._run_condition(
@@ -198,13 +208,28 @@ class PublicationStudyOrchestrator:
             lifecycle=_no_fault_lifecycle("direct_baseline"),
             validity="valid",
             routing=routing,
+            model_provenance=model_provenance,
         ))
 
         control_lifecycle = _control_lifecycle()
-        control_proc = self._start_passthrough_proxy(model_config)
+        control_db = SessionDB(os.path.join(self.results_dir, "cj_proxy_sessions.sqlite3"))
+        control_session_id = control_db.open_session(
+            name=f"eval-control-{pair_id}",
+            target_type="http",
+            target_addr=f"127.0.0.1:{control_proxy_port}",
+        )
+        control_lifecycle["session_id"] = control_session_id
+        control_lifecycle["evidence_source"] = "cj_passthrough_proxy_database"
+        control_proc = self._start_passthrough_proxy(
+            model_config,
+            port=control_proxy_port,
+            session_id=control_session_id,
+            db=control_db,
+        )
         control_lifecycle["timestamps"]["activated"] = _utc_now()
+        control_record: dict[str, Any] | None = None
         try:
-            records.append(self._run_condition(
+            control_record = self._run_condition(
                 condition="cj_control",
                 agent_system=agent_system,
                 topology=topology,
@@ -214,7 +239,7 @@ class PublicationStudyOrchestrator:
                 execution_config=base_exec,
                 campaign_id=campaign_id,
                 pair_id=pair_id,
-                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": proxy_url}),
+                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": control_proxy_url}),
                 definition=definition,
                 benchmark_task=task,
                 fault_name="passthrough",
@@ -222,20 +247,40 @@ class PublicationStudyOrchestrator:
                 lifecycle=control_lifecycle,
                 validity="valid",
                 routing=routing,
-            ))
+                persist=False,
+                model_provenance=model_provenance,
+            )
         finally:
             self._stop_process(control_proc)
+            self._wait_proxy_down(control_proxy_port)
             control_lifecycle["timestamps"]["reverted"] = _utc_now()
-            control_lifecycle["timestamps"]["recovered"] = _utc_now()
+            _merge_control_lifecycle(control_lifecycle, control_db, control_session_id)
+            try:
+                control_db.set_session_verdict(control_session_id, "VALID")
+                control_db.close_session(control_session_id, "reverted")
+            except Exception:
+                pass
+            if control_lifecycle.get("recovered") is True:
+                control_lifecycle["timestamps"]["recovered"] = _utc_now()
+            if control_record is not None:
+                control_record["lifecycle"] = control_lifecycle
+                records.append(control_record)
+                self._append_jsonl(control_record)
 
         if fault is None:
             raise ValueError("cj_fault condition requires a concrete CJ fault instance")
         scenario = Scenario(f"eval-{fault_name}-{pair_id}", [fault])
-        runner = ChaosRunner(scenario, LocalTarget(), auto_preflight=False)
+        runner = ChaosRunner(
+            scenario,
+            LocalTarget(),
+            db=SessionDB(os.path.join(self.results_dir, "cj_proxy_sessions.sqlite3")),
+            auto_preflight=False,
+        )
         lifecycle = _fault_lifecycle(configured=True)
         validity = "inconclusive"
         fault_record: dict[str, Any] | None = None
         try:
+            self._wait_proxy_down(fault_proxy_port, timeout_s=2.0)
             runner.start()
             lifecycle["activated"] = True
             lifecycle.setdefault("timestamps", {})["activated"] = _utc_now()
@@ -250,7 +295,7 @@ class PublicationStudyOrchestrator:
                 execution_config=base_exec,
                 campaign_id=campaign_id,
                 pair_id=pair_id,
-                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": proxy_url}),
+                extra_env=self._base_env(model_config, {"CJ_EVAL_BASE_URL": fault_proxy_url}),
                 definition=definition,
                 benchmark_task=task,
                 fault_name=fault_name,
@@ -259,6 +304,7 @@ class PublicationStudyOrchestrator:
                 validity=validity,
                 persist=False,
                 routing=routing,
+                model_provenance=model_provenance,
             )
         except Exception as exc:
             lifecycle["details"] = f"fault execution failed: {exc!r}"
@@ -279,6 +325,7 @@ class PublicationStudyOrchestrator:
                     definition=definition,
                     error=repr(exc),
                     routing=routing,
+                    model_provenance=model_provenance,
                 )
         finally:
             try:
@@ -321,6 +368,7 @@ class PublicationStudyOrchestrator:
         validity: str,
         persist: bool = True,
         routing: dict[str, str] | None = None,
+        model_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
         timestamps = lifecycle.setdefault("timestamps", {})
@@ -359,8 +407,10 @@ class PublicationStudyOrchestrator:
             "campaign_id": campaign_id,
             "pair_id": pair_id,
             "run_id": run_id,
+            "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "cj_commit": _CJ_COMMIT,
+            **_CJ_SOURCE_PROVENANCE,
             "condition": condition,
             "phase": "fault" if condition == "cj_fault" else "baseline",
             "agent_level": execution_config.get("agent_level", "individual"),
@@ -372,8 +422,13 @@ class PublicationStudyOrchestrator:
             "topology": topology,
             "benchmark": task.get("benchmark", ""),
             "task_id": task.get("task_id", ""),
+            "benchmark_subset": task.get("metadata", {}).get("benchmark_subset", ""),
+            "task_difficulty": task.get("metadata", {}).get("difficulty", ""),
+            "task_complexity": task.get("metadata", {}).get("complexity_proxy", ""),
             "seed": seed,
             "model": model_config.get("name") or model_config.get("model", ""),
+            "model_digest": (model_provenance or {}).get("digest", ""),
+            "model_provenance": model_provenance or {},
             "endpoint_type": _endpoint_type(extra_env.get("CJ_EVAL_BASE_URL") or model_config.get("base_url", "")),
             "config_hash": _config_hash(model_config, execution_config),
             "fault_type": fault_name,
@@ -388,6 +443,7 @@ class PublicationStudyOrchestrator:
             "experiment_definition": definition.to_dict(),
             "routing": routing or {},
         })
+        record.update(_run_failure_verdicts(record))
         if persist:
             self._append_jsonl(record)
         return record
@@ -410,15 +466,18 @@ class PublicationStudyOrchestrator:
         definition: ChaosExperimentDefinition,
         error: str,
         routing: dict[str, str] | None = None,
+        model_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
-        return {
+        record = {
             "study_id": self.study_id,
             "campaign_id": campaign_id,
             "pair_id": pair_id,
             "run_id": run_id,
+            "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "cj_commit": _CJ_COMMIT,
+            **_CJ_SOURCE_PROVENANCE,
             "condition": condition,
             "phase": "fault",
             "agent_level": agent_level,
@@ -430,8 +489,13 @@ class PublicationStudyOrchestrator:
             "topology": topology,
             "benchmark": task.get("benchmark", ""),
             "task_id": task.get("task_id", ""),
+            "benchmark_subset": task.get("metadata", {}).get("benchmark_subset", ""),
+            "task_difficulty": task.get("metadata", {}).get("difficulty", ""),
+            "task_complexity": task.get("metadata", {}).get("complexity_proxy", ""),
             "seed": seed,
             "model": model_config.get("name") or model_config.get("model", ""),
+            "model_digest": (model_provenance or {}).get("digest", ""),
+            "model_provenance": model_provenance or {},
             "endpoint_type": _endpoint_type(model_config.get("base_url", "")),
             "config_hash": _config_hash(model_config, {}),
             "fault_type": fault_name,
@@ -453,8 +517,18 @@ class PublicationStudyOrchestrator:
             "experiment_definition": definition.to_dict(),
             "routing": routing or {},
         }
+        record.update(_run_failure_verdicts(record))
+        return record
 
-    def _start_passthrough_proxy(self, model_config: dict[str, Any]) -> subprocess.Popen:
+    def _start_passthrough_proxy(
+        self,
+        model_config: dict[str, Any],
+        *,
+        port: int | None = None,
+        session_id: int | None = None,
+        db: SessionDB | None = None,
+    ) -> subprocess.Popen:
+        proxy_port = port or self.proxy_port
         upstream = (
             model_config.get("base_url")
             or os.environ.get("CJ_EVAL_BASE_URL")
@@ -465,34 +539,42 @@ class PublicationStudyOrchestrator:
             sys.executable,
             _proxy_script_path(),
             "--port",
-            str(self.proxy_port),
+            str(proxy_port),
             "--upstream",
             str(upstream).removesuffix("/v1"),
             "--fault",
             "passthrough",
         ]
+        if db is not None and session_id is not None:
+            cmd.extend([
+                "--db-path",
+                str(db.path),
+                "--session-id",
+                str(session_id),
+                "--phase",
+                "control",
+            ])
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         deadline = time.time() + 5
-        import urllib.request
 
         while time.time() < deadline:
             if proc.poll() is not None:
                 out = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
                 raise RuntimeError(f"CJ pass-through proxy failed to start: {out}")
             try:
-                urllib.request.urlopen(f"http://127.0.0.1:{self.proxy_port}/_cj/health", timeout=0.3)
+                urlrequest.urlopen(f"http://127.0.0.1:{proxy_port}/_cj/health", timeout=0.3)
                 return proc
             except Exception:
                 time.sleep(0.05)
         self._stop_process(proc)
         raise RuntimeError("CJ pass-through proxy did not become healthy")
 
-    def _docker_reachable_proxy_url(self) -> str:
+    def _docker_reachable_proxy_url(self, port: int | None = None) -> str:
         if platform.system().lower() == "darwin":
             host = "host.docker.internal"
         else:
             host = os.environ.get("CJ_DOCKER_HOST_GATEWAY", "host.docker.internal")
-        return f"http://{host}:{self.proxy_port}/v1"
+        return f"http://{host}:{port or self.proxy_port}/v1"
 
     def _base_env(
         self,
@@ -528,6 +610,17 @@ class PublicationStudyOrchestrator:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=5)
+
+    def _wait_proxy_down(self, port: int, *, timeout_s: float = 5.0) -> None:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                urlrequest.urlopen(f"http://127.0.0.1:{port}/_cj/health", timeout=0.2)
+            except Exception:
+                return
+            time.sleep(0.05)
+        raise RuntimeError(f"CJ proxy on port {port} did not stop before next condition")
 
 
 def _jsonable(value: Any) -> Any:
@@ -565,6 +658,19 @@ def _fault_target_role(fault_parameters: dict[str, Any]) -> str:
 
 
 def _task_to_request_dict(task: BenchmarkTask) -> dict[str, Any]:
+    metadata = dict(task.metadata)
+    metadata.setdefault("prompt_chars", len(task.prompt or ""))
+    metadata.setdefault("test_chars", len(task.test_code or ""))
+    metadata.setdefault("canonical_solution_chars", len(task.canonical_solution or ""))
+    total_chars = metadata["prompt_chars"] + metadata["test_chars"]
+    metadata.setdefault(
+        "complexity_proxy",
+        "small" if total_chars < 1500 else "medium" if total_chars < 4000 else "large",
+    )
+    metadata.setdefault(
+        "benchmark_subset",
+        "publication" if metadata.get("source") == "evalplus" else "smoke",
+    )
     return {
         "task_id": task.task_id,
         "benchmark": task.benchmark,
@@ -572,7 +678,7 @@ def _task_to_request_dict(task: BenchmarkTask) -> dict[str, Any]:
         "entry_point": task.entry_point,
         "test_code": task.test_code,
         "canonical_solution": task.canonical_solution,
-        "metadata": _jsonable(task.metadata),
+        "metadata": _jsonable(metadata),
     }
 
 
@@ -585,6 +691,126 @@ def _flatten_docker_result(result: DockerAgentRunResult) -> dict[str, Any]:
     payload["executor_timed_out"] = payload.pop("timed_out", False)
     payload["executor_duration_s"] = payload.get("duration_s", 0.0)
     return payload
+
+
+def _success_verdicts(record: dict[str, Any]) -> dict[str, str]:
+    def as_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if value in (None, ""):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    executor_status = str(record.get("executor_status", "ok")).lower()
+    executor_exit_code = int(as_float(record.get("executor_exit_code"), 0.0))
+    executor_ok = (
+        record.get("executor_timed_out") is not True
+        and executor_exit_code == 0
+        and executor_status in {"", "ok"}
+        and not record.get("executor_error")
+    )
+
+    scorer_status = str(record.get("scorer_status", "")).lower()
+    tests_total = int(as_float(record.get("tests_total"), 0.0))
+    if scorer_status in {"", "not_available", "missing", "skipped"}:
+        scorer_verdict = "not_available"
+    elif scorer_status == "ok" and tests_total > 0:
+        scorer_verdict = "success"
+    else:
+        scorer_verdict = "failure"
+
+    return {
+        "executor_success_verdict": "success" if executor_ok else "failure",
+        "scorer_success_verdict": scorer_verdict,
+        "task_success_verdict": (
+            "success" if as_float(record.get("success"), 0.0) >= 0.5 else "failure"
+        ),
+    }
+
+
+def _run_failure_verdicts(record: dict[str, Any]) -> dict[str, Any]:
+    success = _success_verdicts(record)
+    agent_detected = _agent_detected_fault(record)
+    runner_observed, runner_source = _runner_observed_failure(record)
+    reported_error = _as_record_float(record.get("reported_error"), 0.0) >= 0.5
+    task_failed = success["task_success_verdict"] == "failure"
+    operational_success = _agent_operational_success(record)
+    continued_operation = operational_success
+    if agent_detected and runner_observed:
+        source = f"agent_and_{runner_source}"
+    elif agent_detected:
+        source = "agent"
+    elif runner_observed:
+        source = runner_source
+    elif reported_error:
+        source = "reported_error"
+    else:
+        source = "none"
+    return {
+        **success,
+        "operational_success": operational_success,
+        "continued_operation": continued_operation,
+        "agent_detected_fault": agent_detected,
+        "runner_observed_failure": runner_observed,
+        "failure_detection_source": source,
+        "silent_failure": bool(task_failed and operational_success and not agent_detected),
+    }
+
+
+def _as_record_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _agent_detected_fault(record: dict[str, Any]) -> bool:
+    reason = str(record.get("termination_reason", "")).lower()
+    if reason in {"graceful_failure", "controlled_failure", "reported_failure"}:
+        return True
+    trace = record.get("execution_trace") or (record.get("result") or {}).get("execution_trace", [])
+    if isinstance(trace, list):
+        return any(
+            isinstance(event, dict)
+            and event.get("event_type") in {"error_detection", "attempted_recovery"}
+            for event in trace
+        )
+    return False
+
+
+def _runner_observed_failure(record: dict[str, Any]) -> tuple[bool, str]:
+    if record.get("executor_timed_out") is True:
+        return True, "runner_timeout"
+    if record.get("exception"):
+        return True, "runner_exception"
+    if record.get("executor_error"):
+        return True, "executor_error"
+    status = str(record.get("executor_status", "")).lower()
+    if status not in {"", "ok"}:
+        return True, "executor_error"
+    reason = str(record.get("termination_reason", "")).lower()
+    if reason in {"timeout"}:
+        return True, "runner_timeout"
+    if reason in {
+        "api_error", "agent_exception", "container_killed",
+        "error", "exception", "executor_error", "killed",
+    }:
+        return True, "runner_exception"
+    if "exception" in reason:
+        return True, "runner_exception"
+    if "error" in reason:
+        return True, "executor_error"
+    return False, "none"
+
+
+def _agent_operational_success(record: dict[str, Any]) -> bool:
+    if _as_record_float(record.get("reported_error"), 0.0) >= 0.5:
+        return False
+    reason = str(record.get("termination_reason", "")).lower()
+    return reason == "completed"
 
 
 def _validate_container_scoring(
@@ -665,6 +891,49 @@ def _fault_lifecycle(*, configured: bool) -> dict[str, Any]:
     }
 
 
+def _merge_control_lifecycle(
+    lifecycle: dict[str, Any],
+    db: SessionDB,
+    session_id: int,
+) -> None:
+    lifecycle["session_id"] = session_id
+    try:
+        calls = db.get_llm_calls(session_id, phase="control")
+        lifecycle["proxy_call_count"] = len(calls)
+        lifecycle["triggered"] = False
+        lifecycle["manifested"] = False
+        lifecycle["reverted"] = True
+        lifecycle["recovered"] = True
+        lifecycle["verdict"] = "valid"
+        lifecycle["evidence"] = {
+            "faults": [],
+            "configured_faults": [
+                row.get("configured_faults_json", "[]")
+                for row in calls[:5]
+            ],
+            "triggered_faults": [
+                row.get("triggered_faults_json", "[]")
+                for row in calls[:5]
+            ],
+            "fault_evidence": [
+                row.get("fault_evidence_json", "{}")
+                for row in calls[:5]
+            ],
+            "proxy_calls": [
+                _proxy_call_evidence(row)
+                for row in calls[:20]
+            ],
+        }
+        lifecycle["details"] = (
+            "CJ pass-through proxy captured "
+            f"{len(calls)} model request(s) with no active fault"
+        )
+    except Exception as exc:  # noqa: BLE001
+        lifecycle["recovered"] = False
+        lifecycle["verdict"] = "inconclusive"
+        lifecycle["details"] = f"failed to read CJ control evidence: {exc!r}"
+
+
 def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> None:
     session_id = getattr(runner, "_session_id", None)
     if session_id is None:
@@ -726,6 +995,7 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
 
 def _proxy_call_evidence(row: dict[str, Any]) -> dict[str, Any]:
     """Return a bounded, secret-safe subset of a CJ proxy llm_calls row."""
+    request_meta = _request_meta_from_fault_evidence(row.get("fault_evidence_json", "{}"))
     safe = {
         "id": row.get("id"),
         "phase": row.get("phase", ""),
@@ -756,11 +1026,39 @@ def _proxy_call_evidence(row: dict[str, Any]) -> dict[str, Any]:
         "is_retry": row.get("is_retry"),
         "fault_offset_s": row.get("fault_offset_s"),
         "agent_addr": row.get("agent_addr", ""),
+        "run_id": request_meta.get("run_id", ""),
+        "agent_role": request_meta.get("agent_role", ""),
+        "step": request_meta.get("step", ""),
     }
     safe["prompt_text"] = _text_digest(row.get("prompt_text", ""))
     safe["response_text"] = _text_digest(row.get("response_text", ""))
     safe["full_messages_json"] = _text_digest(row.get("full_messages_json", ""))
     return safe
+
+
+def _request_meta_from_fault_evidence(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except Exception:
+        return {}
+    if not isinstance(parsed, list):
+        return {}
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+        evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else {}
+        meta = evidence.get("request_meta") if isinstance(evidence.get("request_meta"), dict) else {}
+        run_id = target.get("run_id") or meta.get("run_id")
+        role = target.get("agent_role") or meta.get("agent_role")
+        step = target.get("step") or meta.get("step")
+        if run_id or role or step:
+            return {
+                "run_id": run_id or "",
+                "agent_role": role or "",
+                "step": step or "",
+            }
+    return {}
 
 
 def _text_digest(value: Any, *, preview_chars: int = 160) -> dict[str, Any]:
@@ -802,6 +1100,59 @@ def _endpoint_type(url: str) -> str:
     if "openai.com" in url:
         return "openai"
     return "openai_compat"
+
+
+def _model_provenance(model_config: dict[str, Any]) -> dict[str, Any]:
+    model = str(model_config.get("name") or model_config.get("model") or "")
+    base_url = str(model_config.get("base_url") or "")
+    if not model:
+        return {"status": "missing_model"}
+    if "11434" not in base_url and "ollama" not in base_url.lower():
+        return {"status": "not_ollama", "model": model}
+    digest = _ollama_model_digest(base_url, model)
+    return {
+        "status": "resolved" if digest else "unresolved",
+        "provider": "ollama",
+        "model": model,
+        "digest": digest or "",
+    }
+
+
+def _ollama_model_digest(base_url: str, model: str) -> str:
+    root = _strip_openai_v1_suffix(base_url).rstrip("/")
+    if not root:
+        return ""
+    try:
+        req = urlrequest.Request(
+            f"{root}/api/tags",
+            method="GET",
+            headers={"Accept": "application/json"},
+        )
+        with urlrequest.urlopen(req, timeout=2.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("models", []):
+            if item.get("name") == model or item.get("model") == model:
+                return str(item.get("digest") or "")
+    except Exception:
+        pass
+    try:
+        body = json.dumps({"name": model}).encode("utf-8")
+        req = urlrequest.Request(
+            f"{root}/api/show",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        with urlrequest.urlopen(req, timeout=2.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return str(
+            data.get("digest")
+            or data.get("details", {}).get("digest")
+            or data.get("model_info", {}).get("general.digest")
+            or ""
+        )
+    except Exception:
+        return ""
 
 
 def _redact_url(url: str) -> str:

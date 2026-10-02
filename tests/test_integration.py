@@ -691,12 +691,17 @@ class TestProxyTracing:
         import chaos_jungle.scripts.llm_proxy.llm_proxy as proxy
 
         triggered: list = []
+        evidence: dict = {}
         cfg = {"fault": "latency", "delay_s": 0.0}  # 0s delay so test is instant
-        proxy._mutate_request(cfg, None, b"", triggered)
+        proxy._mutate_request(cfg, None, b"", triggered, evidence)
 
         assert "latency" in triggered, (
             "latency fault must always be recorded as triggered"
         )
+        assert evidence["latency"]["configured_delay_s"] == 0.0
+        assert evidence["latency"]["observed_injected_delay_s"] >= 0.0
+        assert "injection_start_fault_offset_s" in evidence["latency"]
+        assert "injection_end_fault_offset_s" in evidence["latency"]
 
     def test_mutate_request_tool_fault_conditional(self):
         """_mutate_request with skill_bad_output only triggers on tool requests."""

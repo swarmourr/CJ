@@ -125,6 +125,63 @@ def _amplification(base: float | None, fault: float | None) -> float | None:
     return round(fault / base, 4)
 
 
+def _bool_field(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no", ""}:
+            return False
+    return default
+
+
+def _trace_has_detected_error(record: dict) -> bool:
+    trace = record.get("execution_trace") or (record.get("result") or {}).get("execution_trace", [])
+    if not isinstance(trace, list):
+        return False
+    return any(
+        isinstance(event, dict)
+        and event.get("event_type") in {"error_detection", "attempted_recovery"}
+        for event in trace
+    )
+
+
+def _reported_or_detected_error(record: dict) -> bool:
+    try:
+        reported_error = float(record.get("reported_error", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        reported_error = 0.0
+    if reported_error >= 0.5:
+        return True
+    if record.get("exception") or record.get("executor_error"):
+        return True
+    status = str(record.get("executor_status", "")).lower()
+    if status not in {"", "ok"}:
+        return True
+    reason = str(record.get("termination_reason", "")).lower()
+    explicit_failure_reasons = {
+        "api_error", "agent_exception", "container_killed",
+        "controlled_failure", "error", "exception", "executor_error",
+        "graceful_failure", "killed", "reported_failure", "timeout",
+    }
+    return (
+        reason in explicit_failure_reasons
+        or "error" in reason
+        or "exception" in reason
+        or _trace_has_detected_error(record)
+    )
+
+
+def _silent_failure(record: dict) -> bool:
+    if "silent_failure" in record:
+        return _bool_field(record.get("silent_failure"))
+    return not _reported_or_detected_error(record)
+
+
 def compute_metrics(records: list[dict]) -> AggregationMetrics:
     """Compute all aggregation metrics from a list of RunRecord dicts.
 
@@ -222,7 +279,7 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
         ]
         silent = [
             r for r in denominator
-            if r.get("reported_error", 1.0) < 0.5
+            if _silent_failure(r)
         ]
         if denominator:
             m.silent_failure_rate = round(len(silent) / len(denominator), 4)

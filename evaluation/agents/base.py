@@ -87,8 +87,8 @@ class ModelClient:
         # Snapshot construction-time URL only for the startup check; the actual
         # URL used per request is re-read at call time so CJ proxy redirects work.
         _init_url = os.environ.get("CJ_EVAL_BASE_URL", "").rstrip("/")
-        self.api_key     = os.environ.get("CJ_EVAL_API_KEY", "dummy")
-        self.model       = os.environ.get("CJ_EVAL_MODEL", "gpt-4o-mini")
+        self.api_key     = os.environ.get("CJ_EVAL_API_KEY") or os.environ.get("LLM_API_KEY", "dummy")
+        self.model       = os.environ.get("CJ_EVAL_MODEL") or os.environ.get("LLM_MODEL", "gpt-4o-mini")
         self.temperature = float(os.environ.get("CJ_EVAL_TEMPERATURE", "0.0"))
         self.dry_run     = dry_run
 
@@ -119,6 +119,7 @@ class ModelClient:
         """
         url = (
             os.environ.get("CJ_EVAL_BASE_URL")
+            or os.environ.get("LLM_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
             or ""
         ).rstrip("/")

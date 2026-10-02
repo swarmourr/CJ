@@ -65,9 +65,22 @@ def _load_dotenv() -> None:
         load_dotenv(env_file, override=False)
 
 
+def _apply_llm_env_aliases() -> None:
+    """Accept provider-generic LLM_* names without duplicating secrets."""
+    aliases = {
+        "LLM_API_KEY": "CJ_EVAL_API_KEY",
+        "LLM_BASE_URL": "CJ_EVAL_BASE_URL",
+        "LLM_MODEL": "CJ_EVAL_MODEL",
+    }
+    for source, target in aliases.items():
+        if source in os.environ and target not in os.environ:
+            os.environ[target] = os.environ[source]
+
+
 # Load .env immediately at module import so env vars are available for
 # everything that follows (YAML parsing, credential checks, etc.).
 _load_dotenv()
+_apply_llm_env_aliases()
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _apply_env_overrides(args: argparse.Namespace) -> None:
+    _apply_llm_env_aliases()
     if args.base_url:
         os.environ["CJ_EVAL_BASE_URL"] = args.base_url
     if args.api_key:

@@ -32,8 +32,10 @@ from evaluation.benchmarks.base import BenchmarkTask
 from evaluation.multi_agent import TraceEvent, validate_event_schema
 from evaluation.output import generate_all_outputs
 from evaluation.run import _publication_fault_names, build_parser, run_publication_study
+from evaluation.schema import OUTPUT_SCHEMA_VERSION
 from evaluation.study_protocol import (
     PublicationStudyOrchestrator,
+    _proxy_call_evidence,
     default_experiment_definition,
     make_pair_id,
 )
@@ -56,6 +58,56 @@ def test_secret_redaction_nested_values():
         "nested": {"token": "[REDACTED]", "safe": "ok"},
         "list": [{"password": "[REDACTED]"}],
     }
+
+
+def test_tool_fault_lifecycle_targets_only_tool_requests():
+    cfg = {"fault": "tool_fault", "tool_name": ""}
+    non_tool = {"model": "x", "messages": [{"role": "user", "content": "hello"}]}
+    tool = {"model": "x", "messages": [{"role": "tool", "name": "python", "content": "42"}]}
+
+    non_tool_records = llm_proxy._build_lifecycle_chain(
+        [cfg],
+        [],
+        {},
+        call_index=1,
+        req_body=non_tool,
+        request_meta={"run_id": "r1", "agent_role": "coder", "step": "1"},
+    )
+    tool_records = llm_proxy._build_lifecycle_chain(
+        [cfg],
+        ["tool_fault"],
+        {"tool_fault": {"http_status": 400}},
+        call_index=2,
+        req_body=tool,
+        request_meta={"run_id": "r1", "agent_role": "coder", "step": "2"},
+    )
+
+    assert non_tool_records[0]["target_matched"] is False
+    assert tool_records[0]["target_matched"] is True
+    assert tool_records[0]["target"]["agent_role"] == "coder"
+    assert tool_records[0]["target"]["step"] == "2"
+
+
+def test_proxy_call_evidence_lifts_trace_metadata_without_full_payloads():
+    lifecycle = [{
+        "target": {"run_id": "run-1", "agent_role": "reviewer", "step": "3"},
+        "evidence": {"request_meta": {"run_id": "run-1", "agent_role": "reviewer", "step": "3"}},
+    }]
+    evidence = _proxy_call_evidence({
+        "id": 9,
+        "phase": "fault",
+        "call_index": 2,
+        "fault_evidence_json": json.dumps(lifecycle),
+        "prompt_text": "secret prompt",
+        "response_text": "secret response",
+        "full_messages_json": "[large payload]",
+    })
+
+    assert evidence["run_id"] == "run-1"
+    assert evidence["agent_role"] == "reviewer"
+    assert evidence["step"] == "3"
+    assert evidence["prompt_text"]["preview"] == "secret prompt"
+    assert evidence["response_text"]["length"] == len("secret response")
 
 
 def test_docker_target_executes_only_inside_validated_container(monkeypatch):
@@ -186,6 +238,100 @@ def test_docker_runner_prepare_resolves_relative_output_root(tmp_path, monkeypat
     )
     assert container.input_dir == str(tmp_path / "relative-out" / "input")
     assert container.output_dir == str(tmp_path / "relative-out" / "output")
+
+
+def test_docker_runner_prepare_retries_missing_bind_source(tmp_path, monkeypatch):
+    runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
+    monkeypatch.setattr(runner, "_require_docker", lambda: None)
+    monkeypatch.setattr(runner, "_image_digest", lambda image: "sha256:test")
+    calls = {"create": 0}
+
+    def fake_run(cmd, timeout):
+        if cmd[1] == "create":
+            calls["create"] += 1
+            if calls["create"] == 1:
+                return subprocess.CompletedProcess(
+                    cmd,
+                    1,
+                    "",
+                    'Error response from daemon: invalid mount config for type "bind": '
+                    f"bind source path does not exist: {tmp_path / 'run' / 'input'}",
+                )
+            return subprocess.CompletedProcess(cmd, 0, "container123\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    ctx = RunContext(
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        run_id="run",
+        condition="direct_baseline",
+        output_root=str(tmp_path / "run"),
+    )
+    container = runner.prepare(
+        agent_system="autogen",
+        topology="single",
+        task={"prompt": "solve"},
+        seed=1,
+        model_config={"name": "model"},
+        execution_config={"dry_run": True},
+        run_context=ctx,
+    )
+    assert calls["create"] == 2
+    assert container.container_id == "container123"
+    assert (tmp_path / "run" / "input" / ".cj_mount_probe").exists()
+
+
+def test_docker_runner_prepare_falls_back_to_tmp_staging_for_unmountable_results(
+    tmp_path,
+    monkeypatch,
+):
+    runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
+    monkeypatch.setattr(runner, "_require_docker", lambda: None)
+    monkeypatch.setattr(runner, "_image_digest", lambda image: "sha256:test")
+    calls = {"create": 0}
+    requested = tmp_path / "run"
+
+    def fake_run(cmd, timeout):
+        if cmd[1] == "create":
+            calls["create"] += 1
+            mount_args = [cmd[i + 1] for i, item in enumerate(cmd) if item == "--mount"]
+            if any(str(requested / "input") in arg for arg in mount_args):
+                return subprocess.CompletedProcess(
+                    cmd,
+                    1,
+                    "",
+                    'Error response from daemon: invalid mount config for type "bind": '
+                    f"bind source path does not exist: {requested / 'input'}",
+                )
+            return subprocess.CompletedProcess(cmd, 0, "container123\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    ctx = RunContext(
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        run_id="run",
+        condition="direct_baseline",
+        output_root=str(requested),
+    )
+    container = runner.prepare(
+        agent_system="autogen",
+        topology="single",
+        task={"prompt": "solve"},
+        seed=1,
+        model_config={"name": "model"},
+        execution_config={"dry_run": True},
+        run_context=ctx,
+    )
+    assert calls["create"] == 6
+    assert container.container_id == "container123"
+    assert container.staging_root
+    assert container.input_dir != str(requested / "input")
+    assert container.artifact_input_dir == str(requested / "input")
+    assert (requested / "input" / "request.json").exists()
 
 
 def test_proxy_selector_matching_and_header_stripping():
@@ -475,6 +621,8 @@ def test_generate_outputs_filters_exact_study_id(tmp_path, monkeypatch):
     assert (tmp_path / "inferential_summary.csv").exists()
     manifest = json.loads((tmp_path / "study_manifest.json").read_text())
     assert manifest["record_count"] == 1
+    assert manifest["output_schema_version"] == OUTPUT_SCHEMA_VERSION
+    assert manifest["output_schema_status"] == "frozen"
 
 
 def test_container_entrypoint_dry_run_individual(tmp_path, monkeypatch):
@@ -558,6 +706,7 @@ def test_publication_condition_flattens_scores_and_persists(tmp_path):
                     "scorer_status": "ok",
                     "scorer_error": "",
                     "scoring_evidence": {"strict_evalplus": False},
+                    "termination_reason": "completed",
                 },
                 image="cj:test",
                 image_digest="sha256:test",
@@ -602,11 +751,25 @@ def test_publication_condition_flattens_scores_and_persists(tmp_path):
     assert record["success"] == 1.0
     assert record["tests_total"] == 1
     assert record["llm_calls"] == 1
+    assert record["executor_success_verdict"] == "success"
+    assert record["scorer_success_verdict"] == "success"
+    assert record["task_success_verdict"] == "success"
+    assert record["operational_success"] is True
+    assert record["continued_operation"] is True
+    assert record["agent_detected_fault"] is False
+    assert record["runner_observed_failure"] is False
+    assert record["failure_detection_source"] == "none"
+    assert record["silent_failure"] is False
+    assert record["cj_source_state"] in {"clean", "dirty", "unknown"}
+    assert record["output_schema_version"] == OUTPUT_SCHEMA_VERSION
     rows = (tmp_path / "runs.jsonl").read_text().strip().splitlines()
     assert len(rows) == 1
     persisted = json.loads(rows[0])
     assert persisted["study_id"] == "study-x"
     assert persisted["success"] == 1.0
+    assert persisted["task_success_verdict"] == "success"
+    assert persisted["operational_success"] is True
+    assert persisted["output_schema_version"] == OUTPUT_SCHEMA_VERSION
 
 
 def test_publication_condition_fails_closed_without_container_scoring(tmp_path):
@@ -625,6 +788,7 @@ def test_publication_condition_fails_closed_without_container_scoring(tmp_path):
                     "generated_code": "def solution():\n    return None\n",
                     "duration_s": 0.4,
                     "llm_calls": 1,
+                    "termination_reason": "completed",
                 },
                 image="cj:test",
                 image_digest="sha256:test",
@@ -672,6 +836,14 @@ def test_publication_condition_fails_closed_without_container_scoring(tmp_path):
     assert "host fallback scoring is disabled" in record["scorer_error"]
     assert record["scoring_evidence"]["score_location"] == "container"
     assert record["scoring_evidence"]["valid"] is False
+    assert record["executor_success_verdict"] == "success"
+    assert record["scorer_success_verdict"] == "failure"
+    assert record["task_success_verdict"] == "failure"
+    assert record["operational_success"] is True
+    assert record["continued_operation"] is True
+    assert record["runner_observed_failure"] is False
+    assert record["failure_detection_source"] == "none"
+    assert record["silent_failure"] is True
 
 
 def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatch):
@@ -759,8 +931,9 @@ def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatc
         results_dir=str(tmp_path),
         proxy_port=18099,
     )
-    monkeypatch.setattr(orch, "_start_passthrough_proxy", lambda model_config: object())
+    monkeypatch.setattr(orch, "_start_passthrough_proxy", lambda model_config, **kwargs: object())
     monkeypatch.setattr(orch, "_stop_process", lambda proc: None)
+    monkeypatch.setattr(orch, "_wait_proxy_down", lambda *args, **kwargs: None)
     fault = LLMLatency(
         delay_s=0.1,
         upstream="http://wrong-upstream.invalid",
@@ -780,13 +953,15 @@ def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatc
     )
     assert fake_runner.envs[0]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:9999/v1"
     assert fake_runner.envs[1]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:18099/v1"
-    assert fake_runner.envs[2]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:18099/v1"
-    assert fault.port == 18099
+    assert fake_runner.envs[2]["CJ_EVAL_BASE_URL"] == "http://host.docker.internal:18100/v1"
+    assert fault.port == 18100
     assert fault.upstream == "http://127.0.0.1:9999"
     assert fault.base_url_env == "CJ_EVAL_BASE_URL"
     assert records[0]["routing"]["host_upstream_base_url"] == "http://127.0.0.1:9999/v1"
     assert records[0]["routing"]["container_direct_base_url"] == "http://host.docker.internal:9999/v1"
-    assert records[2]["fault_parameters"]["port"] == 18099
+    assert records[0]["routing"]["container_control_proxy_base_url"] == "http://host.docker.internal:18099/v1"
+    assert records[0]["routing"]["container_fault_proxy_base_url"] == "http://host.docker.internal:18100/v1"
+    assert records[2]["fault_parameters"]["port"] == 18100
     assert records[2]["fault_parameters"]["upstream"] == "http://127.0.0.1:9999"
     assert records[2]["validity"] == "valid"
 

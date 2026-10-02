@@ -101,6 +101,10 @@ def describe_observed(fault_type: str, ev: "dict", triggered: bool) -> str:
     if not triggered:
         return "not triggered — request did not match fault condition"
     if fault_type == "latency":
+        observed = ev.get("observed_injected_delay_s")
+        configured = ev.get("configured_delay_s", ev.get("delay_s", "?"))
+        if observed is not None:
+            return f"delayed {observed:.4f}s (configured {configured}s)"
         return "delayed"
     if fault_type in {"rate_limit", "unavailable", "budget_exceeded"}:
         status = ev.get("http_status", "?")
@@ -195,7 +199,7 @@ def build_lifecycle_chain(
             "target": target_info,
             "configured": True,
             "activated": True,
-            "target_matched": triggered,
+            "target_matched": _fault_target_reached(fault_type, cfg, req_body),
             "triggered": triggered,
             "applied": triggered,
             "manifested": manifested,
@@ -213,3 +217,34 @@ def build_lifecycle_chain(
         }
         records.append(rec)
     return records
+
+
+def _is_tool_request(body: "dict | None") -> bool:
+    if not body:
+        return False
+    return any(m.get("role") == "tool" for m in body.get("messages", []))
+
+
+def _is_mcp_request(body: "dict | None") -> bool:
+    if not body:
+        return False
+    return "jsonrpc" in body or "method" in body
+
+
+def _fault_target_reached(fault_type: str, cfg: "dict", body: "dict | None") -> bool:
+    if fault_type == "tool_fault":
+        if not _is_tool_request(body):
+            return False
+        tool_name = cfg.get("tool_name", "")
+        if not tool_name:
+            return True
+        return any(
+            m.get("name") == tool_name
+            for m in (body.get("messages", []) if body else [])
+            if m.get("role") == "tool"
+        )
+    if fault_type.startswith("mcp_"):
+        return _is_mcp_request(body)
+    if fault_type.startswith("skill_"):
+        return _is_tool_request(body)
+    return True

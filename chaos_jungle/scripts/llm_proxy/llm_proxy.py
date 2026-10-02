@@ -222,7 +222,10 @@ def _build_lifecycle_chain(
         fault_type = cfg.get("fault", "")
         ev = fault_evidence.get(fault_type, {})
         triggered = fault_type in triggered_faults
-        target_matched = _selector_matches(cfg, request_meta)
+        target_matched = (
+            _selector_matches(cfg, request_meta)
+            and _fault_target_reached(fault_type, cfg, req_body)
+        )
 
         # Determine manifestation using canonical payload comparison.
         # A fault manifested if the response was semantically different after
@@ -336,7 +339,11 @@ def _describe_observed(fault_type: str, ev: dict, triggered: bool) -> str:
     if not triggered:
         return "not triggered — request did not match fault condition"
     if fault_type == "latency":
-        return f"delayed"
+        observed = ev.get("observed_injected_delay_s")
+        configured = ev.get("configured_delay_s", ev.get("delay_s", "?"))
+        if observed is not None:
+            return f"delayed {observed:.4f}s (configured {configured}s)"
+        return "delayed"
     if fault_type in {"rate_limit", "unavailable", "budget_exceeded"}:
         status = ev.get("http_status", "?")
         return f"HTTP {status} returned"
@@ -451,6 +458,26 @@ def _is_mcp_request(body: dict | None) -> bool:
     if not body:
         return False
     return "jsonrpc" in body or "method" in body
+
+
+def _fault_target_reached(fault_type: str, cfg: dict, body: dict | None) -> bool:
+    """Return True when this request reached the fault's layer-specific target."""
+    if fault_type == "tool_fault":
+        if not _is_tool_request(body):
+            return False
+        tool_name = cfg.get("tool_name", "")
+        if not tool_name:
+            return True
+        return any(
+            m.get("name") == tool_name
+            for m in (body.get("messages", []) if body else [])
+            if m.get("role") == "tool"
+        )
+    if fault_type.startswith("mcp_"):
+        return _is_mcp_request(body)
+    if fault_type.startswith("skill_"):
+        return _is_tool_request(body)
+    return True
 
 
 def _tool_error_response(body: dict | None) -> bytes:
@@ -1508,10 +1535,21 @@ def _mutate_request(cfg: dict, req_body: "dict | None", raw_body: bytes,
             triggered.append(fault)
             evidence[fault] = {"semantic_mode": mode}
     if fault == "latency":
-        _delay = cfg.get("delay_s", 2.0)
+        _delay = float(cfg.get("delay_s", 2.0))
+        _offset_before = _fault_offset()
+        _sleep_start = time.monotonic()
         time.sleep(_delay)
+        _sleep_end = time.monotonic()
+        _observed = round(_sleep_end - _sleep_start, 6)
+        _offset_after = _fault_offset()
         triggered.append(fault)
-        evidence[fault] = {"delay_s": _delay}
+        evidence[fault] = {
+            "delay_s": _delay,
+            "configured_delay_s": _delay,
+            "observed_injected_delay_s": _observed,
+            "injection_start_fault_offset_s": _offset_before,
+            "injection_end_fault_offset_s": _offset_after,
+        }
     return req_body, raw_body
 
 

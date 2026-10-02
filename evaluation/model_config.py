@@ -99,6 +99,7 @@ class ModelConfig:
         """
         url = (
             os.environ.get("CJ_EVAL_BASE_URL")
+            or os.environ.get("LLM_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
             or ""
         ).rstrip("/")
@@ -110,6 +111,10 @@ class ModelConfig:
         """Return the current API key, re-reading the named env var each call."""
         if self.api_key_env:
             key = os.environ.get(self.api_key_env, "")
+            if key:
+                return key
+        if self.api_key_env == "CJ_EVAL_API_KEY":
+            key = os.environ.get("LLM_API_KEY", "")
             if key:
                 return key
         return self.api_key or "dummy"
@@ -204,6 +209,8 @@ def load_model_config(cfg: dict) -> ModelConfig:
     # Resolve the API key from the named env var
     if mc.api_key_env:
         key = os.environ.get(mc.api_key_env, "")
+        if not key and mc.api_key_env == "CJ_EVAL_API_KEY":
+            key = os.environ.get("LLM_API_KEY", "")
         if key:
             mc.api_key = key
         else:

@@ -228,6 +228,16 @@ class TestLoadModelConfig:
         mc = load_model_config({"api_key_env": "MY_SECRET_KEY"})
         assert mc.api_key == "sk-real-key-abc"
 
+    def test_llm_alias_env_resolution(self, monkeypatch):
+        from evaluation.model_config import load_model_config
+        monkeypatch.delenv("CJ_EVAL_API_KEY", raising=False)
+        monkeypatch.delenv("CJ_EVAL_BASE_URL", raising=False)
+        monkeypatch.setenv("LLM_API_KEY", "sk-real-key-abc")
+        monkeypatch.setenv("LLM_BASE_URL", "https://provider.example/v1")
+        mc = load_model_config({"api_key_env": "CJ_EVAL_API_KEY"})
+        assert mc.api_key == "sk-real-key-abc"
+        assert mc.current_base_url == "https://provider.example/v1"
+
     def test_missing_api_key_env_warns(self, monkeypatch):
         from evaluation.model_config import load_model_config
         monkeypatch.delenv("NONEXISTENT_KEY_XYZ", raising=False)

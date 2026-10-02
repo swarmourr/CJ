@@ -47,6 +47,11 @@ def redact_secrets(value: Any) -> Any:
     return value
 
 
+def _is_missing_bind_source(proc: subprocess.CompletedProcess) -> bool:
+    message = f"{proc.stderr or ''}\n{proc.stdout or ''}"
+    return "bind source path does not exist" in message
+
+
 @dataclass
 class DockerExecutionConfig:
     """Host-side Docker settings shared by paired executions."""
@@ -101,6 +106,9 @@ class PreparedContainer:
     request_path: str
     resource_limits: dict[str, Any]
     created_at: float
+    artifact_input_dir: str | None = None
+    artifact_output_dir: str | None = None
+    staging_root: str | None = None
 
 
 @dataclass
@@ -165,10 +173,10 @@ class DockerAgentRunner:
         output_root = Path(
             run_context.output_root or tempfile.mkdtemp(prefix="cj-docker-run-")
         ).expanduser().resolve()
+        output_root.mkdir(parents=True, exist_ok=True)
         input_dir = output_root / "input"
         output_dir = output_root / "output"
-        input_dir.mkdir(parents=True, exist_ok=True)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_mount_dirs(input_dir, output_dir)
 
         request = {
             "agent_system": agent_system,
@@ -190,7 +198,25 @@ class DockerAgentRunner:
         digest = self._image_digest(self.config.image)
         name = f"cj-eval-{run_context.run_id[:24]}-{uuid.uuid4().hex[:8]}"
         create_cmd = self._create_command(name, input_dir, output_dir, run_context.environment)
-        create = self._run(create_cmd, timeout=60)
+        create = self._create_with_mount_retry(create_cmd, input_dir, output_dir)
+        artifact_input_dir = input_dir
+        artifact_output_dir = output_dir
+        staging_root: Path | None = None
+        if create.returncode != 0 and _is_missing_bind_source(create):
+            staging_root = Path(tempfile.mkdtemp(prefix="cj-docker-io-")).resolve()
+            staged_input = staging_root / "input"
+            staged_output = staging_root / "output"
+            self._ensure_mount_dirs(staged_input, staged_output)
+            shutil.copytree(input_dir, staged_input, dirs_exist_ok=True)
+            create_cmd = self._create_command(
+                name,
+                staged_input,
+                staged_output,
+                run_context.environment,
+            )
+            create = self._create_with_mount_retry(create_cmd, staged_input, staged_output)
+            input_dir = staged_input
+            output_dir = staged_output
         if create.returncode != 0:
             raise RuntimeError(f"docker create failed: {create.stderr or create.stdout}")
         container_id = create.stdout.strip()
@@ -203,6 +229,9 @@ class DockerAgentRunner:
             request_path="/cj/input/request.json",
             resource_limits=self.config.resource_limits(),
             created_at=time.time(),
+            artifact_input_dir=str(artifact_input_dir),
+            artifact_output_dir=str(artifact_output_dir),
+            staging_root=str(staging_root) if staging_root is not None else None,
         )
 
     def exec_agent(
@@ -283,6 +312,10 @@ class DockerAgentRunner:
                 "success": 0.0,
                 "reported_error": 1.0,
             }
+        self._sync_staged_io(execution.container)
+        artifact_input_dir = execution.container.artifact_input_dir or execution.container.input_dir
+        artifact_output_dir = execution.container.artifact_output_dir or execution.container.output_dir
+        artifact_result_path = Path(artifact_output_dir) / "result.json"
         return DockerAgentRunResult(
             container_id=execution.container.container_id,
             exit_code=execution.exit_code,
@@ -295,9 +328,9 @@ class DockerAgentRunner:
             image_digest=execution.container.image_digest,
             resource_limits=execution.container.resource_limits,
             artifact_paths={
-                "input_dir": execution.container.input_dir,
-                "output_dir": execution.container.output_dir,
-                "result_json": str(result_path),
+                "input_dir": artifact_input_dir,
+                "output_dir": artifact_output_dir,
+                "result_json": str(artifact_result_path),
             },
         )
 
@@ -306,6 +339,8 @@ class DockerAgentRunner:
             [self.config.docker_bin, "rm", "-f", container.container_id],
             timeout=60,
         )
+        if container.staging_root:
+            shutil.rmtree(container.staging_root, ignore_errors=True)
         if not self.config.preserve_io:
             root = Path(container.input_dir).parent
             if root.name.startswith("cj-docker-run-"):
@@ -402,6 +437,45 @@ class DockerAgentRunner:
             cmd += ["--env", f"{key}={value}"]
         cmd += [self.config.image, "sleep", "infinity"]
         return cmd
+
+    def _ensure_mount_dirs(self, *dirs: Path) -> None:
+        for directory in dirs:
+            directory.mkdir(parents=True, exist_ok=True)
+            probe = directory / ".cj_mount_probe"
+            probe.write_text("ok\n", encoding="utf-8")
+            if not directory.is_dir() or not probe.exists():
+                raise RuntimeError(f"Docker bind source directory is not visible on host: {directory}")
+
+    def _create_with_mount_retry(
+        self,
+        create_cmd: list[str],
+        input_dir: Path,
+        output_dir: Path,
+    ) -> subprocess.CompletedProcess:
+        attempts = 5
+        last: subprocess.CompletedProcess | None = None
+        for attempt in range(attempts):
+            self._ensure_mount_dirs(input_dir, output_dir)
+            proc = self._run(create_cmd, timeout=60)
+            if proc.returncode == 0:
+                return proc
+            last = proc
+            if not _is_missing_bind_source(proc):
+                return proc
+            if attempt < attempts - 1:
+                time.sleep(0.2 * (attempt + 1))
+        assert last is not None
+        return last
+
+    def _sync_staged_io(self, container: PreparedContainer) -> None:
+        if not container.staging_root:
+            return
+        artifact_input = Path(container.artifact_input_dir or container.input_dir)
+        artifact_output = Path(container.artifact_output_dir or container.output_dir)
+        artifact_input.mkdir(parents=True, exist_ok=True)
+        artifact_output.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(container.input_dir, artifact_input, dirs_exist_ok=True)
+        shutil.copytree(container.output_dir, artifact_output, dirs_exist_ok=True)
 
     def _image_digest(self, image: str) -> str:
         proc = self._run(

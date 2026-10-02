@@ -20,6 +20,7 @@ from typing import Any
 
 from evaluation.analysis.metrics import AggregationMetrics, compute_metrics
 from evaluation.analysis.validity import classify_records
+from evaluation.schema import OUTPUT_SCHEMA_STATUS, OUTPUT_SCHEMA_VERSION
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -33,6 +34,20 @@ def _as_float(value: Any, default: float = 0.0) -> float:
 
 def _as_bool_success(record: dict) -> int:
     return 1 if _as_float(record.get("success"), 0.0) >= 0.5 else 0
+
+
+def _as_bool_field(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes"}:
+            return True
+        if lowered in {"false", "0", "no", ""}:
+            return False
+    return default
 
 
 def _mean(values: list[float]) -> float | None:
@@ -280,6 +295,9 @@ def _proxy_call_columns(call: dict) -> dict[str, Any]:
         "proxy_call_id": call.get("id", ""),
         "proxy_phase": call.get("phase", ""),
         "proxy_call_index": call.get("call_index", ""),
+        "proxy_run_id": call.get("run_id", ""),
+        "proxy_agent_role": call.get("agent_role", ""),
+        "proxy_step": call.get("step", ""),
         "proxy_timestamp": call.get("timestamp", ""),
         "proxy_model": call.get("model", ""),
         "proxy_latency_s": call.get("latency_s", ""),
@@ -315,6 +333,10 @@ def _blank_proxy_call_columns() -> dict[str, Any]:
 
 
 def _affected_call_count(record: dict) -> int:
+    if record.get("condition") == "cj_control" or record.get("fault_type") in {
+        "", "none", "passthrough",
+    }:
+        return 0
     entries = _evidence_entries(record)
     if entries:
         return sum(
@@ -337,14 +359,74 @@ def _affected_call_count(record: dict) -> int:
 
 def _call_accounting(record: dict) -> dict[str, int]:
     """Separate agent-reported calls from CJ proxy-observed calls."""
-    completed = int(_as_float(record.get("llm_calls"), 0.0))
+    agent_reported = int(_as_float(record.get("llm_calls"), 0.0))
     intercepted = int(_lifecycle(record).get("proxy_call_count") or 0)
     affected = _affected_call_count(record)
     return {
-        "llm_calls_attempted": max(completed, intercepted),
-        "llm_calls_completed": completed,
+        "agent_reported_llm_calls": agent_reported,
+        "proxy_intercepted_calls": intercepted,
+        "llm_calls_attempted": max(agent_reported, intercepted),
+        "llm_calls_completed": agent_reported,
         "proxy_calls_intercepted": intercepted,
         "proxy_calls_affected": affected,
+    }
+
+
+def _success_verdicts(record: dict) -> dict[str, str]:
+    """Keep executor, scorer, and task correctness success separate."""
+    executor_status = str(record.get("executor_status", "ok")).lower()
+    executor_exit_code = int(_as_float(record.get("executor_exit_code"), 0.0))
+    executor_ok = (
+        record.get("executor_timed_out") is not True
+        and executor_exit_code == 0
+        and executor_status in {"", "ok"}
+        and not record.get("executor_error")
+    )
+
+    scorer_status = str(record.get("scorer_status", "")).lower()
+    tests_total = int(_as_float(record.get("tests_total"), 0.0))
+    if scorer_status in {"", "not_available", "missing", "skipped"}:
+        scorer_verdict = "not_available"
+    elif scorer_status == "ok" and tests_total > 0:
+        scorer_verdict = "success"
+    else:
+        scorer_verdict = "failure"
+
+    return {
+        "executor_success_verdict": "success" if executor_ok else "failure",
+        "scorer_success_verdict": scorer_verdict,
+        "task_success_verdict": "success" if _as_bool_success(record) else "failure",
+    }
+
+
+def _run_failure_verdicts(record: dict) -> dict[str, Any]:
+    success = _success_verdicts(record)
+    agent_detected = _agent_detected_fault(record)
+    runner_observed, runner_source = _runner_observed_failure(record)
+    reported_error = _as_float(record.get("reported_error"), 0.0) >= 0.5
+    operational_success = _agent_operational_success(record)
+    if agent_detected and runner_observed:
+        source = f"agent_and_{runner_source}"
+    elif agent_detected:
+        source = "agent"
+    elif runner_observed:
+        source = runner_source
+    elif reported_error:
+        source = "reported_error"
+    else:
+        source = "none"
+    return {
+        **success,
+        "operational_success": operational_success,
+        "continued_operation": operational_success,
+        "agent_detected_fault": agent_detected,
+        "runner_observed_failure": runner_observed,
+        "failure_detection_source": source,
+        "silent_failure": bool(
+            success["task_success_verdict"] == "failure"
+            and operational_success
+            and not agent_detected
+        ),
     }
 
 
@@ -364,6 +446,8 @@ def _cj_evidence_summary(record: dict) -> dict[str, Any]:
         "cj_lifecycle_recovered": lifecycle.get("recovered", ""),
         "cj_lifecycle_verdict": lifecycle.get("verdict", ""),
         "cj_proxy_call_count": lifecycle.get("proxy_call_count", ""),
+        "agent_reported_llm_calls": accounting["agent_reported_llm_calls"],
+        "proxy_intercepted_calls": accounting["proxy_intercepted_calls"],
         "cj_proxy_calls_intercepted": accounting["proxy_calls_intercepted"],
         "cj_proxy_calls_affected": accounting["proxy_calls_affected"],
         "cj_configured_faults_json": _sanitized_json_cell(evidence.get("configured_faults", [])),
@@ -464,15 +548,23 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
         return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     cols = [
-        "study_id", "run_id", "campaign_id", "pair_id", "condition",
+        "study_id", "run_id", "output_schema_version",
+        "campaign_id", "pair_id", "condition",
         "agent_level", "topology", "fault_target_role",
-        "timestamp", "cj_commit",
+        "timestamp", "cj_commit", "cj_source_version",
+        "cj_source_state", "cj_source_dirty",
         "agent_system", "framework", "requested_framework", "framework_native",
-        "multi_agent_impl", "benchmark", "task_id",
-        "model", "endpoint_type", "config_hash",
+        "multi_agent_impl", "benchmark", "benchmark_subset", "task_id",
+        "task_difficulty", "task_complexity",
+        "model", "model_digest", "endpoint_type", "config_hash",
         "seed", "fault_type", "phase", "validity",
+        "executor_success_verdict", "scorer_success_verdict", "task_success_verdict",
+        "operational_success", "continued_operation",
+        "agent_detected_fault", "runner_observed_failure",
+        "failure_detection_source", "silent_failure",
         "success", "duration_s", "reported_error", "retries",
         "llm_calls", "tool_calls", "turns",
+        "agent_reported_llm_calls", "proxy_intercepted_calls",
         "llm_calls_attempted", "llm_calls_completed",
         "proxy_calls_intercepted", "proxy_calls_affected",
         "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd",
@@ -493,6 +585,7 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
 
     def _flatten(r: dict) -> dict:
         out = dict(r)
+        out["output_schema_version"] = r.get("output_schema_version") or OUTPUT_SCHEMA_VERSION
         lc = r.get("lifecycle") or {}
         if isinstance(lc, dict):
             out["lifecycle.triggered"]  = lc.get("triggered", "")
@@ -501,6 +594,7 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
             out["lifecycle.recovered"]  = lc.get("recovered", "")
             out["lifecycle.activated"]  = lc.get("activated", "")
             out["lifecycle.verdict"]    = lc.get("verdict", "")
+        out.update(_run_failure_verdicts(r))
         out.update(_call_accounting(r))
         out.update(_cj_evidence_summary(r))
         return out
@@ -656,7 +750,8 @@ def write_cj_evidence_csv(records: list[dict], path: str) -> None:
         "cj_lifecycle_manifested", "cj_lifecycle_reverted",
         "cj_lifecycle_recovered", "cj_lifecycle_verdict",
         "cj_proxy_call_count", "cj_proxy_calls_intercepted",
-        "cj_proxy_calls_affected", "cj_configured_faults_json",
+        "cj_proxy_calls_affected", "agent_reported_llm_calls",
+        "proxy_intercepted_calls", "cj_configured_faults_json",
         "cj_triggered_faults_json", "cj_fault_evidence_json",
         "cj_faults_json", "cj_proxy_calls_json", "cj_lifecycle_timestamps_json",
         "cj_lifecycle_details", "cj_raw_evidence_json", "evidence_index",
@@ -841,6 +936,7 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
         ]
         rows.append({
             "agent_level": level,
+            "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "system": system,
             "model": model,
             "fault": fault_type,
@@ -894,12 +990,14 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
             "target_coverage": selectivity["target_coverage"],
             "framework_versions": json.dumps(_first_nonempty([f.get("framework_versions") for _b, _c, f in triplet_like]), sort_keys=True),
             "cj_commit": _first_nonempty([f.get("cj_commit") for _b, _c, f in triplet_like]),
+            "cj_source_version": _first_nonempty([f.get("cj_source_version") for _b, _c, f in triplet_like]),
+            "cj_source_state": _first_nonempty([f.get("cj_source_state") for _b, _c, f in triplet_like]),
             "docker_image_digest": _first_nonempty([f.get("docker_image_digest") or f.get("image_digest") for _b, _c, f in triplet_like]),
             "fault_parameters": json.dumps(_first_nonempty([f.get("fault_parameters") for _b, _c, f in triplet_like]) or {}, sort_keys=True),
         })
 
     fields = list(rows[0].keys()) if rows else [
-        "agent_level", "system", "model", "fault", "severity", "topology",
+        "agent_level", "output_schema_version", "system", "model", "fault", "severity", "topology",
         "benchmark", "tasks", "unique_tasks", "complete_triplets",
         "missing_pair_count", "valid_pairs", "baseline_eligible_pairs",
         "control_eligible_pairs", "inference_status", "evaluation_scope",
@@ -912,8 +1010,8 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
         "invalid_experiment_rate", "inconclusive_rate", "untriggered_rate",
         "excluded_invalid_count", "excluded_inconclusive_count",
         "excluded_untriggered_count", "selectivity_precision", "target_coverage",
-        "framework_versions", "cj_commit", "docker_image_digest",
-        "fault_parameters",
+        "framework_versions", "cj_commit", "cj_source_version",
+        "cj_source_state", "docker_image_digest", "fault_parameters",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -943,17 +1041,43 @@ def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
         fault_records = [f for _c, f in pairs]
         affected_calls = sum(_affected_call_count(f) for f in fault_records)
         intercepted_calls = sum(int(_lifecycle(f).get("proxy_call_count") or 0) for f in fault_records)
-        observed_added = [
-            _as_float(f.get("duration_s")) - _as_float(c.get("duration_s"))
-            for c, f in pairs
-            if c is not None
-        ]
         params = _first_nonempty([f.get("fault_parameters") for f in fault_records])
         params = params if isinstance(params, dict) else {}
         configured_delay = _as_float(params.get("delay_s"), 0.0)
         configured_timeout = _as_float(params.get("timeout_s"), 0.0)
-        expected_latency = affected_calls * configured_delay if fault_type == "llm_latency" else None
-        observed_latency = sum(observed_added) if fault_type == "llm_latency" and observed_added else None
+        observed_latency_samples = _fault_evidence_numbers(
+            fault_records,
+            "observed_injected_delay_s",
+            "observed_delay_s",
+            "injected_delay_s",
+            fault_names={"latency", "llm_latency"},
+        )
+        configured_latency_samples = _fault_evidence_numbers(
+            fault_records,
+            "configured_delay_s",
+            "delay_s",
+            fault_names={"latency", "llm_latency"},
+        )
+        if fault_type == "llm_latency":
+            expected_latency = (
+                sum(configured_latency_samples)
+                if configured_latency_samples
+                else affected_calls * configured_delay
+            )
+            observed_latency = (
+                sum(observed_latency_samples)
+                if observed_latency_samples
+                else None
+            )
+            latency_fidelity_source = (
+                "cj_proxy_sleep_evidence"
+                if observed_latency_samples
+                else "missing_proxy_sleep_evidence"
+            )
+        else:
+            expected_latency = None
+            observed_latency = None
+            latency_fidelity_source = ""
         expected_timeout = affected_calls * configured_timeout if fault_type == "llm_timeout" else None
         timeout_proxy_latencies = _proxy_latencies_for_fault(fault_records, {"timeout", "llm_timeout"}, http_status=504)
         observed_timeout = sum(timeout_proxy_latencies) if fault_type == "llm_timeout" and timeout_proxy_latencies else None
@@ -1007,6 +1131,7 @@ def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
         affected_call_fraction = _ratio(affected_calls, intercepted_calls)
         rows.append({
             "agent_level": level,
+            "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "system": system,
             "topology": topology,
             "benchmark": benchmark,
@@ -1023,8 +1148,11 @@ def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
                 if observed_latency is not None and expected_latency is not None
                 else None
             ),
+            "latency_fidelity_source": latency_fidelity_source,
             "observed_added_latency_per_affected_call_s": (
-                observed_latency / affected_calls
+                observed_latency / len(observed_latency_samples)
+                if observed_latency is not None and observed_latency_samples
+                else observed_latency / affected_calls
                 if observed_latency is not None and affected_calls
                 else None
             ),
@@ -1060,7 +1188,7 @@ def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
             "observed_http_statuses": json.dumps(sorted(evidence_values.get("http_status", []))),
             "observed_modes": json.dumps(sorted(evidence_values.get("mode", []))),
             "observed_truncated_token_counts": json.dumps(sorted(evidence_values.get("truncated_tokens", []))),
-            "injection_point_timing": "",
+            "injection_point_timing": _injection_point_timing(fault_records),
             "activation_verification_time_s": "",
             "recovery_verification_time_s": "",
         })
@@ -1069,9 +1197,10 @@ def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
         "agent_level", "system", "topology", "benchmark", "model", "fault",
         "severity", "configured_severity", "intercepted_calls", "affected_calls",
         "observed_added_latency_s", "expected_added_latency_s", "latency_error_s",
-        "observed_added_latency_per_affected_call_s", "observed_timeout_duration_s",
-        "expected_timeout_duration_s", "timeout_error_s", "original_token_limit",
-        "timeout_fidelity_source", "modified_token_limit", "completion_token_reduction",
+        "latency_fidelity_source", "observed_added_latency_per_affected_call_s",
+        "observed_timeout_duration_s", "expected_timeout_duration_s",
+        "timeout_error_s", "original_token_limit", "timeout_fidelity_source",
+        "modified_token_limit", "completion_token_reduction",
         "original_response_length", "truncated_response_length",
         "original_response_bytes", "mutated_response_bytes",
         "truncation_ratio", "json_parse_failure_confirmed", "tool_call_target",
@@ -1155,6 +1284,46 @@ def _proxy_latencies_for_fault(
     return latencies
 
 
+def _fault_evidence_numbers(
+    records: list[dict],
+    *keys: str,
+    fault_names: set[str] | None = None,
+) -> list[float]:
+    values: list[float] = []
+    names = fault_names or set()
+    for record in records:
+        for entry in _evidence_entries(record):
+            if names and str(entry.get("fault_type", "")) not in names:
+                continue
+            evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else entry
+            for key in keys:
+                if key in evidence and evidence[key] not in (None, ""):
+                    values.append(_as_float(evidence[key]))
+                    break
+    return values
+
+
+def _injection_point_timing(records: list[dict]) -> str:
+    for record in records:
+        for entry in _evidence_entries(record):
+            evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else entry
+            start = evidence.get("injection_start_fault_offset_s")
+            end = evidence.get("injection_end_fault_offset_s")
+            if start not in (None, "") or end not in (None, ""):
+                return json.dumps(
+                    {
+                        "start_fault_offset_s": start,
+                        "end_fault_offset_s": end,
+                    },
+                    sort_keys=True,
+                )
+        for call in _proxy_calls(record):
+            offset = call.get("fault_offset_s")
+            if offset not in (None, ""):
+                return json.dumps({"recorded_fault_offset_s": offset}, sort_keys=True)
+    return ""
+
+
 def _first_observed(values: dict[str, set[str]], *keys: str) -> str:
     for key in keys:
         entries = sorted(values.get(key, set()))
@@ -1182,17 +1351,18 @@ def write_agent_resilience_summary_csv(records: list[dict], path: str) -> None:
         fault_failures_after_baseline_success = [
             (b, c, f) for b, c, f in baseline_success_faults if not _as_bool_success(f)
         ]
-        detected = [f for _b, _c, f in triplets if _agent_detected_fault(f)]
-        continued = [f for _b, _c, f in triplets if _agent_continued(f)]
+        detected = [f for _b, _c, f in triplets if _record_agent_detected_fault(f)]
+        continued = [f for _b, _c, f in triplets if _record_continued_operation(f)]
         repair = [f for _b, _c, f in triplets if _agent_attempted_repair(f)]
         successful_repair = [f for _b, _c, f in triplets if _agent_attempted_repair(f) and _as_bool_success(f)]
         graceful = [f for _b, _c, f in triplets if _agent_graceful_failure(f)]
         silent = [
             f for _b, _c, f in fault_failures_after_baseline_success
-            if not _agent_detected_fault(f)
+            if _record_silent_failure(f)
         ]
         rows.append({
             "agent_level": level,
+            "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "system": system,
             "topology": topology,
             "benchmark": benchmark,
@@ -1252,6 +1422,80 @@ def _agent_detected_fault(record: dict) -> bool:
             for event in trace
         )
     return False
+
+
+def _record_agent_detected_fault(record: dict) -> bool:
+    if "agent_detected_fault" in record:
+        return _as_bool_field(record.get("agent_detected_fault"))
+    return _agent_detected_fault(record)
+
+
+def _record_continued_operation(record: dict) -> bool:
+    if "continued_operation" in record:
+        return _as_bool_field(record.get("continued_operation"))
+    return _agent_operational_success(record)
+
+
+def _record_silent_failure(record: dict) -> bool:
+    if "silent_failure" in record:
+        return _as_bool_field(record.get("silent_failure"))
+    return (
+        not _as_bool_success(record)
+        and _agent_operational_success(record)
+        and not _agent_detected_fault(record)
+    )
+
+
+def _agent_reported_error(record: dict) -> bool:
+    if _as_float(record.get("reported_error"), 0.0) >= 0.5:
+        return True
+    if record.get("exception") or record.get("executor_error"):
+        return True
+    status = str(record.get("executor_status", "")).lower()
+    if status not in {"", "ok"}:
+        return True
+    reason = str(record.get("termination_reason", "")).lower()
+    explicit_failure_reasons = {
+        "api_error", "agent_exception", "container_killed",
+        "controlled_failure", "error", "exception", "executor_error",
+        "graceful_failure", "killed", "reported_failure", "timeout",
+    }
+    return reason in explicit_failure_reasons or "error" in reason or "exception" in reason
+
+
+def _agent_reported_or_detected_error(record: dict) -> bool:
+    return _agent_reported_error(record) or _agent_detected_fault(record)
+
+
+def _runner_observed_failure(record: dict) -> tuple[bool, str]:
+    if record.get("executor_timed_out") is True:
+        return True, "runner_timeout"
+    if record.get("exception"):
+        return True, "runner_exception"
+    if record.get("executor_error"):
+        return True, "executor_error"
+    status = str(record.get("executor_status", "")).lower()
+    if status not in {"", "ok"}:
+        return True, "executor_error"
+    reason = str(record.get("termination_reason", "")).lower()
+    if reason == "timeout":
+        return True, "runner_timeout"
+    if reason in {
+        "api_error", "agent_exception", "container_killed",
+        "error", "exception", "executor_error", "killed",
+    }:
+        return True, "runner_exception"
+    if "exception" in reason:
+        return True, "runner_exception"
+    if "error" in reason:
+        return True, "executor_error"
+    return False, "none"
+
+
+def _agent_operational_success(record: dict) -> bool:
+    if _as_float(record.get("reported_error"), 0.0) >= 0.5:
+        return False
+    return str(record.get("termination_reason", "")).lower() == "completed"
 
 
 def _agent_continued(record: dict) -> bool:
@@ -1321,6 +1565,7 @@ def write_data_quality_summary_csv(records: list[dict], path: str) -> None:
         )
         rows.append({
             "agent_level": level,
+            "output_schema_version": OUTPUT_SCHEMA_VERSION,
             "system": system,
             "topology": topology,
             "benchmark": benchmark,
@@ -1344,20 +1589,23 @@ def write_data_quality_summary_csv(records: list[dict], path: str) -> None:
             "model_versions": model,
             "framework_versions": json.dumps(_first_nonempty([f.get("framework_versions") for f in fault_records]), sort_keys=True),
             "cj_commit": _first_nonempty([f.get("cj_commit") for f in fault_records]),
+            "cj_source_version": _first_nonempty([f.get("cj_source_version") for f in fault_records]),
+            "cj_source_state": _first_nonempty([f.get("cj_source_state") for f in fault_records]),
             "docker_image_digest": _first_nonempty([f.get("docker_image_digest") or f.get("image_digest") for f in fault_records]),
             "fault_parameters": json.dumps(_first_nonempty([f.get("fault_parameters") for f in fault_records]) or {}, sort_keys=True),
             "resource_limits": json.dumps(_first_nonempty([f.get("container_resource_limits") for f in fault_records]) or {}, sort_keys=True),
         })
 
     fields = list(rows[0].keys()) if rows else [
-        "agent_level", "system", "topology", "benchmark", "model", "fault",
-        "severity", "records", "raw_fault_records", "raw_condition_records",
+        "agent_level", "output_schema_version", "system", "topology", "benchmark",
+        "model", "fault", "severity", "records", "raw_fault_records", "raw_condition_records",
         "expected_condition_records_for_complete_triplets", "tasks", "unique_tasks",
         "repetitions", "complete_triplets", "missing_pair_count", "baseline_eligible_pair_count",
         "valid_fault_pair_count", "excluded_invalid_count",
         "excluded_inconclusive_count", "excluded_untriggered_count",
         "model_versions", "framework_versions", "cj_commit",
-        "docker_image_digest", "fault_parameters", "resource_limits",
+        "cj_source_version", "cj_source_state", "docker_image_digest",
+        "fault_parameters", "resource_limits",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -1462,6 +1710,8 @@ def write_study_manifest(records: list[dict], path: str, study_id: str | None) -
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     manifest = {
         "study_id": study_id or (records[0].get("study_id") if records else ""),
+        "output_schema_version": OUTPUT_SCHEMA_VERSION,
+        "output_schema_status": OUTPUT_SCHEMA_STATUS,
         "record_count": len(records),
         "conditions": sorted({r.get("condition", "") for r in records if r.get("condition")}),
         "campaign_ids": sorted({r.get("campaign_id", "") for r in records if r.get("campaign_id")}),
@@ -1473,6 +1723,12 @@ def write_study_manifest(records: list[dict], path: str, study_id: str | None) -
         "seeds": sorted({r.get("seed") for r in records if r.get("seed") is not None}),
         "faults": sorted({r.get("fault_type", "") for r in records if r.get("fault_type")}),
         "cj_commits": sorted({r.get("cj_commit", "") for r in records if r.get("cj_commit")}),
+        "cj_source_versions": sorted({
+            r.get("cj_source_version", "") for r in records if r.get("cj_source_version")
+        }),
+        "cj_source_states": sorted({
+            r.get("cj_source_state", "") for r in records if r.get("cj_source_state")
+        }),
         "docker_images": sorted({r.get("docker_image", "") for r in records if r.get("docker_image")}),
         "docker_image_digests": sorted({
             r.get("docker_image_digest") or r.get("image_digest", "")

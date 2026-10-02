@@ -70,6 +70,39 @@ cj_eval_run_logged() {
   "$@" 2>&1 | tee "${log_path}"
 }
 
+cj_eval_load_dotenv() {
+  local env_path="${CJ_EVAL_ENV_FILE:-${CJ_EVAL_REPO_ROOT}/.env}"
+  if [[ ! -f "${env_path}" ]]; then
+    return 0
+  fi
+  while IFS='=' read -r key value; do
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ -z "${key}" || "${key}" == \#* ]] && continue
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value%$'\r'}"
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    if [[ -z "${!key+x}" ]]; then
+      export "${key}=${value}"
+    fi
+  done < "${env_path}"
+}
+
+cj_eval_default_env_file() {
+  if [[ -n "${CJ_EVAL_ENV_FILE:-}" ]]; then
+    echo "${CJ_EVAL_ENV_FILE}"
+  elif [[ -f "${CJ_EVAL_REPO_ROOT}/.env" ]]; then
+    echo "${CJ_EVAL_REPO_ROOT}/.env"
+  else
+    echo "/dev/null"
+  fi
+}
+
 cj_eval_require_image() {
   local image="$1"
   if docker image inspect "${image}" >/dev/null 2>&1; then
@@ -105,10 +138,11 @@ EOF
 }
 
 cj_eval_model_defaults() {
-  export CJ_EVAL_API_KEY="${CJ_EVAL_API_KEY:-dummy}"
-  export CJ_EVAL_MODEL="${CJ_EVAL_MODEL:-qwen2.5:latest}"
-  export CJ_EVAL_BASE_URL="${CJ_EVAL_BASE_URL:-http://127.0.0.1:11434/v1}"
-  export CJ_EVAL_CONTAINER_BASE_URL="${CJ_EVAL_CONTAINER_BASE_URL:-http://host.docker.internal:11434/v1}"
+  cj_eval_load_dotenv
+  export CJ_EVAL_API_KEY="${CJ_EVAL_API_KEY:-${LLM_API_KEY:-dummy}}"
+  export CJ_EVAL_MODEL="${CJ_EVAL_MODEL:-${LLM_MODEL:-qwen2.5:latest}}"
+  export CJ_EVAL_BASE_URL="${CJ_EVAL_BASE_URL:-${LLM_BASE_URL:-http://127.0.0.1:11434/v1}}"
+  export CJ_EVAL_CONTAINER_BASE_URL="${CJ_EVAL_CONTAINER_BASE_URL:-${LLM_BASE_URL:-${CJ_EVAL_BASE_URL}}}"
 }
 
 cj_eval_metadata() {

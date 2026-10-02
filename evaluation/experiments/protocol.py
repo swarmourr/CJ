@@ -187,6 +187,37 @@ def _detect_cj_commit() -> str:
 _CJ_COMMIT = _detect_cj_commit()
 
 
+def _detect_cj_source_provenance() -> dict[str, Any]:
+    """Return source-version metadata without pretending dirty code is reproducible."""
+    import subprocess
+    pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    dirty: bool | None = None
+    state = "unknown"
+    try:
+        out = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=pkg_root,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).decode().strip()
+        dirty = bool(out)
+        state = "dirty" if dirty else "clean"
+    except Exception:
+        dirty = None
+    commit = _CJ_COMMIT
+    return {
+        "cj_commit": commit,
+        "cj_source_dirty": dirty,
+        "cj_source_state": state,
+        "cj_source_version": (
+            f"{commit}-dirty" if dirty is True and commit != "unknown" else commit
+        ),
+    }
+
+
+_CJ_SOURCE_PROVENANCE = _detect_cj_source_provenance()
+
+
 def _code_hash(code: str) -> str:
     import hashlib
     return hashlib.sha256(code.encode()).hexdigest()[:12]

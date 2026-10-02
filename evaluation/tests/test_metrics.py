@@ -141,6 +141,21 @@ class TestSilentFailure:
         m = compute_metrics(records)
         assert m.silent_failure_rate == 0.0
 
+    def test_no_silent_failure_when_error_detected_in_trace(self):
+        fault = _f("t1", success=0.0, validity="valid", reported_error=0.0)
+        fault["execution_trace"] = [{"event_type": "error_detection"}]
+        records = [_b("t1"), fault]
+        m = compute_metrics(records)
+        assert m.silent_failure_rate == 0.0
+
+    def test_no_silent_failure_when_executor_reports_exception(self):
+        fault = _f("t1", success=0.0, validity="valid", reported_error=0.0)
+        fault["exception"] = "framework exploded"
+        fault["termination_reason"] = "agent_exception"
+        records = [_b("t1"), fault]
+        m = compute_metrics(records)
+        assert m.silent_failure_rate == 0.0
+
     def test_success_is_not_silent_failure(self):
         records = [_b("t1"), _f("t1", success=1.0, validity="valid", reported_error=0.0)]
         m = compute_metrics(records)

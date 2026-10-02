@@ -42,6 +42,16 @@ def _load_dotenv(path: str = ".env") -> None:
         os.environ.setdefault(key, value)
 
 
+def _apply_llm_env_aliases() -> None:
+    for source, target in (
+        ("LLM_API_KEY", "CJ_EVAL_API_KEY"),
+        ("LLM_BASE_URL", "CJ_EVAL_BASE_URL"),
+        ("LLM_MODEL", "CJ_EVAL_MODEL"),
+    ):
+        if source in os.environ and target not in os.environ:
+            os.environ[target] = os.environ[source]
+
+
 def _package_versions() -> dict[str, str]:
     versions = {"python": platform.python_version()}
     for names in _VERSION_PACKAGES.values():
@@ -133,6 +143,7 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
     model_cfg_raw = dict(req.get("model_config") or {})
     if model_cfg_raw.get("base_url") and not os.environ.get("CJ_EVAL_BASE_URL"):
         os.environ["CJ_EVAL_BASE_URL"] = str(model_cfg_raw["base_url"]).rstrip("/")
+    _apply_llm_env_aliases()
     model_config = load_model_config(model_cfg_raw)
 
     os.environ["CJ_EVAL_MODEL"] = model_config.name
