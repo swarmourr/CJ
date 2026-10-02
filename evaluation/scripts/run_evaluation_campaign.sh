@@ -471,3 +471,5 @@ case "${mode}" in
     exit 2
     ;;
 esac
+
+exit 0
