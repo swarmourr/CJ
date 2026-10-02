@@ -154,7 +154,21 @@ python -m evaluation.container_entrypoint \
   --output /cj/output/result.json
 ```
 
-Build the evaluation image with a pinned base image digest:
+Build or refresh the evaluation image with the helper script:
+
+```bash
+evaluation/docker/rebuild_image.sh
+```
+
+The script removes old local `cj-eval-agent:*` image tags, computes the current
+Git commit, and builds `cj-eval-agent:<commit>`. If old tags are attached to
+local containers, rerun with:
+
+```bash
+evaluation/docker/rebuild_image.sh --force-remove
+```
+
+Equivalent manual build command:
 
 ```bash
 export CJ_COMMIT="$(git rev-parse HEAD)"
