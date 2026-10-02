@@ -98,8 +98,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Agent system to evaluate")
     p.add_argument("--benchmark", choices=["humanevalplus", "mbppplus"],
                    help="Benchmark to use")
-    p.add_argument("--fault",
-                   help="Fault name from the catalog (or 'none' for baseline-only)")
+    p.add_argument(
+        "--fault",
+        help=(
+            "Fault name from the catalog, comma-separated fault names, or 'all' "
+            "for the connected publication fault suite"
+        ),
+    )
+    p.add_argument(
+        "--fault-suite",
+        choices=["smoke", "llm_api", "response", "tool", "all"],
+        help=(
+            "Publication-study shortcut for a bounded fault suite. "
+            "Use 'all' to run every connected publication fault."
+        ),
+    )
     p.add_argument("--tasks", type=int, default=5,
                    help="Number of tasks (smoke subset)")
     p.add_argument("--repeats", type=int, default=1,
@@ -383,6 +396,51 @@ def _load_task_subset(benchmark_name: str, tasks: int, seed: int):
     return loader.load(seed=seed)
 
 
+PUBLICATION_FAULT_SUITES: dict[str, list[str]] = {
+    "smoke": ["llm_latency"],
+    "llm_api": ["llm_latency", "llm_timeout", "llm_rate_limit", "llm_unavailable"],
+    "response": ["response_truncation", "malformed_response", "token_starvation"],
+    "tool": ["tool_failure"],
+}
+
+
+def _publication_fault_names(args: argparse.Namespace) -> list[str]:
+    """Resolve publication-study fault CLI options to a validated ordered list."""
+    from evaluation.experiments.fault_campaign import FAULT_CATALOG, get_fault_spec
+
+    catalog_names = [str(spec["name"]) for spec in FAULT_CATALOG]
+    suites = {
+        **PUBLICATION_FAULT_SUITES,
+        "all": catalog_names,
+    }
+
+    if args.fault_suite and args.fault and args.fault not in ("", "none"):
+        raise SystemExit("Use either --fault or --fault-suite, not both")
+
+    if args.fault_suite:
+        return list(suites[args.fault_suite])
+
+    raw = (args.fault or "").strip()
+    if raw in ("", "none"):
+        raise SystemExit(
+            "--publication-study requires --fault, --fault a,b,c, --fault all, "
+            "or --fault-suite"
+        )
+    if raw in suites:
+        return list(suites[raw])
+
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    if not names:
+        raise SystemExit("--fault did not contain any fault names")
+
+    for name in names:
+        try:
+            get_fault_spec(name)
+        except KeyError as exc:
+            raise SystemExit(str(exc)) from exc
+    return names
+
+
 def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None = None) -> None:
     """Run direct baseline, CJ control, and CJ fault in Docker for each task."""
     if not args.docker_image:
@@ -391,9 +449,7 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
         raise SystemExit("--system is required with --publication-study")
     if not args.benchmark:
         raise SystemExit("--benchmark is required with --publication-study")
-    fault_name = args.fault or ""
-    if fault_name in ("", "none"):
-        raise SystemExit("--publication-study requires a concrete --fault for the triplet")
+    fault_names = _publication_fault_names(args)
 
     from evaluation.docker_runner import DockerAgentRunner, DockerExecutionConfig
     from evaluation.experiments.fault_campaign import build_cj_fault
@@ -440,30 +496,32 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
     print(f"  level     : {args.agent_level}")
     print(f"  topology  : {args.topology}")
     print(f"  benchmark : {args.benchmark} ({len(task_list)} tasks)")
-    print(f"  fault     : {fault_name}")
+    print(f"  faults    : {', '.join(fault_names)}")
     print(f"  results   : {args.results_dir}")
 
-    for rep in range(args.repeats):
-        for task in task_list:
-            fault = build_cj_fault(fault_name)
-            orchestrator.run_pair(
-                agent_system=args.system,
-                agent_level=args.agent_level,
-                topology=args.topology,
-                task=task,
-                seed=args.seed + rep,
-                model_config=model_cfg,
-                execution_config=execution_cfg,
-                fault_name=fault_name,
-                fault=fault,
-                repetition=rep,
-                container_direct_base_url=(
-                    args.container_base_url
-                    or os.environ.get("CJ_EVAL_CONTAINER_BASE_URL")
-                    or None
-                ),
-            )
-            total += 3
+    for fault_name in fault_names:
+        print(f"[eval] --- fault: {fault_name} ---")
+        for rep in range(args.repeats):
+            for task in task_list:
+                fault = build_cj_fault(fault_name)
+                orchestrator.run_pair(
+                    agent_system=args.system,
+                    agent_level=args.agent_level,
+                    topology=args.topology,
+                    task=task,
+                    seed=args.seed + rep,
+                    model_config=model_cfg,
+                    execution_config=execution_cfg,
+                    fault_name=fault_name,
+                    fault=fault,
+                    repetition=rep,
+                    container_direct_base_url=(
+                        args.container_base_url
+                        or os.environ.get("CJ_EVAL_CONTAINER_BASE_URL")
+                        or None
+                    ),
+                )
+                total += 3
 
     print(f"[eval] Wrote {total} paired condition records to {args.results_dir}/runs.jsonl")
     generate_all_outputs(args.results_dir, study_id=orchestrator.study_id)

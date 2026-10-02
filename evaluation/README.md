@@ -159,7 +159,6 @@ Build the evaluation image with a pinned base image digest:
 ```bash
 export CJ_COMMIT="$(git rev-parse HEAD)"
 docker build \
-  --build-arg BASE_IMAGE='python:3.12-slim@sha256:<digest>' \
   --build-arg CJ_COMMIT="$CJ_COMMIT" \
   -f evaluation/docker/Dockerfile \
   -t cj-eval-agent:"$CJ_COMMIT" .
@@ -197,6 +196,37 @@ python -m evaluation.run \
 This produces exactly three records per selected task: `direct_baseline`,
 `cj_control`, and `cj_fault`. Derived outputs are generated once at the end
 and filtered to the new `study_id`.
+
+### Publication fault suite
+
+Run the connected proxy-fault suite in one command:
+
+```bash
+python -m evaluation.run \
+  --publication-study \
+  --docker-image cj-eval-agent:"$CJ_COMMIT" \
+  --system autogen-real \
+  --agent-level individual \
+  --topology single \
+  --benchmark humanevalplus \
+  --fault all \
+  --tasks 1 \
+  --repeats 1 \
+  --seed 42 \
+  --base-url http://127.0.0.1:8000/v1 \
+  --container-base-url http://host.docker.internal:8000/v1 \
+  --model gpt-4o-mini \
+  --env-file .env \
+  --results-dir results/publication-fault-suite
+```
+
+`--fault all` expands to every currently connected publication proxy fault:
+`llm_timeout`, `llm_rate_limit`, `llm_unavailable`,
+`response_truncation`, `malformed_response`, `tool_failure`,
+`token_starvation`, and `llm_latency`. Use `--fault-suite llm_api`,
+`--fault-suite response`, `--fault-suite tool`, or a comma-separated list such
+as `--fault llm_latency,llm_unavailable` for smaller sweeps. Each fault still
+gets its own exact paired direct/control/fault triplet and separate `pair_id`.
 
 ### Safe infrastructure faults
 

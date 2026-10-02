@@ -31,6 +31,7 @@ from evaluation.infrastructure_orchestrator import run_container_scoped_fault
 from evaluation.benchmarks.base import BenchmarkTask
 from evaluation.multi_agent import TraceEvent, validate_event_schema
 from evaluation.output import generate_all_outputs
+from evaluation.run import _publication_fault_names, build_parser, run_publication_study
 from evaluation.study_protocol import (
     PublicationStudyOrchestrator,
     default_experiment_definition,
@@ -260,6 +261,122 @@ def test_costing_helpers_are_explicit():
         minimum_detectable_effect=0.1,
     )
     assert rec["recommended_tasks"] >= 5
+
+
+def test_publication_fault_all_expands_to_connected_catalog():
+    args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault", "all",
+    ])
+    assert _publication_fault_names(args) == [
+        "llm_timeout",
+        "llm_rate_limit",
+        "llm_unavailable",
+        "response_truncation",
+        "malformed_response",
+        "tool_failure",
+        "token_starvation",
+        "llm_latency",
+    ]
+
+
+def test_publication_fault_suites_and_comma_lists_are_validated():
+    suite_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "llm_api",
+    ])
+    assert _publication_fault_names(suite_args) == [
+        "llm_latency",
+        "llm_timeout",
+        "llm_rate_limit",
+        "llm_unavailable",
+    ]
+
+    list_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault", "llm_latency,llm_unavailable",
+    ])
+    assert _publication_fault_names(list_args) == ["llm_latency", "llm_unavailable"]
+
+
+def test_publication_fault_resolution_rejects_ambiguous_or_empty_selection():
+    both_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault", "llm_latency",
+        "--fault-suite", "smoke",
+    ])
+    with pytest.raises(SystemExit):
+        _publication_fault_names(both_args)
+
+    none_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault", "none",
+    ])
+    with pytest.raises(SystemExit):
+        _publication_fault_names(none_args)
+
+
+def test_publication_study_runs_selected_fault_suite_once_per_fault(tmp_path, monkeypatch):
+    task = BenchmarkTask(
+        task_id="toy/0",
+        benchmark="toy",
+        prompt="Write solution.",
+        entry_point="solution",
+        test_code="assert solution() is None\n",
+        metadata={"source": "bundled"},
+    )
+    calls = []
+    output_calls = []
+
+    class FakeOrchestrator:
+        def __init__(self, docker_runner, *, study_id=None, results_dir="results", proxy_port=18000):
+            self.study_id = study_id or "study-suite"
+            self.results_dir = results_dir
+            self.proxy_port = proxy_port
+
+        def run_pair(self, **kwargs):
+            calls.append((kwargs["fault_name"], kwargs["fault"], kwargs["task"].task_id))
+            return []
+
+    monkeypatch.setattr("evaluation.run._load_task_subset", lambda *args, **kwargs: [task])
+    monkeypatch.setattr("evaluation.docker_runner.DockerAgentRunner", lambda cfg: object())
+    monkeypatch.setattr("evaluation.study_protocol.PublicationStudyOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr("evaluation.experiments.fault_campaign.build_cj_fault", lambda name: f"fault:{name}")
+    monkeypatch.setattr(
+        "evaluation.output.generate_all_outputs",
+        lambda results_dir, study_id=None: output_calls.append((results_dir, study_id)),
+    )
+
+    args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault", "llm_latency,llm_unavailable",
+        "--results-dir", str(tmp_path),
+    ])
+    run_publication_study(args)
+
+    assert calls == [
+        ("llm_latency", "fault:llm_latency", "toy/0"),
+        ("llm_unavailable", "fault:llm_unavailable", "toy/0"),
+    ]
+    assert output_calls == [(str(tmp_path), "study-suite")]
 
 
 def test_multi_agent_event_schema():
