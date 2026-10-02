@@ -48,7 +48,11 @@ keys as CLI arguments; use `.env`, `CJ_EVAL_ENV_FILE`, or process environment.
 
 ## Build Image
 
-Build or refresh the Docker image before Docker experiments:
+Experiment scripts auto-build the expected current-commit Docker image if it is
+missing. They use `evaluation/docker/rebuild_image.sh --keep-old`, so existing
+local image tags are preserved.
+
+Build or refresh the Docker image manually before Docker experiments:
 
 ```bash
 evaluation/docker/rebuild_image.sh --force-remove
@@ -58,6 +62,12 @@ To rebuild automatically inside an experiment script:
 
 ```bash
 CJ_EVAL_REBUILD_IMAGE=1 evaluation/scripts/run_injector_validation.sh
+```
+
+Disable automatic missing-image builds:
+
+```bash
+CJ_EVAL_AUTO_BUILD_IMAGE=0 evaluation/scripts/run_injector_validation.sh
 ```
 
 ## A. Static And Unit Validation

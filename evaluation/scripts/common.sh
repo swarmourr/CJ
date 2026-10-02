@@ -72,9 +72,14 @@ cj_eval_run_logged() {
 
 cj_eval_require_image() {
   local image="$1"
-  if ! docker image inspect "${image}" >/dev/null 2>&1; then
+  if docker image inspect "${image}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "${CJ_EVAL_AUTO_BUILD_IMAGE:-1}" != "1" ]]; then
     cat >&2 <<EOF
 [cj-eval] Docker image not found: ${image}
+[cj-eval] Auto-build is disabled by CJ_EVAL_AUTO_BUILD_IMAGE=0.
 [cj-eval] Build it first, for example:
   evaluation/docker/rebuild_image.sh --force-remove
 
@@ -82,6 +87,21 @@ Or set CJ_EVAL_DOCKER_IMAGE to an existing image tag.
 EOF
     exit 2
   fi
+
+  echo "[cj-eval] Docker image not found: ${image}"
+  echo "[cj-eval] Auto-building missing evaluation image for the current checkout..."
+  evaluation/docker/rebuild_image.sh --keep-old
+
+  if docker image inspect "${image}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  cat >&2 <<EOF
+[cj-eval] Auto-build finished but expected image is still missing: ${image}
+[cj-eval] Set CJ_EVAL_DOCKER_IMAGE to the built tag, or run:
+  evaluation/docker/rebuild_image.sh --force-remove
+EOF
+  exit 2
 }
 
 cj_eval_model_defaults() {

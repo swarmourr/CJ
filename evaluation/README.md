@@ -252,6 +252,10 @@ stores the exact command and logs next to the generated outputs.
 # Build the Docker image used by publication-study runs
 evaluation/docker/rebuild_image.sh --force-remove
 
+# Experiment scripts auto-build the current-commit image if it is missing.
+# Disable that behavior only when you want fail-fast image checks:
+CJ_EVAL_AUTO_BUILD_IMAGE=0 evaluation/scripts/run_injector_validation.sh
+
 # All non-Docker/static validation tests
 evaluation/scripts/run_static_validation.sh
 
