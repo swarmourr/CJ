@@ -98,6 +98,34 @@ FAULT_CATALOG: list[dict[str, Any]] = [
         "description":    "3 s artificial delay on every LLM API call",
         "soa_comparable": False,
     },
+    # ── Role-scoped multi-agent proxy faults ─────────────────────────────────────
+    {
+        "name":            "planner_llm_unavailable",
+        "cj_class":        "LLMUnavailable",
+        "parameters":      {"selector": {"agent_role": "planner"}},
+        "layer":           "llm",
+        "description":     "Planner-scoped LLM API unavailable fault",
+        "soa_comparable":  False,
+        "publication_all": False,
+    },
+    {
+        "name":            "reviewer_response_corrupt",
+        "cj_class":        "LLMResponseCorrupt",
+        "parameters":      {"mode": "invalid_json", "selector": {"agent_role": "reviewer"}},
+        "layer":           "llm",
+        "description":     "Reviewer-scoped malformed response fault",
+        "soa_comparable":  False,
+        "publication_all": False,
+    },
+    {
+        "name":            "coder_tool_fault",
+        "cj_class":        "ToolFault",
+        "parameters":      {"selector": {"agent_role": "coder"}},
+        "layer":           "tool",
+        "description":     "Coder-scoped tool-call failure where tool-role traffic exists",
+        "soa_comparable":  False,
+        "publication_all": False,
+    },
 ]
 
 # Lookup by name

@@ -298,6 +298,19 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "llm_unavailable",
     ]
 
+    ma_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "multi_agent",
+    ])
+    assert _publication_fault_names(ma_args) == [
+        "planner_llm_unavailable",
+        "reviewer_response_corrupt",
+        "coder_tool_fault",
+    ]
+
     list_args = build_parser().parse_args([
         "--publication-study",
         "--docker-image", "cj:test",

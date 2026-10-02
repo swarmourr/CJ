@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--fault-suite",
-        choices=["smoke", "llm_api", "response", "tool", "all"],
+        choices=["smoke", "llm_api", "response", "tool", "multi_agent", "all"],
         help=(
             "Publication-study shortcut for a bounded fault suite. "
             "Use 'all' to run every connected publication fault."
@@ -401,6 +401,11 @@ PUBLICATION_FAULT_SUITES: dict[str, list[str]] = {
     "llm_api": ["llm_latency", "llm_timeout", "llm_rate_limit", "llm_unavailable"],
     "response": ["response_truncation", "malformed_response", "token_starvation"],
     "tool": ["tool_failure"],
+    "multi_agent": [
+        "planner_llm_unavailable",
+        "reviewer_response_corrupt",
+        "coder_tool_fault",
+    ],
 }
 
 
@@ -408,7 +413,11 @@ def _publication_fault_names(args: argparse.Namespace) -> list[str]:
     """Resolve publication-study fault CLI options to a validated ordered list."""
     from evaluation.experiments.fault_campaign import FAULT_CATALOG, get_fault_spec
 
-    catalog_names = [str(spec["name"]) for spec in FAULT_CATALOG]
+    catalog_names = [
+        str(spec["name"])
+        for spec in FAULT_CATALOG
+        if spec.get("publication_all", True)
+    ]
     suites = {
         **PUBLICATION_FAULT_SUITES,
         "all": catalog_names,

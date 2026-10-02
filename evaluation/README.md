@@ -242,6 +242,39 @@ python -m evaluation.run \
 as `--fault llm_latency,llm_unavailable` for smaller sweeps. Each fault still
 gets its own exact paired direct/control/fault triplet and separate `pair_id`.
 
+### Paper scenario scripts
+
+Ready-to-run paper scaffolding lives in `evaluation/scripts/`. Each script writes
+to a named category folder under `results/paper/<category>/<run-name>-<UTC>/` and
+stores the exact command and logs next to the generated outputs.
+
+```bash
+# Build the Docker image used by publication-study runs
+evaluation/docker/rebuild_image.sh --force-remove
+
+# All non-Docker/static validation tests
+evaluation/scripts/run_static_validation.sh
+
+# All tests wrapper; Docker tests are opt-in
+evaluation/scripts/run_all_tests.sh
+CJ_EVAL_RUN_DOCKER_TESTS=1 evaluation/scripts/run_all_tests.sh
+
+# CJ injector validation over all connected proxy faults
+evaluation/scripts/run_injector_validation.sh
+
+# Individual-agent resilience pilot
+evaluation/scripts/run_individual_resilience_pilot.sh
+
+# Current framework-neutral multi-agent reference pilot
+evaluation/scripts/run_multi_agent_reference_pilot.sh
+
+# Small smoke wrapper across implemented paper categories
+evaluation/scripts/run_all_paper_scenarios.sh
+```
+
+See `evaluation/PAPER_EXPERIMENTS.md` for the scenario matrix, category layout,
+and architecture diagrams.
+
 ### Safe infrastructure faults
 
 Network and resource faults must be applied with `DockerTarget` against the
