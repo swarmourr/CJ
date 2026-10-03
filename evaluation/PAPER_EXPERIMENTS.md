@@ -143,6 +143,7 @@ llm_rate_limit
 llm_unavailable
 response_truncation
 malformed_response
+false_response
 tool_failure
 token_starvation
 llm_latency
@@ -270,6 +271,12 @@ Default role-scoped fault suite:
 planner_llm_unavailable
 reviewer_response_corrupt
 coder_tool_fault
+```
+
+Additional semantic response-corruption suite:
+
+```text
+reviewer_false_response
 ```
 
 Architecture:

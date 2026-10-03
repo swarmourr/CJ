@@ -120,7 +120,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--fault-suite",
-        choices=["smoke", "llm_api", "response", "tool", "multi_agent", "all"],
+        choices=[
+            "smoke",
+            "llm_api",
+            "response",
+            "semantic",
+            "tool",
+            "multi_agent",
+            "multi_agent_semantic",
+            "all",
+        ],
         help=(
             "Publication-study shortcut for a bounded fault suite. "
             "Use 'all' to run every connected publication fault."
@@ -413,13 +422,15 @@ def _load_task_subset(benchmark_name: str, tasks: int, seed: int):
 PUBLICATION_FAULT_SUITES: dict[str, list[str]] = {
     "smoke": ["llm_latency"],
     "llm_api": ["llm_latency", "llm_timeout", "llm_rate_limit", "llm_unavailable"],
-    "response": ["response_truncation", "malformed_response", "token_starvation"],
+    "response": ["response_truncation", "malformed_response", "false_response", "token_starvation"],
+    "semantic": ["false_response"],
     "tool": ["tool_failure"],
     "multi_agent": [
         "planner_llm_unavailable",
         "reviewer_response_corrupt",
         "coder_tool_fault",
     ],
+    "multi_agent_semantic": ["reviewer_false_response"],
 }
 
 

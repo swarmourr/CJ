@@ -733,6 +733,41 @@ class TestProxyTracing:
         proxy._mutate_response(cfg, b'{"ok":true}', None, triggered)
         assert "corrupt" in triggered
 
+    def test_mutate_response_false_response_keeps_valid_json(self):
+        """false_response corrupts assistant content without breaking JSON."""
+        import json
+        import chaos_jungle.scripts.llm_proxy.llm_proxy as proxy
+
+        triggered: list = []
+        evidence: dict = {}
+        body = json.dumps({
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "real answer"},
+                "finish_reason": "stop",
+            }],
+        }).encode()
+        mutated = proxy._mutate_response(
+            {
+                "fault": "corrupt",
+                "mode": "false_response",
+                "false_text": "false but valid answer",
+            },
+            body,
+            None,
+            triggered,
+            evidence,
+        )
+
+        parsed = json.loads(mutated)
+        assert parsed["choices"][0]["message"]["content"] == "false but valid answer"
+        assert "corrupt" in triggered
+        assert evidence["corrupt"]["mode"] == "false_response"
+        assert evidence["corrupt"]["false_text_preview"] == "false but valid answer"
+        assert evidence["corrupt"]["before_hash"] != evidence["corrupt"]["after_hash"]
+
     def test_check_block_rate_limit_conditional(self):
         """_check_block for rate_limit only fires after n requests."""
         import chaos_jungle.scripts.llm_proxy.llm_proxy as proxy

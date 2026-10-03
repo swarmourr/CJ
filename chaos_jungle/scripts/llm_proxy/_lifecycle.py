@@ -77,7 +77,11 @@ def describe_expected(fault_type: str, cfg: "dict") -> str:
     if fault_type == "timeout":
         return f"connection held for {cfg.get('timeout_s', '?')}s then 504"
     if fault_type == "corrupt":
-        return f"response body {cfg.get('mode', 'truncated')}"
+        mode = cfg.get("mode", "truncated")
+        if mode == "false_response":
+            preview = str(cfg.get("false_text", cfg.get("text", "")))[:60]
+            return f"response content replaced with false answer: {preview!r}..."
+        return f"response body {mode}"
     if fault_type == "unavailable":
         return "HTTP 503 Service Unavailable"
     if fault_type == "hallucinate":
@@ -115,6 +119,9 @@ def describe_observed(fault_type: str, ev: "dict", triggered: bool) -> str:
         mode = ev.get("mode", "?")
         bh = ev.get("before_hash", "")[:8]
         ah = ev.get("after_hash", "")[:8]
+        if mode == "false_response":
+            preview = str(ev.get("false_text_preview", ""))[:80]
+            return f"response replaced with false answer: {preview!r} (before={bh} after={ah})"
         return f"response {mode}d (before={bh} after={ah})"
     if fault_type == "hallucinate":
         preview = str(ev.get("injected_text_preview", ""))[:80]

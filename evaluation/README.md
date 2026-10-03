@@ -45,6 +45,7 @@ subprocess. No LLM judge is used for primary coding results.
 | `llm_unavailable` | `LLMUnavailable()` | Yes |
 | `response_truncation` | `LLMResponseCorrupt(mode="truncate")` | Yes |
 | `malformed_response` | `LLMResponseCorrupt(mode="invalid_json")` | Yes |
+| `false_response` | `LLMResponseCorrupt(mode="false_response")` | No |
 | `tool_failure` | `ToolFault()` | No |
 | `token_starvation` | `LLMTokenStarvation(max_tokens=10)` | No |
 | `llm_latency` | `LLMLatency(delay_s=3.0)` | No |
@@ -236,11 +237,12 @@ python -m evaluation.run \
 
 `--fault all` expands to every currently connected publication proxy fault:
 `llm_timeout`, `llm_rate_limit`, `llm_unavailable`,
-`response_truncation`, `malformed_response`, `tool_failure`,
+`response_truncation`, `malformed_response`, `false_response`, `tool_failure`,
 `token_starvation`, and `llm_latency`. Use `--fault-suite llm_api`,
-`--fault-suite response`, `--fault-suite tool`, or a comma-separated list such
-as `--fault llm_latency,llm_unavailable` for smaller sweeps. Each fault still
-gets its own exact paired direct/control/fault triplet and separate `pair_id`.
+`--fault-suite response`, `--fault-suite semantic`, `--fault-suite tool`,
+or a comma-separated list such as `--fault llm_latency,llm_unavailable` for
+smaller sweeps. Each fault still gets its own exact paired direct/control/fault
+triplet and separate `pair_id`.
 
 ### Paper scenario scripts
 

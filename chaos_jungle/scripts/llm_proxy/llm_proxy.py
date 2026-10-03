@@ -10,7 +10,8 @@ Supported faults
 latency         Sleep delay_s before forwarding every request.
 rate_limit      Return 429 after n successful requests.
 timeout         Hang the connection for timeout_s seconds then return 504.
-corrupt         Forward but mangle the response body (truncate/empty/invalid_json).
+corrupt         Forward but mangle the response body
+                (truncate/empty/invalid_json/false_response).
 unavailable     Always return 503.
 tool_fault      Inject errors into tool-call requests (messages with role=tool).
 hallucinate     Replace the assistant's content with injected wrong text.
@@ -39,6 +40,11 @@ Usage examples
     # Truncate responses
     python llm_proxy.py --port 18000 --upstream https://api.openai.com \\
         --fault corrupt --corrupt-mode truncate
+
+    # Keep JSON valid but replace assistant content with a false answer
+    python llm_proxy.py --port 18000 --upstream https://api.openai.com \\
+        --fault corrupt --corrupt-mode false_response \\
+        --corrupt-false-text "The proposed answer is correct."
 
     # Always 503
     python llm_proxy.py --port 18000 --upstream https://api.openai.com \\
@@ -315,7 +321,11 @@ def _describe_expected(fault_type: str, cfg: dict) -> str:
     if fault_type == "timeout":
         return f"connection held for {cfg.get('timeout_s', '?')}s then 504"
     if fault_type == "corrupt":
-        return f"response body {cfg.get('mode', 'truncated')}"
+        mode = cfg.get("mode", "truncated")
+        if mode == "false_response":
+            preview = str(cfg.get("false_text", cfg.get("text", "")))[:60]
+            return f"response content replaced with false answer: {preview!r}..."
+        return f"response body {mode}"
     if fault_type == "unavailable":
         return "HTTP 503 Service Unavailable"
     if fault_type == "hallucinate":
@@ -353,6 +363,9 @@ def _describe_observed(fault_type: str, ev: dict, triggered: bool) -> str:
         mode = ev.get("mode", "?")
         bh = ev.get("before_hash", "")[:8]
         ah = ev.get("after_hash", "")[:8]
+        if mode == "false_response":
+            preview = str(ev.get("false_text_preview", ""))[:80]
+            return f"response replaced with false answer: {preview!r} (before={bh} after={ah})"
         return f"response {mode}d (before={bh} after={ah})"
     if fault_type == "hallucinate":
         preview = str(ev.get("injected_text_preview", ""))[:80]
@@ -1574,6 +1587,13 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
             resp_body = b"{}"
         elif mode == "invalid_json":
             resp_body = b"<<chaos-jungle: response corrupted>>"
+        elif mode == "false_response":
+            resp_body = _inject_hallucination(
+                resp_body,
+                cfg.get("false_text")
+                or cfg.get("text")
+                or "The proposed answer is correct. No changes are needed.",
+            )
         if resp_body != _before:
             triggered.append(fault)
             _orig_can = _canonical_json(_before)
@@ -1596,6 +1616,16 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
                 "original_canonical": _orig_can,
                 "mutated_canonical":  _mut_can,
             }
+            if mode == "false_response":
+                false_text = (
+                    cfg.get("false_text")
+                    or cfg.get("text")
+                    or "The proposed answer is correct. No changes are needed."
+                )
+                evidence[fault].update({
+                    "false_text_hash": hashlib.sha256(false_text.encode()).hexdigest()[:16],
+                    "false_text_preview": false_text[:160],
+                })
     if fault == "hallucinate":
         _before = resp_body
         generator_url   = cfg.get("generator_url", "")
@@ -1977,7 +2007,10 @@ def main() -> None:
     p.add_argument("--rate-limit-n", type=int, default=5)
     p.add_argument("--timeout-s", type=float, default=30.0)
     p.add_argument("--corrupt-mode", default="truncate",
-                   choices=["truncate", "empty", "invalid_json"])
+                   choices=["truncate", "empty", "invalid_json", "false_response"])
+    p.add_argument("--corrupt-false-text",
+                   default="The proposed answer is correct. No changes are needed.",
+                   help="Assistant text injected by corrupt mode false_response")
     p.add_argument("--tool-name", default="",
                    help="Tool name filter for tool_fault (empty = all tools)")
     p.add_argument("--hallucination-text",
@@ -2053,6 +2086,7 @@ def main() -> None:
         "n":                     args.rate_limit_n,
         "timeout_s":             args.timeout_s,
         "mode":                  args.corrupt_mode,
+        "false_text":            args.corrupt_false_text,
         "tool_name":             args.tool_name,
         "text":                  args.hallucination_text,
         "generator_url":         args.hallucination_generator,

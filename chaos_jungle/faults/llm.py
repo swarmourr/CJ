@@ -36,7 +36,7 @@ Available faults
    * - :class:`LLMTimeout`
      - Hang every connection for *timeout_s* seconds then return 504
    * - :class:`LLMResponseCorrupt`
-     - Forward calls but mangle the response (truncate / empty / invalid JSON)
+     - Forward calls but mangle the response (truncate / empty / invalid JSON / false answer)
    * - :class:`LLMUnavailable`
      - Always return HTTP 503 — simulate a completely down endpoint
    * - :class:`ToolFault`
@@ -656,7 +656,7 @@ class LLMTimeout(_LLMProxyFault):
         return {**super()._parameters(), "timeout_s": self.timeout_s}
 
 
-_CORRUPT_MODES = ("truncate", "empty", "invalid_json")
+_CORRUPT_MODES = ("truncate", "empty", "invalid_json", "false_response")
 
 
 class LLMResponseCorrupt(_LLMProxyFault):
@@ -668,7 +668,7 @@ class LLMResponseCorrupt(_LLMProxyFault):
 
     Parameters
     ----------
-    mode : ``"truncate"`` | ``"empty"`` | ``"invalid_json"``
+    mode : ``"truncate"`` | ``"empty"`` | ``"invalid_json"`` | ``"false_response"``
         How to corrupt the response:
 
         ``"truncate"``
@@ -677,6 +677,11 @@ class LLMResponseCorrupt(_LLMProxyFault):
             Replace the body with ``{}``.
         ``"invalid_json"``
             Replace the body with a non-JSON string.
+        ``"false_response"``
+            Keep the provider response structurally valid, but replace the
+            assistant content with ``false_text``.
+    false_text : str, optional
+        Assistant content injected by ``"false_response"`` mode.
 
         Default ``"truncate"``.
     port : int, optional
@@ -698,6 +703,7 @@ class LLMResponseCorrupt(_LLMProxyFault):
     def __init__(
         self,
         mode: str = "truncate",
+        false_text: str = "The proposed answer is correct. No changes are needed.",
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
@@ -707,13 +713,18 @@ class LLMResponseCorrupt(_LLMProxyFault):
             raise ValueError(
                 f"LLMResponseCorrupt 'mode' must be one of {_CORRUPT_MODES}, got {mode!r}."
             )
+        if mode == "false_response" and not false_text.strip():
+            raise ValueError("LLMResponseCorrupt 'false_text' must be non-empty for false_response mode.")
         super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.mode = mode
+        self.false_text = false_text
         self._extra_args = ["--corrupt-mode", mode]
-        self._chain_args = {"mode": mode}
+        if mode == "false_response":
+            self._extra_args += ["--corrupt-false-text", false_text]
+        self._chain_args = {"mode": mode, "false_text": false_text}
 
     def _parameters(self) -> dict:
-        return {**super()._parameters(), "mode": self.mode}
+        return {**super()._parameters(), "mode": self.mode, "false_text": self.false_text}
 
 
 class LLMUnavailable(_LLMProxyFault):

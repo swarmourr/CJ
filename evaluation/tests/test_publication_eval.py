@@ -482,6 +482,7 @@ def test_publication_fault_all_expands_to_connected_catalog():
         "llm_unavailable",
         "response_truncation",
         "malformed_response",
+        "false_response",
         "tool_failure",
         "token_starvation",
         "llm_latency",
@@ -503,6 +504,29 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "llm_unavailable",
     ]
 
+    response_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "response",
+    ])
+    assert _publication_fault_names(response_args) == [
+        "response_truncation",
+        "malformed_response",
+        "false_response",
+        "token_starvation",
+    ]
+
+    semantic_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "semantic",
+    ])
+    assert _publication_fault_names(semantic_args) == ["false_response"]
+
     ma_args = build_parser().parse_args([
         "--publication-study",
         "--docker-image", "cj:test",
@@ -515,6 +539,15 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "reviewer_response_corrupt",
         "coder_tool_fault",
     ]
+
+    ma_semantic_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "multi_agent_semantic",
+    ])
+    assert _publication_fault_names(ma_semantic_args) == ["reviewer_false_response"]
 
     list_args = build_parser().parse_args([
         "--publication-study",

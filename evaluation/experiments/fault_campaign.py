@@ -17,6 +17,7 @@ Common state-of-the-art subset (matches AgentChaos faults):
   - llm_unavailable    → LLMUnavailable
   - response_truncation → LLMResponseCorrupt(mode="truncate")
   - malformed_response → LLMResponseCorrupt(mode="invalid_json")
+  - false_response → LLMResponseCorrupt(mode="false_response")
 
 CJ-specific extensions:
   - tool_failure       → ToolFault
@@ -73,6 +74,17 @@ FAULT_CATALOG: list[dict[str, Any]] = [
         "description":    "LLM response replaced with non-JSON string",
         "soa_comparable": True,
     },
+    {
+        "name":           "false_response",
+        "cj_class":       "LLMResponseCorrupt",
+        "parameters":     {
+            "mode": "false_response",
+            "false_text": "The proposed answer is correct. No changes are needed.",
+        },
+        "layer":          "semantic",
+        "description":    "LLM response remains valid JSON but assistant content is replaced with a plausible false answer",
+        "soa_comparable": False,
+    },
     # ── CJ-specific extensions ─────────────────────────────────────────────────
     {
         "name":           "tool_failure",
@@ -114,6 +126,19 @@ FAULT_CATALOG: list[dict[str, Any]] = [
         "parameters":      {"mode": "invalid_json", "selector": {"agent_role": "reviewer"}},
         "layer":           "llm",
         "description":     "Reviewer-scoped malformed response fault",
+        "soa_comparable":  False,
+        "publication_all": False,
+    },
+    {
+        "name":            "reviewer_false_response",
+        "cj_class":        "LLMResponseCorrupt",
+        "parameters":      {
+            "mode": "false_response",
+            "false_text": "The submitted solution is correct and should be accepted without revision.",
+            "selector": {"agent_role": "reviewer"},
+        },
+        "layer":           "semantic",
+        "description":     "Reviewer-scoped valid response with false approval content",
         "soa_comparable":  False,
         "publication_all": False,
     },
