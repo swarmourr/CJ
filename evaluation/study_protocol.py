@@ -975,13 +975,8 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
         export = runner.db.export_session(session_id)
         faults = export.get("faults", [])
         lifecycle["proxy_call_count"] = len(calls)
-        lifecycle["triggered"] = len(calls) > 0
-        lifecycle["manifested"] = any(
-            row.get("was_blocked")
-            or row.get("was_modified")
-            or bool(json.loads(row.get("triggered_faults_json") or "[]"))
-            for row in calls
-        )
+        lifecycle["triggered"] = any(_proxy_row_triggered_fault(row) for row in calls)
+        lifecycle["manifested"] = any(_proxy_row_manifested_fault(row) for row in calls)
         lifecycle["evidence"] = {
             "faults": [
                 {
@@ -1014,9 +1009,47 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
             lifecycle["activated"] = all(bool(f.get("verified_active")) for f in faults)
             lifecycle["recovered"] = all(bool(f.get("verified_recovered")) for f in faults)
             lifecycle["reverted"] = all(str(f.get("status")) == "reverted" for f in faults)
+        if lifecycle.get("activated") and not lifecycle.get("triggered"):
+            lifecycle["details"] = (
+                f"CJ proxy captured {len(calls)} request(s), but the configured "
+                "fault target was never reached"
+            )
     except Exception as exc:  # noqa: BLE001
         lifecycle["verdict"] = "inconclusive"
         lifecycle["details"] = f"failed to read CJ evidence: {exc!r}"
+
+
+def _proxy_lifecycle_entries(row: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(row.get("fault_evidence_json") or "[]")
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [entry for entry in parsed if isinstance(entry, dict)]
+
+
+def _proxy_row_triggered_fault(row: dict[str, Any]) -> bool:
+    if bool(row.get("fault_triggered")):
+        return True
+    triggered = row.get("triggered_faults_json") or "[]"
+    try:
+        if json.loads(triggered):
+            return True
+    except Exception:
+        pass
+    return any(
+        entry.get("triggered") is True or entry.get("applied") is True
+        for entry in _proxy_lifecycle_entries(row)
+    )
+
+
+def _proxy_row_manifested_fault(row: dict[str, Any]) -> bool:
+    if any(entry.get("manifested") is True for entry in _proxy_lifecycle_entries(row)):
+        return True
+    return _proxy_row_triggered_fault(row) and (
+        bool(row.get("was_blocked")) or bool(row.get("was_modified"))
+    )
 
 
 def _proxy_call_evidence(row: dict[str, Any]) -> dict[str, Any]:

@@ -36,6 +36,8 @@ from evaluation.run import _publication_fault_names, build_parser, run_publicati
 from evaluation.schema import OUTPUT_SCHEMA_VERSION
 from evaluation.study_protocol import (
     PublicationStudyOrchestrator,
+    _classify_lifecycle,
+    _merge_runner_lifecycle,
     _proxy_call_evidence,
     default_experiment_definition,
     make_pair_id,
@@ -87,6 +89,62 @@ def test_tool_fault_lifecycle_targets_only_tool_requests():
     assert tool_records[0]["target_matched"] is True
     assert tool_records[0]["target"]["agent_role"] == "coder"
     assert tool_records[0]["target"]["step"] == "2"
+
+
+def test_publication_lifecycle_marks_intercepted_tool_fault_as_untriggered():
+    class FakeDB:
+        def get_session(self, session_id):
+            return {"verdict": "valid"}
+
+        def get_llm_calls(self, session_id, phase):
+            assert phase == "fault"
+            return [{
+                "was_blocked": 0,
+                "was_modified": 0,
+                "fault_triggered": 0,
+                "triggered_faults_json": "[]",
+                "configured_faults_json": '["tool_fault"]',
+                "fault_evidence_json": json.dumps([{
+                    "fault_type": "tool_fault",
+                    "target_matched": False,
+                    "triggered": False,
+                    "applied": False,
+                    "manifested": False,
+                    "evidence": {"observed": "not triggered"},
+                }]),
+            }]
+
+        def export_session(self, session_id):
+            return {"faults": [{
+                "kind": "ToolFault",
+                "status": "reverted",
+                "verified_active": True,
+                "verified_recovered": True,
+            }]}
+
+    class FakeRunner:
+        _session_id = 123
+        db = FakeDB()
+
+    lifecycle = {
+        "configured": True,
+        "activated": None,
+        "triggered": None,
+        "manifested": None,
+        "reverted": None,
+        "recovered": None,
+        "verdict": "inconclusive",
+    }
+
+    _merge_runner_lifecycle(lifecycle, FakeRunner())
+
+    assert lifecycle["proxy_call_count"] == 1
+    assert lifecycle["activated"] is True
+    assert lifecycle["triggered"] is False
+    assert lifecycle["manifested"] is False
+    assert lifecycle["reverted"] is True
+    assert lifecycle["recovered"] is True
+    assert _classify_lifecycle(lifecycle) == "untriggered"
 
 
 def test_proxy_call_evidence_lifts_trace_metadata_without_full_payloads():

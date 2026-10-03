@@ -611,8 +611,10 @@ def write_condition_summary_csv(
 ) -> None:
     """Write aggregated metrics per (agent_system, benchmark, fault_type).
 
-    Baselines (fault_type="none") are paired with each fault condition that
-    shares the same (agent_system, benchmark) so that degradation is computable.
+    The legacy ``degradation`` column is intentionally the fault-specific
+    effect, ``CJ-control - CJ-fault``.  Direct-baseline comparisons are exposed
+    in explicitly named columns so publication figures do not confuse CJ
+    overhead with fault impact.
     """
     from itertools import groupby
 
@@ -620,6 +622,7 @@ def write_condition_summary_csv(
 
     # Separate baselines from fault records
     baselines  = [r for r in records if r.get("condition") == "direct_baseline"]
+    controls   = [r for r in records if r.get("condition") == "cj_control"]
     fault_recs = [r for r in records if r.get("phase") == "fault"]
 
     # Index baselines by pair_id (exact pairing) and by (agent_system, benchmark)
@@ -632,6 +635,9 @@ def write_condition_summary_csv(
             baseline_by_pair[pid] = r
         k = (r.get("agent_system", ""), r.get("benchmark", ""))
         baseline_by_ab.setdefault(k, []).append(r)
+    control_by_pair: dict[str, dict] = {
+        str(r.get("pair_id")): r for r in controls if r.get("pair_id")
+    }
 
     def fault_key(r: dict):
         return (r.get("agent_system", ""), r.get("benchmark", ""), r.get("fault_type", "none"))
@@ -660,6 +666,7 @@ def write_condition_summary_csv(
         m   = compute_metrics(combined)
         row = {"agent_system": sys, "benchmark": bench, "fault_type": fault}
         row.update(m.to_dict())
+        row.update(_condition_effect_columns(group_list, baseline_by_pair, control_by_pair))
         rows.append(row)
 
     # Baseline-only summary rows
@@ -678,6 +685,47 @@ def write_condition_summary_csv(
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
+
+
+def _condition_effect_columns(
+    fault_records: list[dict],
+    baseline_by_pair: dict[str, dict],
+    control_by_pair: dict[str, dict],
+) -> dict[str, Any]:
+    triplets = []
+    for fault in fault_records:
+        pair_id = str(fault.get("pair_id") or "")
+        baseline = baseline_by_pair.get(pair_id)
+        control = control_by_pair.get(pair_id)
+        if baseline and control:
+            triplets.append((baseline, control, fault))
+
+    valid = [(b, c, f) for b, c, f in triplets if f.get("validity") == "valid"]
+    control_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(c)]
+    total_effect = _mean([
+        _as_float(b.get("success")) - _as_float(f.get("success"))
+        for b, _c, f in valid
+    ])
+    fault_effect = _mean([
+        _as_float(c.get("success")) - _as_float(f.get("success"))
+        for _b, c, f in control_eligible
+    ])
+    overhead_effect = _mean([
+        _as_float(b.get("success")) - _as_float(c.get("success"))
+        for b, c, _f in valid
+    ])
+    return {
+        "complete_triplets": len(triplets),
+        "valid_pairs": len(valid),
+        "control_eligible_pairs": len(control_eligible),
+        "pass_at_1_direct_baseline": _mean([_as_float(b.get("success")) for b, _c, _f in valid]),
+        "pass_at_1_cj_control": _mean([_as_float(c.get("success")) for _b, c, _f in valid]),
+        "pass_at_1_cj_fault": _mean([_as_float(f.get("success")) for _b, _c, f in valid]),
+        "total_degradation_direct_minus_fault": total_effect,
+        "fault_specific_degradation_control_minus_fault": fault_effect,
+        "cj_correctness_overhead_direct_minus_control": overhead_effect,
+        "degradation": fault_effect,
+    }
 
 
 def write_cj_evidence_csv(records: list[dict], path: str) -> None:

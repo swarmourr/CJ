@@ -94,9 +94,15 @@ def plot_degradation(
 
     real = [
         c for c in condition_summaries
-        if _flt(c.get("pass_at_1_baseline")) is not None
-        and _flt(c.get("pass_at_1_fault")) is not None
-        and int(c.get("n_fault_valid", 0) or 0) > 0
+        if (
+            _flt(c.get("fault_specific_degradation_control_minus_fault"))
+            is not None
+            or (
+                _flt(c.get("pass_at_1_baseline")) is not None
+                and _flt(c.get("pass_at_1_fault")) is not None
+            )
+        )
+        and int(c.get("n_fault_valid", c.get("valid_pairs", 0)) or 0) > 0
     ]
     if not real:
         _no_data_notice(output_path, "no valid fault records with pass@1 data")
@@ -109,10 +115,15 @@ def plot_degradation(
     with plt.rc_context(_grayscale_style()):
         fig, ax = plt.subplots()
         labels = [c["fault_type"] for c in real]
-        degrad = [
-            round(_flt(c["pass_at_1_baseline"]) - _flt(c["pass_at_1_fault"]), 3)
-            for c in real
-        ]
+        degrad = []
+        for c in real:
+            preferred = _flt(c.get("fault_specific_degradation_control_minus_fault"))
+            if preferred is not None:
+                degrad.append(round(preferred, 3))
+            else:
+                degrad.append(
+                    round(_flt(c["pass_at_1_baseline"]) - _flt(c["pass_at_1_fault"]), 3)
+                )
         x = range(len(labels))
         hatches = ["//" if d > 0 else "" for d in degrad]
         bars = ax.bar(x, degrad, color=["#444444"] * len(labels), edgecolor="black")
@@ -120,8 +131,8 @@ def plot_degradation(
             bar.set_hatch(h)
         ax.set_xticks(list(x))
         ax.set_xticklabels(labels, rotation=30, ha="right")
-        ax.set_ylabel("Degradation (baseline − fault pass@1)")
-        ax.set_title("Success Rate Degradation under Fault")
+        ax.set_ylabel("Fault-specific degradation (CJ-control - fault pass@1)")
+        ax.set_title("Fault Effect on Success Rate")
         ax.axhline(0, color="black", linewidth=0.8)
 
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

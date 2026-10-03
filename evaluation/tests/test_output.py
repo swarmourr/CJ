@@ -370,6 +370,26 @@ class TestCSVOutput:
             if row.get("pass_at_1_baseline") not in (None, "None", ""):
                 float(row["pass_at_1_baseline"])  # must be parseable
 
+    def test_condition_summary_uses_control_for_fault_degradation(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[0]["success"] = 0.0
+        records[1]["success"] = 1.0
+        records[2]["success"] = 0.0
+        path = str(tmp_path / "cond.csv")
+        write_condition_summary_csv(records, path)
+        with open(path) as f:
+            row = next(
+                r for r in csv.DictReader(f)
+                if r["fault_type"] == "llm_latency"
+            )
+
+        assert float(row["pass_at_1_direct_baseline"]) == pytest.approx(0.0)
+        assert float(row["pass_at_1_cj_control"]) == pytest.approx(1.0)
+        assert float(row["pass_at_1_cj_fault"]) == pytest.approx(0.0)
+        assert float(row["total_degradation_direct_minus_fault"]) == pytest.approx(0.0)
+        assert float(row["fault_specific_degradation_control_minus_fault"]) == pytest.approx(1.0)
+        assert float(row["degradation"]) == pytest.approx(1.0)
+
     def test_plot_degradation_valid_data_does_not_crash(self, tmp_path):
         path = tmp_path / "degradation.pdf"
         out = plot_degradation(
