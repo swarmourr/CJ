@@ -1661,6 +1661,10 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
 # ---------------------------------------------------------------------------
 
 
+class _ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
 class _ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # silence per-request logging
         pass
@@ -2075,7 +2079,7 @@ def main() -> None:
         "conflict_text":         args.skill_conflict_text,
     }
 
-    server = HTTPServer(("0.0.0.0", args.port), _ProxyHandler)
+    server = _ReusableHTTPServer(("0.0.0.0", args.port), _ProxyHandler)
     if FAULT_CHAIN:
         chain_str = "+".join(c["fault"] for c in FAULT_CHAIN)
         print(f"chaos-jungle proxy  fault-chain=[{chain_str}]  port={args.port}  upstream={args.upstream}", flush=True)

@@ -481,6 +481,7 @@ def _start_shared_llm_proxy(
     import os as _os
     import subprocess
     import sys
+    import urllib.request as _urlrequest
 
     try:
         from chaos_jungle.faults.llm import _LLMProxyFault, _proxy_script_path
@@ -508,7 +509,40 @@ def _start_shared_llm_proxy(
         cmd += ["--db-path", _db_path, "--session-id", str(session_id), "--phase", "fault"]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    time.sleep(0.4)
+    expected_faults = [str(item.get("fault", "")) for item in chain]
+    deadline = time.time() + 5.0
+    last_cfg = None
+    last_error = ""
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        try:
+            with _urlrequest.urlopen(f"http://127.0.0.1:{port}/_cj/config", timeout=0.3) as resp:
+                cfg = _json.loads(resp.read())
+            last_cfg = cfg
+            active_faults = [
+                str(item.get("fault", ""))
+                for item in (cfg.get("fault_chain") or [])
+                if isinstance(item, dict)
+            ]
+            if active_faults == expected_faults:
+                break
+        except Exception as exc:  # noqa: BLE001
+            last_error = repr(exc)
+        time.sleep(0.05)
+    else:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        raise RuntimeError(
+            "Shared LLM proxy did not become ready with the expected fault chain "
+            f"on port {port}; expected={expected_faults!r}; "
+            f"last_config={last_cfg!r}; last_error={last_error}"
+        )
+
     if proc.poll() is not None:
         out = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
         raise RuntimeError(f"Shared LLM proxy failed to start.\nOutput: {out}")

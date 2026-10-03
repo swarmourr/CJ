@@ -108,6 +108,22 @@ class _LLMProxyFault(Fault):
         # When True, start() and stop() are no-ops — the runner manages the proxy.
         self._managed_externally: bool = False
 
+    def _active_faults_from_config(self, cfg: dict) -> list[str]:
+        chain = cfg.get("fault_chain") or []
+        if isinstance(chain, list) and chain:
+            return [str(f.get("fault", "")) for f in chain if isinstance(f, dict)]
+        fault = str(cfg.get("fault", ""))
+        return [fault] if fault else []
+
+    def _config_has_expected_fault(self, cfg: dict) -> bool:
+        return self._fault_name in self._active_faults_from_config(cfg)
+
+    def _read_proxy_config(self) -> dict:
+        import urllib.request as _ur
+
+        with _ur.urlopen(f"http://127.0.0.1:{self.port}/_cj/config", timeout=0.3) as resp:
+            return json.loads(resp.read())
+
     def _fault_config(self) -> dict:
         """Return the JSON config dict for this fault in a --fault-chain payload."""
         cfg = {"fault": self._fault_name, **self._chain_args}
@@ -149,15 +165,35 @@ class _LLMProxyFault(Fault):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        # Poll the health endpoint until the proxy is ready (up to 5 s)
-        import urllib.request as _ur
+        # Poll the config endpoint until this exact fault is ready.  A stale
+        # pass-through proxy on the same port can answer /_cj/health, so health
+        # alone is not sufficient activation evidence.
         deadline = time.time() + 5.0
+        last_cfg: dict | None = None
+        last_error: str = ""
         while time.time() < deadline:
-            try:
-                _ur.urlopen(f"http://127.0.0.1:{self.port}/_cj/health", timeout=0.3)
+            if self._proc.poll() is not None:
                 break
-            except Exception:
+            try:
+                cfg = self._read_proxy_config()
+                last_cfg = cfg
+                if self._config_has_expected_fault(cfg):
+                    break
+            except Exception as exc:
+                last_error = repr(exc)
                 time.sleep(0.05)
+        else:
+            if self._proc and self._proc.poll() is None:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+            raise RuntimeError(
+                f"LLM proxy did not become ready with fault={self._fault_name!r} "
+                f"on port {self.port}; last_config={last_cfg!r}; last_error={last_error}"
+            )
+
         if self._proc.poll() is not None:
             out = self._proc.stdout.read().decode(errors="replace") if self._proc.stdout else ""
             raise RuntimeError(
@@ -218,11 +254,7 @@ class _LLMProxyFault(Fault):
                 ) as resp:
                     import json as _json
                     cfg = _json.loads(resp.read())
-                active_faults = (
-                    [f["fault"] for f in cfg.get("fault_chain", [])]
-                    if cfg.get("fault_chain")
-                    else [cfg.get("fault", "")]
-                )
+                active_faults = self._active_faults_from_config(cfg)
                 if self._fault_name not in active_faults:
                     return VerificationResult(
                         verified=False,
@@ -263,12 +295,12 @@ class _LLMProxyFault(Fault):
             ) as resp:
                 import json as _json
                 cfg = _json.loads(resp.read())
-            active_fault = cfg.get("fault", "")
-            if active_fault and active_fault != self._fault_name:
+            active_faults = self._active_faults_from_config(cfg)
+            if active_faults and self._fault_name not in active_faults:
                 return VerificationResult(
                     verified=False,
                     reason=(
-                        f"{self.__class__.__name__}: proxy registered fault '{active_fault}' "
+                        f"{self.__class__.__name__}: proxy registered fault '{','.join(active_faults)}' "
                         f"but expected '{self._fault_name}'"
                     ),
                     observed=cfg,

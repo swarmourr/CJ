@@ -12,9 +12,14 @@ to be installed (which it is, since we're inside chaos-jungle-pkg).
 
 from __future__ import annotations
 
+import json
 import os
 import socket
+import subprocess
+import sys
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -43,6 +48,84 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _proxy_config(port: int) -> dict:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/_cj/config", timeout=0.5) as resp:
+        return json.loads(resp.read())
+
+
+def _wait_proxy_config(
+    port: int,
+    expected_fault: str,
+    *,
+    session_id: int | None = None,
+    phase: str | None = None,
+    timeout: float = 5.0,
+) -> dict:
+    deadline = time.time() + timeout
+    last: object = None
+    while time.time() < deadline:
+        try:
+            cfg = _proxy_config(port)
+            active = (
+                [str(item.get("fault", "")) for item in cfg.get("fault_chain", [])]
+                if cfg.get("fault_chain")
+                else [str(cfg.get("fault", ""))]
+            )
+            session_matches = session_id is None or str(cfg.get("session_id", "")) == str(session_id)
+            phase_matches = phase is None or str(cfg.get("phase", "")) == phase
+            if expected_fault in active and session_matches and phase_matches:
+                return cfg
+            last = cfg
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+        time.sleep(0.05)
+    raise AssertionError(
+        f"proxy on port {port} did not report fault={expected_fault!r}; last={last!r}"
+    )
+
+
+def _wait_proxy_down(port: int, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/_cj/health", timeout=0.2)
+        except Exception:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"proxy on port {port} is still responding")
+
+
+def _stop_proxy_process(proc: subprocess.Popen | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def _post_chat(base_url: str, messages: list[dict]) -> tuple[int, bytes]:
+    body = json.dumps({
+        "model": "fake",
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": 64,
+    }).encode()
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": "Bearer dummy"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return int(resp.status), resp.read()
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), exc.read()
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -173,6 +256,165 @@ class TestProxyRouting:
             fault.stop(target)
 
         assert len(fake_server.calls) == 1
+
+    def test_same_port_passthrough_then_fault_modes_restart_cleanly(
+        self, fake_server, monkeypatch, tmp_path
+    ):
+        """Pass-through must fully yield a port before the fault proxy activates.
+
+        This reproduces the publication-run failure mode where the readiness
+        check saw a stale pass-through proxy on the desired fault port and
+        verification later reported ``passthrough`` instead of the requested
+        fault.  Every stage uses the same port, sends a real request, records
+        proxy DB evidence, and verifies clean shutdown before the next mode.
+        """
+        from chaos_jungle import ChaosRunner, Scenario
+        from chaos_jungle.db import SessionDB
+        from chaos_jungle.faults.llm import (
+            LLMResponseCorrupt,
+            LLMUnavailable,
+            ToolFault,
+            _proxy_script_path,
+        )
+        from chaos_jungle.targets.local import LocalTarget
+
+        port = _free_port()
+        db = SessionDB(str(tmp_path / "cj_proxy_sessions.sqlite3"))
+        monkeypatch.setenv("CJ_EVAL_BASE_URL", fake_server.base_url)
+
+        session_id = db.open_session(
+            name="same-port-passthrough",
+            target_type="http",
+            target_addr=f"127.0.0.1:{port}",
+        )
+        passthrough = subprocess.Popen(
+            [
+                sys.executable,
+                _proxy_script_path(),
+                "--port",
+                str(port),
+                "--upstream",
+                fake_server.base_url,
+                "--fault",
+                "passthrough",
+                "--db-path",
+                str(db.path),
+                "--session-id",
+                str(session_id),
+                "--phase",
+                "control",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            cfg = _wait_proxy_config(
+                port,
+                "passthrough",
+                session_id=session_id,
+                phase="control",
+            )
+            assert cfg["fault"] == "passthrough"
+            status, _body = _post_chat(
+                f"http://127.0.0.1:{port}/v1",
+                [{"role": "user", "content": "control request"}],
+            )
+            assert status == 200
+        finally:
+            _stop_proxy_process(passthrough)
+            _wait_proxy_down(port)
+
+        control_calls = db.get_llm_calls(session_id, "control")
+        assert len(control_calls) == 1
+        assert control_calls[0]["fault_name"] == "passthrough"
+        assert control_calls[0]["was_blocked"] == 0
+        assert control_calls[0]["was_modified"] == 0
+
+        def run_fault_mode(fault, expected_fault: str, messages: list[dict], expected_status: int) -> list[dict]:
+            runner = ChaosRunner(
+                Scenario(f"same-port-{expected_fault}", [fault]),
+                LocalTarget(),
+                db=db,
+                auto_preflight=False,
+            )
+            try:
+                runner.start()
+                cfg = _wait_proxy_config(
+                    port,
+                    expected_fault,
+                    session_id=runner._session_id,
+                    phase="fault",
+                )
+                assert expected_fault in (
+                    [str(item.get("fault", "")) for item in cfg.get("fault_chain", [])]
+                    if cfg.get("fault_chain")
+                    else [str(cfg.get("fault", ""))]
+                )
+                status, _body = _post_chat(f"http://127.0.0.1:{port}/v1", messages)
+                assert status == expected_status
+            finally:
+                runner.stop()
+                _wait_proxy_down(port)
+            calls = db.get_llm_calls(runner._session_id, "fault")
+            assert calls, f"{expected_fault} did not record any proxy evidence"
+            return calls
+
+        unavailable_calls = run_fault_mode(
+            LLMUnavailable(
+                port=port,
+                upstream=fake_server.base_url,
+                base_url_env="CJ_EVAL_BASE_URL",
+            ),
+            "unavailable",
+            [{"role": "user", "content": "should be unavailable"}],
+            503,
+        )
+        assert unavailable_calls[0]["fault_name"] == "unavailable"
+        assert unavailable_calls[0]["was_blocked"] == 1
+
+        corrupt_calls = run_fault_mode(
+            LLMResponseCorrupt(
+                mode="invalid_json",
+                port=port,
+                upstream=fake_server.base_url,
+                base_url_env="CJ_EVAL_BASE_URL",
+            ),
+            "corrupt",
+            [{"role": "user", "content": "should be corrupted"}],
+            200,
+        )
+        assert corrupt_calls[0]["fault_name"] == "corrupt"
+        assert corrupt_calls[0]["was_modified"] == 1
+
+        tool_calls = run_fault_mode(
+            ToolFault(
+                port=port,
+                upstream=fake_server.base_url,
+                base_url_env="CJ_EVAL_BASE_URL",
+            ),
+            "tool_fault",
+            [
+                {"role": "user", "content": "run the tool"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "execute_python_code", "arguments": "{}"},
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "name": "execute_python_code",
+                    "tool_call_id": "call_1",
+                    "content": "{}",
+                },
+            ],
+            400,
+        )
+        assert tool_calls[0]["fault_name"] == "tool_fault"
+        assert tool_calls[0]["was_blocked"] == 1
 
     def test_pair_id_shared_between_baseline_and_fault_records(
         self, fake_server, monkeypatch, tmp_path

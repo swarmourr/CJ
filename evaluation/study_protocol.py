@@ -560,18 +560,40 @@ class PublicationStudyOrchestrator:
             ])
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         deadline = time.time() + 5
+        last_cfg: dict[str, Any] | None = None
+        last_error = ""
 
         while time.time() < deadline:
             if proc.poll() is not None:
                 out = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
                 raise RuntimeError(f"CJ pass-through proxy failed to start: {out}")
             try:
-                urlrequest.urlopen(f"http://127.0.0.1:{proxy_port}/_cj/health", timeout=0.3)
-                return proc
-            except Exception:
+                with urlrequest.urlopen(
+                    f"http://127.0.0.1:{proxy_port}/_cj/config", timeout=0.3
+                ) as resp:
+                    cfg = json.loads(resp.read())
+                last_cfg = cfg
+                session_matches = (
+                    session_id is None
+                    or str(cfg.get("session_id", "")) == str(session_id)
+                )
+                phase_matches = db is None or str(cfg.get("phase", "")) == "control"
+                if (
+                    cfg.get("fault") == "passthrough"
+                    and not cfg.get("fault_chain")
+                    and session_matches
+                    and phase_matches
+                ):
+                    return proc
+            except Exception as exc:
+                last_error = repr(exc)
                 time.sleep(0.05)
         self._stop_process(proc)
-        raise RuntimeError("CJ pass-through proxy did not become healthy")
+        raise RuntimeError(
+            "CJ pass-through proxy did not become ready with the expected "
+            f"control config on port {proxy_port}; last_config={last_cfg!r}; "
+            f"last_error={last_error}"
+        )
 
     def _docker_reachable_proxy_url(self, port: int | None = None) -> str:
         if platform.system().lower() == "darwin":
