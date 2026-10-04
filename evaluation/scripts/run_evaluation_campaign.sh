@@ -24,6 +24,7 @@ Modes:
   smoke        Run the full smoke bundle: verify, injector, overhead, individual, multi, infra.
   pilot        Run the broader pilot bundle from run_all_paper_scenarios.sh.
   real-smoke   Run the low-count real-LLM smoke script.
+  all-scenarios Run every current scenario category explicitly.
   help         Show this help.
 
 Preconfigured scenarios:
@@ -39,6 +40,7 @@ Preconfigured scenarios:
   infra-cpu-smoke             Container-scoped CPU pressure smoke, dry-run task.
   infra-network-smoke         Container-scoped network-latency smoke, dry-run task.
   paper-smoke                 Small bundle across implemented paper categories.
+  all-current                 Every current scenario category and infra fault.
 
 Common options:
   --env-file PATH             Load model credentials/config from PATH.
@@ -55,6 +57,7 @@ Common options:
   --fault-suite NAME          Fault suite, for example smoke, all, llm_api.
   --infra-fault NAME          Infrastructure fault: cpu_pressure, memory_pressure,
                               network_latency, packet_loss, or disk_full.
+  --infra-faults LIST         Space/comma-separated infrastructure faults for all-scenarios.
   --tasks N                   Number of tasks.
   --repeats N                 Repetitions per task.
   --seed N                    Random seed.
@@ -171,6 +174,14 @@ Preconfigured evaluation scenarios:
     Defaults: tasks=1, repeats=1.
     Purpose: broad small bundle across the implemented paper categories.
 
+  all-current
+    Mode: all-scenarios
+    Defaults: static validation, Docker tests, injector, overhead,
+              individual, multi semantic suites, all current infra faults,
+              and bounded real smoke.
+    Purpose: run the complete current evaluation surface without using the
+             legacy smoke wrapper.
+
 All scenario defaults can be overridden with ordinary flags after the scenario
 name, for example:
 
@@ -281,6 +292,12 @@ apply_scenario() {
       export CJ_EVAL_REPEATS="1"
       echo "smoke"
       ;;
+    all-current)
+      export CJ_EVAL_TASKS="${CJ_EVAL_TASKS:-3}"
+      export CJ_EVAL_REPEATS="${CJ_EVAL_REPEATS:-1}"
+      export CJ_EVAL_RUN_NAME="all-current"
+      echo "all-scenarios"
+      ;;
     *)
       echo "[cj-eval] unknown scenario: ${name}" >&2
       print_scenarios >&2
@@ -377,6 +394,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --infra-fault)
       export CJ_EVAL_INFRA_FAULT="$2"
+      shift 2
+      ;;
+    --infra-faults)
+      export CJ_EVAL_INFRA_FAULTS="$(normalize_list "$2")"
       shift 2
       ;;
     --tasks)
@@ -523,6 +544,10 @@ case "${mode}" in
   real-smoke)
     ensure_image
     "${script_dir}/run_real_llm_smoke.sh"
+    ;;
+  all-scenarios|all)
+    ensure_image
+    "${script_dir}/run_all_current_scenarios.sh"
     ;;
   *)
     echo "[cj-eval] unknown campaign mode: ${mode}" >&2

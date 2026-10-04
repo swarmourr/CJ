@@ -46,6 +46,7 @@ The lower-level category scripts still support the legacy layout
 | `evaluation/scripts/run_individual_resilience_pilot.sh` | `individual-resilience-pilot` | AutoGen/LangGraph/CrewAI individual-agent pilot |
 | `evaluation/scripts/run_multi_agent_reference_pilot.sh` | `multi-agent-reference-pilot` | Framework-neutral three-role multi-agent pilot |
 | `evaluation/scripts/run_infrastructure_fault_smoke.sh` | `infrastructure-validation` | Container-scoped infrastructure fault smoke |
+| `evaluation/scripts/run_all_current_scenarios.sh` | multiple categories | Explicit all-current scenario runner, including all infra faults |
 | `evaluation/scripts/run_all_paper_scenarios.sh` | multiple categories | Smoke or pilot wrapper |
 | `evaluation/scripts/run_evaluation_campaign.sh` | multiple categories | Main user-facing wrapper with modes, flags, and named scenarios |
 
@@ -68,6 +69,22 @@ scripts/run_evaluation_campaign.sh scenario real-minimax-one-fault --tasks 2
 scripts/run_evaluation_campaign.sh scenario multi-reference-mini --topologies linear
 ```
 
+Run every current scenario category explicitly, including all current
+infrastructure faults:
+
+```bash
+evaluation/scripts/run_evaluation_campaign.sh all-scenarios \
+  --env-file .env \
+  --model minimax-m2 \
+  --tasks 3 \
+  --repeats 1 \
+  --benchmarks "humanevalplus mbppplus" \
+  --topologies "linear closed_loop"
+```
+
+This is different from the legacy `smoke` wrapper: it runs the category scripts
+directly and loops over every current infrastructure fault.
+
 | Scenario | Underlying Mode | Purpose |
 | --- | --- | --- |
 | `no-cost-verify` | `verify` | Static/unit validation plus Docker image readiness; no model calls |
@@ -81,6 +98,7 @@ scripts/run_evaluation_campaign.sh scenario multi-reference-mini --topologies li
 | `multi-reference-mini` | `multi` | Reference multi-agent propagation smoke across both topologies |
 | `infra-cpu-smoke` | `infra` | Dry-run toy task under container-scoped CPU pressure |
 | `infra-network-smoke` | `infra` | Dry-run toy task under container-scoped network latency |
+| `all-current` | `all-scenarios` | All current scenario categories without using the legacy smoke wrapper |
 | `paper-smoke` | `smoke` | Small bundle across implemented paper categories |
 
 Default model routing is set for local Ollama-compatible endpoints:
