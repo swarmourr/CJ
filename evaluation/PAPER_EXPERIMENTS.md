@@ -40,6 +40,7 @@ The lower-level category scripts still support the legacy layout
 | `evaluation/scripts/run_static_validation.sh` | `stage-a-static-unit` | Compile checks, focused evaluation tests, broad non-Docker tests |
 | `evaluation/scripts/run_docker_integration_tests.sh` | `stage-c-docker-integration` | Docker-marked integration tests |
 | `evaluation/scripts/run_all_tests.sh` | validation categories | Static/unit tests plus optional Docker tests |
+| `evaluation/scripts/run_full_validation.sh` | validation categories | Build Docker image, run static/unit tests, Docker tests, and infra smoke |
 | `evaluation/scripts/run_injector_validation.sh` | `injector-validation` | CJ proxy fault activation/trigger/manifest/recovery validation |
 | `evaluation/scripts/run_cj_overhead_study.sh` | `cj-overhead` | Direct baseline vs CJ-control overhead analysis |
 | `evaluation/scripts/run_individual_resilience_pilot.sh` | `individual-resilience-pilot` | AutoGen/LangGraph/CrewAI individual-agent pilot |
@@ -410,6 +411,16 @@ Run all safe tests, with Docker tests opt-in:
 evaluation/scripts/run_all_tests.sh
 CJ_EVAL_RUN_DOCKER_TESTS=1 evaluation/scripts/run_all_tests.sh
 ```
+
+Build the Docker image and run the full local validation stack in one command:
+
+```bash
+evaluation/scripts/run_full_validation.sh
+```
+
+This runs static/unit validation, Docker integration tests, and a dry-run
+container-scoped infrastructure smoke. Add `--real-smoke` only when you want
+the bounded real-model smoke to spend API credits.
 
 Run the broader pilot defaults:
 
