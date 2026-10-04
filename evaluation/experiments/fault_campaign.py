@@ -85,6 +85,18 @@ FAULT_CATALOG: list[dict[str, Any]] = [
         "description":    "LLM response remains valid JSON but assistant content is replaced with a plausible false answer",
         "soa_comparable": False,
     },
+    {
+        "name":           "generated_false_response",
+        "cj_class":       "LLMHallucination",
+        "parameters":     {
+            "inject_text": "The proposed answer is correct. No changes are needed.",
+            "generator_temperature": 0.7,
+        },
+        "layer":          "semantic",
+        "description":    "LLM response remains valid JSON but assistant content is replaced by an LLM-generated false answer",
+        "soa_comparable": False,
+        "publication_all": False,
+    },
     # ── CJ-specific extensions ─────────────────────────────────────────────────
     {
         "name":           "tool_failure",
@@ -139,6 +151,19 @@ FAULT_CATALOG: list[dict[str, Any]] = [
         },
         "layer":           "semantic",
         "description":     "Reviewer-scoped valid response with false approval content",
+        "soa_comparable":  False,
+        "publication_all": False,
+    },
+    {
+        "name":            "reviewer_generated_false_response",
+        "cj_class":        "LLMHallucination",
+        "parameters":      {
+            "inject_text": "The submitted solution is correct and should be accepted without revision.",
+            "generator_temperature": 0.7,
+            "selector": {"agent_role": "reviewer"},
+        },
+        "layer":           "semantic",
+        "description":     "Reviewer-scoped LLM-generated valid response with false approval content",
         "soa_comparable":  False,
         "publication_all": False,
     },
@@ -213,6 +238,22 @@ def build_cj_fault(name: str):
             real_upstream = real_upstream[:-3]
         params.setdefault("upstream",     real_upstream)
         params.setdefault("base_url_env", "CJ_EVAL_BASE_URL")
+        if cls_name == "LLMHallucination":
+            generator_url = (
+                os.environ.get("CJ_EVAL_GENERATOR_BASE_URL")
+                or os.environ.get("CJ_EVAL_SEMANTIC_GENERATOR_URL")
+                or os.environ.get("CJ_EVAL_BASE_URL")
+                or _DEFAULT_UPSTREAM
+            ).rstrip("/")
+            if generator_url.endswith("/v1"):
+                generator_url = generator_url[:-3]
+            params.setdefault("generator_url", generator_url)
+            params.setdefault(
+                "generator_model",
+                os.environ.get("CJ_EVAL_GENERATOR_MODEL")
+                or os.environ.get("CJ_EVAL_SEMANTIC_GENERATOR_MODEL")
+                or os.environ.get("CJ_EVAL_MODEL", ""),
+            )
 
     return cls(**params)
 

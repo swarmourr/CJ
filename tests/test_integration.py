@@ -768,6 +768,98 @@ class TestProxyTracing:
         assert evidence["corrupt"]["false_text_preview"] == "false but valid answer"
         assert evidence["corrupt"]["before_hash"] != evidence["corrupt"]["after_hash"]
 
+    def test_mutate_response_generated_hallucination_records_generator_evidence(self, monkeypatch):
+        """LLM-generated false responses are separate from static false_response."""
+        import json
+        import chaos_jungle.scripts.llm_proxy.llm_proxy as proxy
+
+        def fake_generate(req_body, generator_url, model, *, temperature, seed):
+            assert generator_url == "https://generator.example"
+            assert model == "fault-model"
+            assert temperature == 0.3
+            assert seed == 17
+            assert req_body["messages"][0]["content"] == "solve it"
+            return "generated but wrong"
+
+        monkeypatch.setattr(proxy, "_generate_hallucination", fake_generate)
+        triggered: list = []
+        evidence: dict = {}
+        body = json.dumps({
+            "choices": [{
+                "message": {"role": "assistant", "content": "real answer"},
+                "finish_reason": "stop",
+            }],
+        }).encode()
+
+        mutated = proxy._mutate_response(
+            {
+                "fault": "hallucinate",
+                "text": "static fallback",
+                "generator_url": "https://generator.example",
+                "generator_model": "fault-model",
+                "generator_temperature": 0.3,
+                "generator_seed": 17,
+            },
+            body,
+            {"messages": [{"role": "user", "content": "solve it"}]},
+            triggered,
+            evidence,
+        )
+
+        parsed = json.loads(mutated)
+        assert parsed["choices"][0]["message"]["content"] == "generated but wrong"
+        assert "hallucinate" in triggered
+        assert evidence["hallucinate"]["generation_source"] == "llm_generator"
+        assert evidence["hallucinate"]["generator_model"] == "fault-model"
+        assert evidence["hallucinate"]["generator_temperature"] == 0.3
+        assert evidence["hallucinate"]["generator_seed"] == 17
+        assert evidence["hallucinate"]["injected_text_hash"]
+
+    def test_generate_hallucination_uses_auth_and_v1_idempotent_url(self, monkeypatch):
+        """Generator calls use env auth and do not append /v1 twice."""
+        import json
+        import chaos_jungle.scripts.llm_proxy.llm_proxy as proxy
+
+        seen = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "choices": [{
+                        "message": {"content": "wrong generated answer"},
+                    }],
+                }).encode()
+
+        def fake_urlopen(req, timeout):
+            seen["url"] = req.full_url
+            seen["auth"] = req.get_header("Authorization")
+            seen["timeout"] = timeout
+            seen["payload"] = json.loads(req.data.decode())
+            return FakeResponse()
+
+        monkeypatch.setenv("CJ_EVAL_API_KEY", "secret-token")
+        monkeypatch.setattr(proxy.urllib.request, "urlopen", fake_urlopen)
+
+        generated = proxy._generate_hallucination(
+            {"messages": [{"role": "user", "content": "make it wrong"}]},
+            "https://generator.example/v1",
+            "fault-model",
+            temperature=0.2,
+            seed=9,
+        )
+
+        assert generated == "wrong generated answer"
+        assert seen["url"] == "https://generator.example/v1/chat/completions"
+        assert seen["auth"] == "Bearer secret-token"
+        assert seen["payload"]["temperature"] == 0.2
+        assert seen["payload"]["seed"] == 9
+
     def test_check_block_rate_limit_conditional(self):
         """_check_block for rate_limit only fires after n requests."""
         import chaos_jungle.scripts.llm_proxy.llm_proxy as proxy

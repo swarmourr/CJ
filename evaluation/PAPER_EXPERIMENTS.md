@@ -277,7 +277,20 @@ Additional semantic response-corruption suite:
 
 ```text
 reviewer_false_response
+reviewer_generated_false_response
 ```
+
+Individual-agent semantic comparison:
+
+```text
+false_response
+generated_false_response
+```
+
+`false_response` is deterministic fixed-text corruption. `generated_false_response`
+uses an LLM to produce the injected false answer, so reports must stratify it
+separately and record generator model, generator temperature, generation source,
+and injected-text hash.
 
 Architecture:
 

@@ -525,7 +525,28 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "--benchmark", "humanevalplus",
         "--fault-suite", "semantic",
     ])
-    assert _publication_fault_names(semantic_args) == ["false_response"]
+    assert _publication_fault_names(semantic_args) == [
+        "false_response",
+        "generated_false_response",
+    ]
+
+    semantic_static_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "semantic_static",
+    ])
+    assert _publication_fault_names(semantic_static_args) == ["false_response"]
+
+    semantic_generated_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "semantic_generated",
+    ])
+    assert _publication_fault_names(semantic_generated_args) == ["generated_false_response"]
 
     ma_args = build_parser().parse_args([
         "--publication-study",
@@ -547,7 +568,10 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "--benchmark", "humanevalplus",
         "--fault-suite", "multi_agent_semantic",
     ])
-    assert _publication_fault_names(ma_semantic_args) == ["reviewer_false_response"]
+    assert _publication_fault_names(ma_semantic_args) == [
+        "reviewer_false_response",
+        "reviewer_generated_false_response",
+    ]
 
     list_args = build_parser().parse_args([
         "--publication-study",
@@ -557,6 +581,19 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "--fault", "llm_latency,llm_unavailable",
     ])
     assert _publication_fault_names(list_args) == ["llm_latency", "llm_unavailable"]
+
+
+def test_generated_false_response_defaults_to_current_model_endpoint(monkeypatch):
+    from evaluation.experiments.fault_campaign import build_cj_fault
+
+    monkeypatch.setenv("CJ_EVAL_BASE_URL", "https://ellm.example/v1")
+    monkeypatch.setenv("CJ_EVAL_MODEL", "minimax-m2")
+
+    fault = build_cj_fault("generated_false_response")
+
+    assert fault.generator_url == "https://ellm.example"
+    assert fault.generator_model == "minimax-m2"
+    assert fault._parameters()["generator_temperature"] == 0.7
 
 
 def test_publication_fault_resolution_rejects_ambiguous_or_empty_selection():

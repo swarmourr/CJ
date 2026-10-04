@@ -867,22 +867,37 @@ class LLMHallucination(_LLMProxyFault):
         inject_text: str = "WRONG ANSWER (injected by chaos-jungle)",
         generator_url: str = "",
         generator_model: str = "",
+        generator_temperature: float = 0.7,
+        generator_seed: int | None = None,
         port: int = _DEFAULT_PORT,
         upstream: str = _DEFAULT_UPSTREAM,
         base_url_env: str = _DEFAULT_ENV,
+        selector: dict | None = None,
     ) -> None:
         if not inject_text or not inject_text.strip():
             raise ValueError("LLMHallucination 'inject_text' must be a non-empty string.")
-        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env)
+        super().__init__(port=port, upstream=upstream, base_url_env=base_url_env, selector=selector)
         self.inject_text = inject_text
         self.generator_url = generator_url
         self.generator_model = generator_model
+        self.generator_temperature = generator_temperature
+        self.generator_seed = generator_seed
         self._extra_args = ["--hallucination-text", inject_text]
         if generator_url and generator_model:
             self._extra_args += [
                 "--hallucination-generator", generator_url,
                 "--hallucination-model", generator_model,
+                "--hallucination-temperature", str(generator_temperature),
             ]
+            if generator_seed is not None:
+                self._extra_args += ["--hallucination-seed", str(generator_seed)]
+        self._chain_args = {
+            "text": inject_text,
+            "generator_url": generator_url,
+            "generator_model": generator_model,
+            "generator_temperature": generator_temperature,
+            "generator_seed": generator_seed,
+        }
 
     def _parameters(self) -> dict:
         return {
@@ -890,6 +905,8 @@ class LLMHallucination(_LLMProxyFault):
             "inject_text": self.inject_text,
             "generator_url": self.generator_url,
             "generator_model": self.generator_model,
+            "generator_temperature": self.generator_temperature,
+            "generator_seed": self.generator_seed,
         }
 
 

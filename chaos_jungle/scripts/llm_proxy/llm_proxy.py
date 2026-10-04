@@ -81,6 +81,7 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -329,6 +330,8 @@ def _describe_expected(fault_type: str, cfg: dict) -> str:
     if fault_type == "unavailable":
         return "HTTP 503 Service Unavailable"
     if fault_type == "hallucinate":
+        if cfg.get("generator_url") and cfg.get("generator_model"):
+            return f"response replaced with LLM-generated false answer from {cfg.get('generator_model')!r}"
         preview = str(cfg.get("text", ""))[:60]
         return f"response replaced with hallucination: {preview!r}..."
     if fault_type == "token_starve":
@@ -369,6 +372,9 @@ def _describe_observed(fault_type: str, ev: dict, triggered: bool) -> str:
         return f"response {mode}d (before={bh} after={ah})"
     if fault_type == "hallucinate":
         preview = str(ev.get("injected_text_preview", ""))[:80]
+        source = ev.get("generation_source")
+        if source:
+            return f"response replaced ({source}): {preview!r}"
         return f"response replaced: {preview!r}"
     if fault_type == "token_starve":
         return f"max_tokens rewritten in request"
@@ -518,7 +524,36 @@ def _mcp_tool_error_response(req_body: dict | None) -> bytes:
     }).encode()
 
 
-def _generate_hallucination(req_body: dict | None, generator_url: str, model: str) -> str | None:
+def _generator_auth_header() -> dict[str, str]:
+    """Return Authorization header for generator calls without exposing secrets."""
+    for env_name in (
+        "CJ_EVAL_GENERATOR_API_KEY",
+        "CJ_EVAL_API_KEY",
+        "OPENAI_API_KEY",
+        "LLM_API_KEY",
+    ):
+        token = os.environ.get(env_name, "").strip()
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
+def _chat_completions_url(base_url: str) -> str:
+    """Build an OpenAI-compatible chat completions URL from root or /v1 base."""
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        return f"{root}/chat/completions"
+    return f"{root}/v1/chat/completions"
+
+
+def _generate_hallucination(
+    req_body: dict | None,
+    generator_url: str,
+    model: str,
+    *,
+    temperature: float = 0.7,
+    seed: int | None = None,
+) -> str | None:
     """Call a second LLM to produce a plausible but wrong answer.
 
     Extracts the last user message from the request, sends it to the
@@ -539,7 +574,7 @@ def _generate_hallucination(req_body: dict | None, generator_url: str, model: st
     if not user_prompt:
         return None
 
-    payload = json.dumps({
+    payload_dict = {
         "model": model,
         "messages": [
             {
@@ -554,12 +589,16 @@ def _generate_hallucination(req_body: dict | None, generator_url: str, model: st
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
-    }).encode()
+        "temperature": temperature,
+    }
+    if seed is not None:
+        payload_dict["seed"] = seed
+    payload = json.dumps(payload_dict).encode()
 
-    url = generator_url.rstrip("/") + "/v1/chat/completions"
+    url = _chat_completions_url(generator_url)
     req = urllib.request.Request(
         url, data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_generator_auth_header()},
         method="POST",
     )
     try:
@@ -1630,8 +1669,21 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
         _before = resp_body
         generator_url   = cfg.get("generator_url", "")
         generator_model = cfg.get("generator_model", "")
+        generator_temperature = float(cfg.get("generator_temperature", 0.7))
+        generator_seed = cfg.get("generator_seed")
+        try:
+            generator_seed = int(generator_seed) if generator_seed not in (None, "") else None
+        except (TypeError, ValueError):
+            generator_seed = None
+        generated = None
         if generator_url and generator_model:
-            generated = _generate_hallucination(req_body, generator_url, generator_model)
+            generated = _generate_hallucination(
+                req_body,
+                generator_url,
+                generator_model,
+                temperature=generator_temperature,
+                seed=generator_seed,
+            )
             text = generated or cfg.get("text", "WRONG ANSWER (injected by chaos-jungle)")
         else:
             text = cfg.get("text", "WRONG ANSWER (injected by chaos-jungle)")
@@ -1642,6 +1694,16 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
             _mut_can = _canonical_json(resp_body)
             evidence[fault] = {
                 "injected_text_preview": text[:200],
+                "injected_text_hash": hashlib.sha256(text.encode()).hexdigest()[:16],
+                "generation_source": "llm_generator" if generated else "static_fallback",
+                "generator_model": generator_model,
+                "generator_url_hash": (
+                    hashlib.sha256(generator_url.encode()).hexdigest()[:16]
+                    if generator_url
+                    else ""
+                ),
+                "generator_temperature": generator_temperature if generator_url else None,
+                "generator_seed": generator_seed,
                 "original_canonical": _orig_can,
                 "mutated_canonical":  _mut_can,
             }
@@ -2021,6 +2083,10 @@ def main() -> None:
                         "used only as fallback.")
     p.add_argument("--hallucination-model", default="",
                    help="Model name for the hallucination generator LLM.")
+    p.add_argument("--hallucination-temperature", type=float, default=0.7,
+                   help="Sampling temperature for generated hallucinations")
+    p.add_argument("--hallucination-seed", type=int, default=None,
+                   help="Optional generator seed when supported by the provider")
     p.add_argument("--stream-interrupt-after", type=int, default=3,
                    help="Number of SSE data events before stream is cut")
     p.add_argument("--token-starve-max", type=int, default=5,
@@ -2091,6 +2157,8 @@ def main() -> None:
         "text":                  args.hallucination_text,
         "generator_url":         args.hallucination_generator,
         "generator_model":       args.hallucination_model,
+        "generator_temperature": args.hallucination_temperature,
+        "generator_seed":        args.hallucination_seed,
         "interrupt_after":       args.stream_interrupt_after,
         "max_tokens":            args.token_starve_max,
         "budget_max_cost_usd":   args.budget_max_cost_usd,

@@ -125,6 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
             "llm_api",
             "response",
             "semantic",
+            "semantic_static",
+            "semantic_generated",
             "tool",
             "multi_agent",
             "multi_agent_semantic",
@@ -423,14 +425,16 @@ PUBLICATION_FAULT_SUITES: dict[str, list[str]] = {
     "smoke": ["llm_latency"],
     "llm_api": ["llm_latency", "llm_timeout", "llm_rate_limit", "llm_unavailable"],
     "response": ["response_truncation", "malformed_response", "false_response", "token_starvation"],
-    "semantic": ["false_response"],
+    "semantic": ["false_response", "generated_false_response"],
+    "semantic_static": ["false_response"],
+    "semantic_generated": ["generated_false_response"],
     "tool": ["tool_failure"],
     "multi_agent": [
         "planner_llm_unavailable",
         "reviewer_response_corrupt",
         "coder_tool_fault",
     ],
-    "multi_agent_semantic": ["reviewer_false_response"],
+    "multi_agent_semantic": ["reviewer_false_response", "reviewer_generated_false_response"],
 }
 
 

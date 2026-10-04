@@ -85,6 +85,8 @@ def describe_expected(fault_type: str, cfg: "dict") -> str:
     if fault_type == "unavailable":
         return "HTTP 503 Service Unavailable"
     if fault_type == "hallucinate":
+        if cfg.get("generator_url") and cfg.get("generator_model"):
+            return f"response replaced with LLM-generated false answer from {cfg.get('generator_model')!r}"
         preview = str(cfg.get("text", cfg.get("inject_text", "")))[:60]
         return f"response replaced with hallucination: {preview!r}..."
     if fault_type == "token_starve":
@@ -125,6 +127,9 @@ def describe_observed(fault_type: str, ev: "dict", triggered: bool) -> str:
         return f"response {mode}d (before={bh} after={ah})"
     if fault_type == "hallucinate":
         preview = str(ev.get("injected_text_preview", ""))[:80]
+        source = ev.get("generation_source")
+        if source:
+            return f"response replaced ({source}): {preview!r}"
         return f"response replaced: {preview!r}"
     if fault_type == "token_starve":
         return "max_tokens rewritten in request"
