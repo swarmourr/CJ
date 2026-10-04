@@ -60,6 +60,7 @@ Common options:
   --memory SIZE               Docker memory limit, for example 2g.
   --proxy-port PORT           CJ proxy port.
   --results-root PATH         Root folder for generated results.
+  --experiment-run NAME       Group category outputs under results-root/NAME.
   --run-name NAME             Human-readable run name.
   --profile NAME              smoke or pilot, for bundle modes.
   --rebuild-image             Rebuild the Docker image before running.
@@ -87,6 +88,9 @@ Examples:
   scripts/run_evaluation_campaign.sh multi \
     --topologies "linear closed_loop" \
     --tasks 1
+
+  scripts/run_evaluation_campaign.sh smoke \
+    --experiment-run experiment-run-1
 EOF
 }
 
@@ -379,6 +383,10 @@ while [[ $# -gt 0 ]]; do
       export CJ_EVAL_RESULTS_ROOT="$2"
       shift 2
       ;;
+    --experiment-run|--experiment)
+      export CJ_EVAL_EXPERIMENT_RUN="$2"
+      shift 2
+      ;;
     --run-name)
       export CJ_EVAL_RUN_NAME="$2"
       shift 2
@@ -413,6 +421,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "${CJ_EVAL_REPO_ROOT}"
+export CJ_EVAL_RUN_STAMP="${CJ_EVAL_RUN_STAMP:-$(cj_eval_timestamp)}"
+export CJ_EVAL_EXPERIMENT_CREATED_AT="${CJ_EVAL_EXPERIMENT_CREATED_AT:-$(cj_eval_timestamp)}"
+if [[ -z "${CJ_EVAL_EXPERIMENT_RUN:-}" ]]; then
+  export CJ_EVAL_EXPERIMENT_RUN="${CJ_EVAL_SCENARIO:-${mode}}-${CJ_EVAL_RUN_STAMP}"
+fi
+cj_eval_init_experiment_run
+
+cat <<EOF
+[cj-eval] experiment run: ${CJ_EVAL_EXPERIMENT_RUN}
+[cj-eval] results root  : $(cj_eval_results_root)
+EOF
 
 ensure_image() {
   local image

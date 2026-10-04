@@ -27,12 +27,48 @@ cj_eval_default_image() {
   echo "${CJ_EVAL_DOCKER_IMAGE:-${CJ_EVAL_IMAGE_NAME:-cj-eval-agent}:${CJ_EVAL_IMAGE_TAG:-${commit}}}"
 }
 
-cj_eval_results_root() {
+cj_eval_results_base() {
   echo "${CJ_EVAL_RESULTS_ROOT:-${CJ_EVAL_REPO_ROOT}/results/paper}"
 }
 
 cj_eval_slug() {
   echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._=-' '-' | sed 's/^-//;s/-$//'
+}
+
+cj_eval_json_string() {
+  "${CJ_EVAL_PYTHON}" -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+cj_eval_results_root() {
+  local base
+  base="$(cj_eval_results_base)"
+  if [[ -n "${CJ_EVAL_EXPERIMENT_RUN:-}" ]]; then
+    echo "${base}/$(cj_eval_slug "${CJ_EVAL_EXPERIMENT_RUN}")"
+  else
+    echo "${base}"
+  fi
+}
+
+cj_eval_init_experiment_run() {
+  local root
+  root="$(cj_eval_results_root)"
+  mkdir -p "${root}"
+  if [[ -n "${CJ_EVAL_EXPERIMENT_RUN:-}" ]]; then
+    cat > "${root}/experiment_manifest.json" <<EOF
+{
+  "experiment_run": $(cj_eval_json_string "${CJ_EVAL_EXPERIMENT_RUN}"),
+  "created_at_utc": $(cj_eval_json_string "${CJ_EVAL_EXPERIMENT_CREATED_AT:-$(cj_eval_timestamp)}"),
+  "repo_root": $(cj_eval_json_string "${CJ_EVAL_REPO_ROOT}"),
+  "commit": $(cj_eval_json_string "$(cj_eval_commit)"),
+  "results_base": $(cj_eval_json_string "$(cj_eval_results_base)"),
+  "results_root": $(cj_eval_json_string "${root}"),
+  "layout": "<results_root>/<category>/<scenario-or-condition>/",
+  "model": $(cj_eval_json_string "${CJ_EVAL_MODEL:-}"),
+  "host_base_url": $(cj_eval_json_string "${CJ_EVAL_BASE_URL:-}"),
+  "container_base_url": $(cj_eval_json_string "${CJ_EVAL_CONTAINER_BASE_URL:-}")
+}
+EOF
+  fi
 }
 
 cj_eval_make_run_dir() {
@@ -41,7 +77,24 @@ cj_eval_make_run_dir() {
   local stamp="${CJ_EVAL_RUN_STAMP:-$(cj_eval_timestamp)}"
   local root
   root="$(cj_eval_results_root)"
-  local dir="${root}/$(cj_eval_slug "${category}")/$(cj_eval_slug "${name}")-${stamp}"
+  cj_eval_init_experiment_run
+  local category_slug
+  local name_slug
+  category_slug="$(cj_eval_slug "${category}")"
+  name_slug="$(cj_eval_slug "${name}")"
+  local dir
+  if [[ -n "${CJ_EVAL_EXPERIMENT_RUN:-}" ]]; then
+    dir="${root}/${category_slug}/${name_slug}"
+    if [[ -e "${dir}" ]]; then
+      local i=2
+      while [[ -e "${dir}-${i}" ]]; do
+        i=$((i + 1))
+      done
+      dir="${dir}-${i}"
+    fi
+  else
+    dir="${root}/${category_slug}/${name_slug}-${stamp}"
+  fi
   mkdir -p "${dir}/logs"
   echo "${dir}"
 }
@@ -152,15 +205,24 @@ cj_eval_metadata() {
   local image="$4"
   cat > "${path}" <<EOF
 {
-  "category": "${category}",
-  "name": "${name}",
-  "created_at_utc": "$(cj_eval_timestamp)",
-  "repo_root": "${CJ_EVAL_REPO_ROOT}",
-  "commit": "$(cj_eval_commit)",
-  "docker_image": "${image}",
-  "model": "${CJ_EVAL_MODEL:-}",
-  "host_base_url": "${CJ_EVAL_BASE_URL:-}",
-  "container_base_url": "${CJ_EVAL_CONTAINER_BASE_URL:-}"
+  "category": $(cj_eval_json_string "${category}"),
+  "name": $(cj_eval_json_string "${name}"),
+  "created_at_utc": $(cj_eval_json_string "$(cj_eval_timestamp)"),
+  "repo_root": $(cj_eval_json_string "${CJ_EVAL_REPO_ROOT}"),
+  "commit": $(cj_eval_json_string "$(cj_eval_commit)"),
+  "docker_image": $(cj_eval_json_string "${image}"),
+  "model": $(cj_eval_json_string "${CJ_EVAL_MODEL:-}"),
+  "host_base_url": $(cj_eval_json_string "${CJ_EVAL_BASE_URL:-}"),
+  "container_base_url": $(cj_eval_json_string "${CJ_EVAL_CONTAINER_BASE_URL:-}")
 }
 EOF
+  if [[ -n "${CJ_EVAL_EXPERIMENT_RUN:-}" ]]; then
+    local root
+    local run_path
+    root="$(cj_eval_results_root)"
+    run_path="$(cd "$(dirname "${path}")" && pwd)"
+    cat >> "${root}/runs_index.jsonl" <<EOF
+{"category":$(cj_eval_json_string "${category}"),"name":$(cj_eval_json_string "${name}"),"path":$(cj_eval_json_string "${run_path}"),"created_at_utc":$(cj_eval_json_string "$(cj_eval_timestamp)"),"commit":$(cj_eval_json_string "$(cj_eval_commit)"),"docker_image":$(cj_eval_json_string "${image}")}
+EOF
+  fi
 }

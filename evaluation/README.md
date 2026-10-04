@@ -257,9 +257,27 @@ separate fault-generator model.
 
 ### Paper scenario scripts
 
-Ready-to-run paper scaffolding lives in `evaluation/scripts/`. Each script writes
-to a named category folder under `results/paper/<category>/<run-name>-<UTC>/` and
-stores the exact command and logs next to the generated outputs.
+Ready-to-run paper scaffolding lives in `evaluation/scripts/`. The campaign
+wrapper groups outputs by experiment run:
+
+```text
+results/paper/<experiment-run>/
+  experiment_manifest.json
+  runs_index.jsonl
+  <category>/
+    <scenario-or-condition>/
+      runs.jsonl
+      task_results.csv
+      condition_summary.csv
+      validity_summary.csv
+      cj_evidence.csv
+      logs/
+```
+
+Use `--experiment-run NAME` to choose the top-level folder. If omitted, the
+wrapper creates a timestamped run name. Direct category scripts can use the same
+layout by setting `CJ_EVAL_EXPERIMENT_RUN=NAME`; otherwise they keep the legacy
+`results/paper/<category>/<run-name>-<UTC>/` layout.
 
 ```bash
 # Build the Docker image used by publication-study runs
@@ -286,7 +304,12 @@ evaluation/scripts/run_individual_resilience_pilot.sh
 evaluation/scripts/run_multi_agent_reference_pilot.sh
 
 # Small smoke wrapper across implemented paper categories
-evaluation/scripts/run_all_paper_scenarios.sh
+evaluation/scripts/run_evaluation_campaign.sh smoke \
+  --experiment-run experiment-run-1
+
+# One named scenario grouped under the same experiment root
+evaluation/scripts/run_evaluation_campaign.sh scenario real-minimax-all-faults \
+  --experiment-run experiment-run-1
 ```
 
 See `evaluation/PAPER_EXPERIMENTS.md` for the scenario matrix, category layout,

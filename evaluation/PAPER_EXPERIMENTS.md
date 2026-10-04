@@ -8,10 +8,15 @@ are thin wrappers around the existing publication triplet protocol:
 direct_baseline, cj_control, cj_fault
 ```
 
-Each run writes to a named category under:
+The campaign wrappers group all outputs for one evaluation attempt under one
+top-level experiment-run folder:
 
 ```text
-results/paper/<category>/<named-experiment>-<UTC timestamp>/
+results/paper/<experiment-run>/
+  experiment_manifest.json
+  runs_index.jsonl
+  <category>/
+    <named-experiment>/
 ```
 
 Every folder contains at least:
@@ -20,6 +25,12 @@ Every folder contains at least:
 - `logs/`;
 - `runs.jsonl` for experiment runs;
 - generated CSV/LaTeX/manifest outputs after the run completes.
+
+Use `--experiment-run NAME` on `run_evaluation_campaign.sh` to name that
+top-level folder. If omitted, the wrapper creates a timestamped run name. The
+lower-level category scripts still support the legacy layout
+`results/paper/<category>/<named-experiment>-<UTC timestamp>/` when
+`CJ_EVAL_EXPERIMENT_RUN` is unset.
 
 ## Script Inventory
 
@@ -379,16 +390,19 @@ CJ_EVAL_RUN_DOCKER_TESTS=1 evaluation/scripts/run_all_paper_scenarios.sh
 
 ```text
 results/paper/
-  stage-a-static-unit/
-    static-validation-20261001T120000Z/
-  injector-validation/
-    qwen2.5-latest-all-proxy-faults-20261001T120000Z/
-  cj-overhead/
-    qwen2.5-latest-direct-vs-control-20261001T120000Z/
-  individual-resilience-pilot/
-    autogen-real-humanevalplus-llm_api-qwen2.5-latest-20261001T120000Z/
-  multi-agent-reference-pilot/
-    reference-linear-humanevalplus-multi_agent-qwen2.5-latest-20261001T120000Z/
+  experiment-run-1/
+    experiment_manifest.json
+    runs_index.jsonl
+    stage-a-static-unit/
+      static-validation/
+    injector-validation/
+      qwen2.5-latest-all-proxy-faults/
+    cj-overhead/
+      qwen2.5-latest-direct-vs-control/
+    individual-resilience-pilot/
+      autogen-real-humanevalplus-llm_api-qwen2.5-latest/
+    multi-agent-reference-pilot/
+      reference-linear-humanevalplus-multi_agent-qwen2.5-latest/
 ```
 
 ## Paper Readiness Decision Rules

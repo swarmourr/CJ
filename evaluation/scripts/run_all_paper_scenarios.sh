@@ -8,12 +8,18 @@ cd "${CJ_EVAL_REPO_ROOT}"
 export CJ_EVAL_RUN_STAMP="${CJ_EVAL_RUN_STAMP:-$(cj_eval_timestamp)}"
 
 profile="${CJ_EVAL_PROFILE:-smoke}"
+export CJ_EVAL_EXPERIMENT_CREATED_AT="${CJ_EVAL_EXPERIMENT_CREATED_AT:-$(cj_eval_timestamp)}"
+if [[ -z "${CJ_EVAL_EXPERIMENT_RUN:-}" ]]; then
+  export CJ_EVAL_EXPERIMENT_RUN="paper-${profile}-${CJ_EVAL_RUN_STAMP}"
+fi
+cj_eval_init_experiment_run
 
 cat <<EOF
 [cj-eval] paper scenario wrapper
 [cj-eval] profile : ${profile}
 [cj-eval] stamp   : ${CJ_EVAL_RUN_STAMP}
 [cj-eval] root    : $(cj_eval_results_root)
+[cj-eval] run     : ${CJ_EVAL_EXPERIMENT_RUN}
 EOF
 
 if [[ "${CJ_EVAL_REBUILD_IMAGE:-0}" == "1" ]]; then
