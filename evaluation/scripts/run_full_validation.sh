@@ -16,8 +16,10 @@ validation stack:
   2. Static/unit validation, including the old and new safe tests.
   3. Docker integration tests.
   4. Container-scoped infrastructure smoke, dry-run by default.
+  5. Bounded real-LLM smoke, using the ignored .env model config.
 
-This script does not run a paid real-model smoke unless explicitly requested.
+The real-model smoke is intentionally small: one task, one repetition, and the
+configured smoke fault suite unless you override those environment variables.
 
 Options:
   --force-remove          Remove old cj-eval-agent tags before building.
@@ -25,7 +27,8 @@ Options:
   --no-cache              Build the Docker image without Docker layer cache.
   --skip-docker-tests     Build image and run static/unit tests only.
   --skip-infra-smoke      Skip the infrastructure smoke.
-  --real-smoke            Also run the bounded real-LLM smoke script.
+  --skip-real-smoke       Skip the bounded real-LLM smoke.
+  --real-smoke            Accepted for compatibility; real smoke is now default.
   --help                  Show this help.
 
 Environment:
@@ -36,7 +39,8 @@ Environment:
 Examples:
   evaluation/scripts/run_full_validation.sh
   evaluation/scripts/run_full_validation.sh --force-remove
-  evaluation/scripts/run_full_validation.sh --no-cache --real-smoke
+  evaluation/scripts/run_full_validation.sh --no-cache
+  evaluation/scripts/run_full_validation.sh --skip-real-smoke
 EOF
 }
 
@@ -44,7 +48,7 @@ build_mode="--keep-old"
 no_cache=0
 run_docker_tests=1
 run_infra_smoke=1
-run_real_smoke=0
+run_real_smoke=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,6 +70,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-infra-smoke)
       run_infra_smoke=0
+      shift
+      ;;
+    --skip-real-smoke)
+      run_real_smoke=0
       shift
       ;;
     --real-smoke)
@@ -137,7 +145,7 @@ fi
 if [[ "${run_real_smoke}" -eq 1 ]]; then
   "${script_dir}/run_real_llm_smoke.sh"
 else
-  echo "[cj-eval] Real-model smoke skipped. Use --real-smoke to opt in."
+  echo "[cj-eval] Real-model smoke skipped by --skip-real-smoke."
 fi
 
 echo "[cj-eval] full validation complete under $(cj_eval_results_root)"

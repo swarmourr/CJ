@@ -418,9 +418,10 @@ Build the Docker image and run the full local validation stack in one command:
 evaluation/scripts/run_full_validation.sh
 ```
 
-This runs static/unit validation, Docker integration tests, and a dry-run
-container-scoped infrastructure smoke. Add `--real-smoke` only when you want
-the bounded real-model smoke to spend API credits.
+This runs static/unit validation, Docker integration tests, a dry-run
+container-scoped infrastructure smoke, and the bounded real-model smoke using
+your ignored `.env` configuration. Use `--skip-real-smoke` for no-cost
+validation.
 
 Run the broader pilot defaults:
 
