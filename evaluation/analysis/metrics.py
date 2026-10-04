@@ -114,9 +114,10 @@ class AggregationMetrics:
 
 
 def _mean(values: list[float]) -> float | None:
-    if not values:
+    nums = [float(v) for v in values if isinstance(v, (int, float))]
+    if not nums:
         return None
-    return sum(values) / len(values)
+    return sum(nums) / len(nums)
 
 
 def _amplification(base: float | None, fault: float | None) -> float | None:

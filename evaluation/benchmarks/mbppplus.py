@@ -30,7 +30,7 @@ _BUNDLED: list[dict] = [
             "    cost = [[1, 2, 3], [4, 8, 2], [1, 5, 3]]\n"
             "    assert candidate(cost, 2, 2) == 8\n"
             "    cost2 = [[2, 3, 4], [5, 4, 3], [3, 2, 1]]\n"
-            "    assert candidate(cost2, 2, 2) == 11\n"
+            "    assert candidate(cost2, 2, 2) == 7\n"
             "check(min_cost)\n"
         ),
         "canonical_solution": (

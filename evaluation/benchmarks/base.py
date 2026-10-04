@@ -39,8 +39,25 @@ class BenchmarkTask:
     metadata:           dict = field(default_factory=dict)
 
     def agent_prompt(self) -> str:
-        """Return the prompt shown to the agent (prompt only, no tests)."""
-        return self.prompt
+        """Return the prompt shown to the agent.
+
+        EvalPlus MBPP tasks often describe the desired function in prose rather
+        than embedding a Python signature.  Publication runs must score the
+        exact benchmark entry point, so the prompt always carries the function
+        name requirement explicitly.  Tests remain hidden.
+        """
+        entry = self.entry_point.strip()
+        if not entry:
+            return self.prompt
+        return (
+            f"{self.prompt.rstrip()}\n\n"
+            "Implementation requirement:\n"
+            f"- Define a Python function named `{entry}` exactly.\n"
+            "- Return only the final Python source code, preferably in one "
+            "```python ... ``` block.\n"
+            "- Do not rename the function or wrap it in a class unless the "
+            "benchmark prompt explicitly asks for that."
+        )
 
     def full_exec_code(self, generated_code: str) -> str:
         """Concatenate generated code + test code for sandbox execution."""

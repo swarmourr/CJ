@@ -263,6 +263,15 @@ class TestLoadModelConfig:
         assert mc.request_timeout_s == 60.0
         assert mc.input_price_per_1k_tokens == 0.15
 
+    def test_pricing_can_come_from_env(self, monkeypatch):
+        from evaluation.model_config import load_model_config
+        monkeypatch.setenv("LLM_INPUT_PRICE_PER_1K_TOKENS", "0.2")
+        monkeypatch.setenv("LLM_OUTPUT_PRICE_PER_1K_TOKENS", "0.8")
+        mc = load_model_config({})
+        assert mc.input_price_per_1k_tokens == 0.2
+        assert mc.output_price_per_1k_tokens == 0.8
+        assert mc.compute_cost(1000, 500) == pytest.approx(0.6)
+
     def test_all_frameworks_get_same_model_name(self):
         """Shared ModelConfig ensures all adapters use the same model."""
         from evaluation.model_config import load_model_config

@@ -193,6 +193,20 @@ def load_model_config(cfg: dict) -> ModelConfig:
         cfg = {}
 
     yaml_name = str(cfg.get("name", cfg.get("model", "gpt-4o-mini")))
+    input_price = cfg.get(
+        "input_price_per_1k_tokens",
+        os.environ.get(
+            "CJ_EVAL_INPUT_PRICE_PER_1K_TOKENS",
+            os.environ.get("LLM_INPUT_PRICE_PER_1K_TOKENS", 0.0),
+        ),
+    )
+    output_price = cfg.get(
+        "output_price_per_1k_tokens",
+        os.environ.get(
+            "CJ_EVAL_OUTPUT_PRICE_PER_1K_TOKENS",
+            os.environ.get("LLM_OUTPUT_PRICE_PER_1K_TOKENS", 0.0),
+        ),
+    )
 
     mc = ModelConfig(
         provider=str(cfg.get("provider", "openai_compatible")),
@@ -202,8 +216,8 @@ def load_model_config(cfg: dict) -> ModelConfig:
         max_tokens=int(cfg.get("max_tokens", 2048)),
         request_timeout_s=float(cfg.get("request_timeout_s", 120.0)),
         transport_retries=int(cfg.get("transport_retries", 0)),
-        input_price_per_1k_tokens=float(cfg.get("input_price_per_1k_tokens", 0.0)),
-        output_price_per_1k_tokens=float(cfg.get("output_price_per_1k_tokens", 0.0)),
+        input_price_per_1k_tokens=float(input_price or 0.0),
+        output_price_per_1k_tokens=float(output_price or 0.0),
     )
 
     # Resolve the API key from the named env var

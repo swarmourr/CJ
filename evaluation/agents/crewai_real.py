@@ -199,10 +199,7 @@ class CrewAIRealAgent(AgentSystem):
         duration_s   = time.time() - t0
         total_tokens = prompt_tokens + completion_tokens
         cost         = cfg.compute_cost(prompt_tokens, completion_tokens)
-        # Report -1.0 for cost when pricing is not configured so analysis can
-        # distinguish "not measured" from "free".  Reporting 0.0 would silently
-        # under-count real spend.
-        cost_usd = cost if cost is not None else -1.0
+        token_status = "measured" if total_tokens > 0 else "unavailable"
 
         return AgentRunResult(
             success=0.0,
@@ -212,10 +209,12 @@ class CrewAIRealAgent(AgentSystem):
             llm_calls=max(llm_calls, 1) if not exception_str else llm_calls,
             tool_calls=tool_calls,
             turns=max(llm_calls, 1) if not exception_str else llm_calls,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            cost_usd=cost_usd,
+            prompt_tokens=prompt_tokens if token_status == "measured" else None,
+            completion_tokens=completion_tokens if token_status == "measured" else None,
+            total_tokens=total_tokens if token_status == "measured" else None,
+            cost_usd=cost,
+            token_usage_status=token_status,
+            cost_status="measured" if cost is not None else "unavailable",
             generated_code=final_code,
             execution_trace=trace,
             termination_reason=termination_reason,

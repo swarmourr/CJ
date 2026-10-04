@@ -245,6 +245,7 @@ class AutoGenRealAgent(AgentSystem):
         duration_s   = time.time() - t0
         total_tokens = prompt_tokens + completion_tokens
         cost         = cfg.compute_cost(prompt_tokens, completion_tokens)
+        token_status = "measured" if total_tokens > 0 else "unavailable"
 
         return AgentRunResult(
             success=0.0,          # evaluated independently by EvalPlus
@@ -254,10 +255,12 @@ class AutoGenRealAgent(AgentSystem):
             llm_calls=max(llm_calls, 1) if not exception_str else llm_calls,
             tool_calls=tool_calls,
             turns=llm_calls,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            cost_usd=cost if cost is not None else 0.0,
+            prompt_tokens=prompt_tokens if token_status == "measured" else None,
+            completion_tokens=completion_tokens if token_status == "measured" else None,
+            total_tokens=total_tokens if token_status == "measured" else None,
+            cost_usd=cost,
+            token_usage_status=token_status,
+            cost_status="measured" if cost is not None else "unavailable",
             generated_code=final_code,
             execution_trace=trace,
             termination_reason=termination_reason,

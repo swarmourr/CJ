@@ -1,6 +1,7 @@
 """Tests for JSONL and CSV schema, and CLI dry-run behavior."""
 
 import csv
+import copy
 import json
 import os
 import tempfile
@@ -16,8 +17,13 @@ from evaluation.output import (
     write_group_summary_csv,
     write_scientific_summary_csv,
     write_fault_fidelity_summary_csv,
+    write_cj_overhead_summary_csv,
     write_agent_resilience_summary_csv,
     write_data_quality_summary_csv,
+    write_task_complexity_catalog_csv,
+    write_task_complexity_summary_csv,
+    write_infrastructure_summary_csv,
+    write_distributed_process_summary_csv,
     write_inferential_summary_csv,
 )
 from evaluation.analysis.plots import plot_degradation
@@ -74,6 +80,19 @@ def _make_exact_triplet_records():
         "topology": "single",
         "benchmark": "humanevalplus",
         "task_id": "HumanEval/0",
+        "task_complexity": "small",
+        "complexity_proxy": "small",
+        "complexity_proxy_kind": "static_pre_execution_proxy",
+        "complexity_score": 1000,
+        "complexity_prompt_chars": 100,
+        "complexity_prompt_words": 20,
+        "complexity_test_chars": 200,
+        "complexity_test_assertions": 3,
+        "complexity_reference_solution_chars": 80,
+        "complexity_reference_solution_lines": 3,
+        "complexity_required_reasoning_steps": 2,
+        "complexity_algorithmic_category": "collection",
+        "complexity_classification_rule": "test rule",
         "model": "qwen2.5:latest",
         "seed": 7,
         "cj_commit": "abc123",
@@ -215,6 +234,23 @@ def _make_exact_triplet_records():
         },
     }
     return [direct, control, fault]
+
+
+def _make_triplets(n: int, *, control_successes: int, fault_successes: int):
+    records = []
+    template = _make_exact_triplet_records()
+    for idx in range(n):
+        triplet = copy.deepcopy(template)
+        pair_id = f"pair-{idx}"
+        for record in triplet:
+            record["pair_id"] = pair_id
+            record["task_id"] = f"HumanEval/{idx}"
+            record["run_id"] = f"{record['condition']}-{idx}"
+        triplet[0]["success"] = 1.0
+        triplet[1]["success"] = 1.0 if idx < control_successes else 0.0
+        triplet[2]["success"] = 1.0 if idx < fault_successes else 0.0
+        records.extend(triplet)
+    return records
 
 
 # ── JSONL schema ──────────────────────────────────────────────────────────────
@@ -581,10 +617,163 @@ class TestCSVOutput:
         write_inferential_summary_csv(_make_exact_triplet_records(), path)
         with open(path) as f:
             rows = list(csv.DictReader(f))
+        assert {r["comparison_type"] for r in rows} == {
+            "control_vs_fault",
+            "direct_vs_control",
+            "direct_vs_fault",
+        }
+        assert all(r["test"] == "not_run" for r in rows)
+        assert all(r["inference_status"] == "insufficient_unique_tasks" for r in rows)
+        assert all(r["p_value"] == "" for r in rows)
+
+    def test_inferential_summary_names_three_comparisons(self, tmp_path):
+        path = str(tmp_path / "inferential_summary.csv")
+        write_inferential_summary_csv(_make_triplets(5, control_successes=5, fault_successes=4), path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        success_rows = [r for r in rows if r["metric"] == "success"]
+        assert {r["comparison_type"] for r in success_rows} == {
+            "control_vs_fault",
+            "direct_vs_control",
+            "direct_vs_fault",
+        }
+        assert all(r["inference_status"] == "ok" for r in success_rows)
+
+    def test_inferential_control_vs_fault_effect_uses_cj_control(self, tmp_path):
+        path = str(tmp_path / "inferential_summary.csv")
+        records = _make_triplets(3, control_successes=2, fault_successes=0)
+        write_inferential_summary_csv(records, path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        row = next(
+            r for r in rows
+            if r["comparison_type"] == "control_vs_fault"
+            and r["metric"] == "success"
+        )
+        assert row["inference_status"] == "pilot_only"
+        assert float(row["effect"]) == pytest.approx(-2 / 3)
+
+    def test_task_complexity_outputs_are_written(self, tmp_path):
+        catalog_path = str(tmp_path / "task_complexity_catalog.csv")
+        summary_path = str(tmp_path / "task_complexity_summary.csv")
+        records = _make_exact_triplet_records()
+        write_task_complexity_catalog_csv(records, catalog_path)
+        write_task_complexity_summary_csv(records, summary_path)
+        with open(catalog_path) as f:
+            catalog_rows = list(csv.DictReader(f))
+        with open(summary_path) as f:
+            summary_rows = list(csv.DictReader(f))
+        assert catalog_rows[0]["complexity_proxy"] == "small"
+        assert catalog_rows[0]["complexity_proxy_kind"] == "static_pre_execution_proxy"
+        assert summary_rows[0]["complexity_proxy"] == "small"
+        assert summary_rows[0]["complete_triplets"] == "1"
+
+    def test_unknown_tokens_and_cost_stay_blank_not_zero(self, tmp_path):
+        records = _make_exact_triplet_records()
+        for record in records:
+            record["prompt_tokens"] = None
+            record["completion_tokens"] = None
+            record["total_tokens"] = None
+            record["cost_usd"] = None
+            record["token_usage_status"] = "unavailable"
+            record["cost_status"] = "unavailable"
+        task_path = str(tmp_path / "task_results.csv")
+        overhead_path = str(tmp_path / "cj_overhead_summary.csv")
+        write_task_results_csv(records, task_path)
+        write_cj_overhead_summary_csv(records, overhead_path)
+        with open(task_path) as f:
+            task_rows = list(csv.DictReader(f))
+        with open(overhead_path) as f:
+            overhead_rows = list(csv.DictReader(f))
+        assert task_rows[0]["total_tokens"] == ""
+        assert task_rows[0]["cost_usd"] == ""
+        assert task_rows[0]["token_usage_status"] == "unavailable"
+        assert task_rows[0]["cost_status"] == "unavailable"
+        assert overhead_rows[0]["token_overhead"] == ""
+        assert overhead_rows[0]["cost_overhead_usd"] == ""
+
+    def test_infrastructure_summary_uses_only_infrastructure_records(self, tmp_path):
+        records = _make_exact_triplet_records()
+        infra = copy.deepcopy(records[2])
+        infra["fault_layer"] = "infrastructure"
+        infra["fault_type"] = "cpu_pressure"
+        infra["container_resource_limits"] = {
+            "cpus": 1.0,
+            "memory": "2g",
+            "capabilities": [],
+            "read_only_root": True,
+        }
+        infra["lifecycle"] = {
+            "configured": True,
+            "activated": True,
+            "triggered": True,
+            "manifested": True,
+            "reverted": True,
+            "recovered": True,
+            "verdict": "valid",
+            "evidence_source": "docker_target",
+        }
+        infra["activation_evidence"] = {
+            "verified": True,
+            "observed": {"cpu_percent": 92.0},
+        }
+        infra["recovery_evidence"] = {"verified": True, "observed": {"cpu_percent": 3.0}}
+        path = str(tmp_path / "infrastructure_summary.csv")
+        write_infrastructure_summary_csv(records + [infra], path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
         assert len(rows) == 1
-        assert rows[0]["test"] == "not_run"
-        assert rows[0]["inference_status"] == "insufficient_unique_tasks"
-        assert rows[0]["p_value"] == ""
+        assert rows[0]["fault_type"] == "cpu_pressure"
+        assert rows[0]["evidence_source"] == "docker_target"
+        assert rows[0]["observed_cpu"] == "92.0"
+        assert rows[0]["cpu_limit"] == "1.0"
+
+    def test_distributed_summary_excludes_reference_workflow_by_default(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[2]["agent_level"] = "multi_agent"
+        records[2]["execution_trace"] = [{"event_type": "handoff", "agent_role": "planner"}]
+        path = str(tmp_path / "distributed_process_summary.csv")
+        write_distributed_process_summary_csv(records, path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        assert rows == []
+
+    def test_distributed_summary_counts_explicit_distributed_trace(self, tmp_path):
+        records = _make_exact_triplet_records()
+        dist = copy.deepcopy(records[2])
+        dist["deployment_mode"] = "distributed"
+        dist["fault_target_role"] = "planner"
+        dist["distributed_trace"] = [
+            {
+                "event_type": "fault_observed",
+                "agent_role": "planner",
+                "timestamp": 10.0,
+                "container_id": "planner-c",
+            },
+            {
+                "event_type": "error_detection",
+                "agent_role": "coder",
+                "timestamp": 12.5,
+                "container_id": "coder-c",
+            },
+            {
+                "event_type": "handoff",
+                "agent_role": "reviewer",
+                "timestamp": 13.0,
+                "container_id": "reviewer-c",
+            },
+        ]
+        path = str(tmp_path / "distributed_process_summary.csv")
+        write_distributed_process_summary_csv([dist], path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["role_container_count"] == "3"
+        assert row["fault_propagation_probability"] == "1.0"
+        assert row["propagation_depth"] == "1"
+        assert row["time_to_propagation_s"] == "2.5"
+        assert row["containment_rate"] == "0.0"
 
 
 # ── CLI dry-run ───────────────────────────────────────────────────────────────

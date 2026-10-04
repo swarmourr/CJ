@@ -29,6 +29,7 @@ from evaluation.docker_runner import (
 )
 from evaluation.experiments.protocol import _CJ_COMMIT, _CJ_SOURCE_PROVENANCE
 from evaluation.schema import OUTPUT_SCHEMA_VERSION
+from evaluation.task_complexity import classify_task_complexity
 
 
 CONDITIONS = ("direct_baseline", "cj_control", "cj_fault")
@@ -424,7 +425,7 @@ class PublicationStudyOrchestrator:
             "task_id": task.get("task_id", ""),
             "benchmark_subset": task.get("metadata", {}).get("benchmark_subset", ""),
             "task_difficulty": task.get("metadata", {}).get("difficulty", ""),
-            "task_complexity": task.get("metadata", {}).get("complexity_proxy", ""),
+            **_task_complexity_record_fields(task),
             "seed": seed,
             "model": model_config.get("name") or model_config.get("model", ""),
             "model_digest": (model_provenance or {}).get("digest", ""),
@@ -495,7 +496,7 @@ class PublicationStudyOrchestrator:
             "task_id": task.get("task_id", ""),
             "benchmark_subset": task.get("metadata", {}).get("benchmark_subset", ""),
             "task_difficulty": task.get("metadata", {}).get("difficulty", ""),
-            "task_complexity": task.get("metadata", {}).get("complexity_proxy", ""),
+            **_task_complexity_record_fields(task),
             "seed": seed,
             "model": model_config.get("name") or model_config.get("model", ""),
             "model_digest": (model_provenance or {}).get("digest", ""),
@@ -683,16 +684,36 @@ def _fault_target_role(fault_parameters: dict[str, Any]) -> str:
     return ""
 
 
+def _task_complexity_record_fields(task: dict[str, Any]) -> dict[str, Any]:
+    metadata = task.get("metadata", {}) if isinstance(task.get("metadata"), dict) else {}
+    return {
+        "task_complexity": metadata.get("complexity_proxy", ""),
+        "complexity_proxy": metadata.get("complexity_proxy", ""),
+        "complexity_proxy_kind": metadata.get("complexity_proxy_kind", ""),
+        "complexity_score": metadata.get("complexity_score", ""),
+        "complexity_prompt_chars": metadata.get("prompt_chars", ""),
+        "complexity_prompt_words": metadata.get("prompt_words", ""),
+        "complexity_test_chars": metadata.get("test_chars", ""),
+        "complexity_test_assertions": metadata.get("test_assertions", ""),
+        "complexity_reference_solution_chars": metadata.get("reference_solution_chars", ""),
+        "complexity_reference_solution_lines": metadata.get("reference_solution_lines", ""),
+        "complexity_required_reasoning_steps": metadata.get("required_reasoning_steps", ""),
+        "complexity_algorithmic_category": metadata.get("algorithmic_category", ""),
+        "complexity_classification_rule": metadata.get("complexity_classification_rule", ""),
+    }
+
+
 def _task_to_request_dict(task: BenchmarkTask) -> dict[str, Any]:
     metadata = dict(task.metadata)
-    metadata.setdefault("prompt_chars", len(task.prompt or ""))
-    metadata.setdefault("test_chars", len(task.test_code or ""))
-    metadata.setdefault("canonical_solution_chars", len(task.canonical_solution or ""))
-    total_chars = metadata["prompt_chars"] + metadata["test_chars"]
-    metadata.setdefault(
-        "complexity_proxy",
-        "small" if total_chars < 1500 else "medium" if total_chars < 4000 else "large",
-    )
+    complexity = classify_task_complexity(
+        benchmark=task.benchmark,
+        task_id=task.task_id,
+        prompt=task.prompt,
+        test_code=task.test_code,
+        canonical_solution=task.canonical_solution,
+    ).to_metadata()
+    for key, value in complexity.items():
+        metadata.setdefault(key, value)
     metadata.setdefault(
         "benchmark_subset",
         "publication" if metadata.get("source") == "evalplus" else "smoke",

@@ -20,7 +20,8 @@ Modes:
   overhead     Run the direct-vs-CJ-control overhead study.
   individual   Run the individual-agent resilience pilot.
   multi         Run the reference multi-agent pilot.
-  smoke        Run the full smoke bundle: verify, injector, overhead, individual, multi.
+  infra         Run one container-scoped infrastructure fault smoke.
+  smoke        Run the full smoke bundle: verify, injector, overhead, individual, multi, infra.
   pilot        Run the broader pilot bundle from run_all_paper_scenarios.sh.
   real-smoke   Run the low-count real-LLM smoke script.
   help         Show this help.
@@ -35,6 +36,8 @@ Preconfigured scenarios:
   individual-mini             One AutoGen individual-agent latency smoke.
   individual-framework-smoke  Three individual frameworks, one latency task.
   multi-reference-mini        Reference multi-agent, both topologies, one task.
+  infra-cpu-smoke             Container-scoped CPU pressure smoke, dry-run task.
+  infra-network-smoke         Container-scoped network-latency smoke, dry-run task.
   paper-smoke                 Small bundle across implemented paper categories.
 
 Common options:
@@ -50,6 +53,8 @@ Common options:
   --topology NAME             Single topology for multi mode.
   --topologies LIST           Space/comma-separated topologies for multi mode.
   --fault-suite NAME          Fault suite, for example smoke, all, llm_api.
+  --infra-fault NAME          Infrastructure fault: cpu_pressure, memory_pressure,
+                              network_latency, packet_loss, or disk_full.
   --tasks N                   Number of tasks.
   --repeats N                 Repetitions per task.
   --seed N                    Random seed.
@@ -151,6 +156,16 @@ Preconfigured evaluation scenarios:
               fault-suite=multi_agent, tasks=1.
     Purpose: smallest reference multi-agent propagation check.
 
+  infra-cpu-smoke
+    Mode: infra
+    Defaults: toy dry-run task, fault=cpu_pressure, tasks=1.
+    Purpose: validate DockerTarget infrastructure lifecycle without paid calls.
+
+  infra-network-smoke
+    Mode: infra
+    Defaults: toy dry-run task, fault=network_latency, tasks=1.
+    Purpose: validate NET_ADMIN-scoped network fault lifecycle.
+
   paper-smoke
     Mode: smoke
     Defaults: tasks=1, repeats=1.
@@ -241,6 +256,24 @@ apply_scenario() {
       export CJ_EVAL_REPEATS="1"
       export CJ_EVAL_RUN_NAME="multi-reference-mini"
       echo "multi"
+      ;;
+    infra-cpu-smoke)
+      export CJ_EVAL_INFRA_FAULT="cpu_pressure"
+      export CJ_EVAL_BENCHMARK="toy"
+      export CJ_EVAL_TASKS="1"
+      export CJ_EVAL_REPEATS="1"
+      export CJ_EVAL_DRY_RUN="1"
+      export CJ_EVAL_RUN_NAME="infra-cpu-smoke"
+      echo "infra"
+      ;;
+    infra-network-smoke)
+      export CJ_EVAL_INFRA_FAULT="network_latency"
+      export CJ_EVAL_BENCHMARK="toy"
+      export CJ_EVAL_TASKS="1"
+      export CJ_EVAL_REPEATS="1"
+      export CJ_EVAL_DRY_RUN="1"
+      export CJ_EVAL_RUN_NAME="infra-network-smoke"
+      echo "infra"
       ;;
     paper-smoke)
       export CJ_EVAL_PROFILE="smoke"
@@ -340,6 +373,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --fault-suites)
       export CJ_EVAL_FAULT_SUITES="$(normalize_list "$2")"
+      shift 2
+      ;;
+    --infra-fault)
+      export CJ_EVAL_INFRA_FAULT="$2"
       shift 2
       ;;
     --tasks)
@@ -470,6 +507,10 @@ case "${mode}" in
   multi)
     ensure_image
     "${script_dir}/run_multi_agent_reference_pilot.sh"
+    ;;
+  infra)
+    ensure_image
+    "${script_dir}/run_infrastructure_fault_smoke.sh"
     ;;
   smoke)
     export CJ_EVAL_PROFILE="${CJ_EVAL_PROFILE:-smoke}"

@@ -136,6 +136,8 @@ class MultiAgentWorkflow:
         events: list[dict[str, Any]] = []
         llm_calls = 0
         turns = 0
+        prompt_tokens: int | None = 0
+        completion_tokens: int | None = 0
         reported_error = 0.0
         termination = "completed"
         exception = ""
@@ -158,11 +160,26 @@ class MultiAgentWorkflow:
             events.append(event)
 
         def call_role(role: str, step: int, messages: list[dict[str, str]]) -> str:
-            nonlocal llm_calls, turns
+            nonlocal llm_calls, turns, prompt_tokens, completion_tokens
             emit(role, step, "agent_activation")
             emit(role, step, "llm_invocation", message_count=len(messages))
             with role_metadata(self.run_id, role, step):
-                text = self.client.complete(messages, seed=seed)
+                chat = getattr(self.client, "chat", None)
+                if callable(chat):
+                    response = chat(messages, seed=seed)
+                    usage_fn = getattr(self.client, "usage", None)
+                    usage = usage_fn(response) if callable(usage_fn) else {}
+                    try:
+                        text = response["choices"][0]["message"]["content"] or ""
+                    except (KeyError, IndexError, TypeError):
+                        text = ""
+                else:
+                    text = self.client.complete(messages, seed=seed)
+                    usage = {}
+            prompt_tokens = (prompt_tokens or 0) + usage.get("prompt_tokens", 0)
+            completion_tokens = (
+                (completion_tokens or 0) + usage.get("completion_tokens", 0)
+            )
             llm_calls += 1
             turns += 1
             emit(role, step, "final_answer" if role == "coder" else "sent_message",
@@ -245,6 +262,12 @@ class MultiAgentWorkflow:
             exception = repr(exc)
             emit("coordinator", len(events), "error_detection", exception=exception)
 
+        total_tokens = (
+            (prompt_tokens or 0) + (completion_tokens or 0)
+            if (prompt_tokens or completion_tokens)
+            else None
+        )
+        token_status = "measured" if total_tokens is not None else "unavailable"
         return AgentRunResult(
             success=0.0,
             duration_s=time.time() - t0,
@@ -252,6 +275,12 @@ class MultiAgentWorkflow:
             llm_calls=llm_calls,
             tool_calls=0,
             turns=turns,
+            prompt_tokens=prompt_tokens if token_status == "measured" else None,
+            completion_tokens=completion_tokens if token_status == "measured" else None,
+            total_tokens=total_tokens,
+            cost_usd=None,
+            token_usage_status=token_status,
+            cost_status="unavailable",
             generated_code=final_code,
             execution_trace=events,
             termination_reason=termination,

@@ -74,10 +74,12 @@ class AgentRunResult:
     turns: int = 0              # conversation turns (multi-agent round count)
 
     # ── Token usage ───────────────────────────────────────────────
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-    cost_usd: float = 0.0
+    prompt_tokens: int | None = 0
+    completion_tokens: int | None = 0
+    total_tokens: int | None = 0
+    cost_usd: float | None = None
+    token_usage_status: str = "measured"
+    cost_status: str = "unavailable"
 
     # ── Partial correctness ───────────────────────────────────────
     tests_passed: int = 0       # number of test cases that passed
@@ -105,6 +107,8 @@ class AgentRunResult:
             "completion_tokens": self.completion_tokens,
             "total_tokens":      self.total_tokens,
             "cost_usd":          self.cost_usd,
+            "token_usage_status": self.token_usage_status,
+            "cost_status":       self.cost_status,
             "tests_passed":      self.tests_passed,
             "tests_total":       self.tests_total,
             "generated_code":    self.generated_code,

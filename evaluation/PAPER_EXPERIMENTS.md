@@ -44,6 +44,7 @@ The lower-level category scripts still support the legacy layout
 | `evaluation/scripts/run_cj_overhead_study.sh` | `cj-overhead` | Direct baseline vs CJ-control overhead analysis |
 | `evaluation/scripts/run_individual_resilience_pilot.sh` | `individual-resilience-pilot` | AutoGen/LangGraph/CrewAI individual-agent pilot |
 | `evaluation/scripts/run_multi_agent_reference_pilot.sh` | `multi-agent-reference-pilot` | Framework-neutral three-role multi-agent pilot |
+| `evaluation/scripts/run_infrastructure_fault_smoke.sh` | `infrastructure-validation` | Container-scoped infrastructure fault smoke |
 | `evaluation/scripts/run_all_paper_scenarios.sh` | multiple categories | Smoke or pilot wrapper |
 | `evaluation/scripts/run_evaluation_campaign.sh` | multiple categories | Main user-facing wrapper with modes, flags, and named scenarios |
 
@@ -77,6 +78,8 @@ scripts/run_evaluation_campaign.sh scenario multi-reference-mini --topologies li
 | `individual-mini` | `individual` | Smallest individual-agent resilience smoke |
 | `individual-framework-smoke` | `individual` | AutoGen, LangGraph, and CrewAI individual wiring smoke |
 | `multi-reference-mini` | `multi` | Reference multi-agent propagation smoke across both topologies |
+| `infra-cpu-smoke` | `infra` | Dry-run toy task under container-scoped CPU pressure |
+| `infra-network-smoke` | `infra` | Dry-run toy task under container-scoped network latency |
 | `paper-smoke` | `smoke` | Small bundle across implemented paper categories |
 
 Default model routing is set for local Ollama-compatible endpoints:
@@ -341,6 +344,7 @@ Goal: validate Docker execution and container-scoped fault safety.
 
 ```bash
 evaluation/scripts/run_docker_integration_tests.sh
+evaluation/scripts/run_infrastructure_fault_smoke.sh
 ```
 
 Architecture:
@@ -354,11 +358,43 @@ flowchart LR
   Target --> Evidence[limits, timeout, cleanup, target confinement]
 ```
 
-Publication infrastructure-fault campaigns require one more connection step:
-`evaluation.infrastructure_orchestrator.run_container_scoped_fault` must be
-invoked by the publication runner and flattened into the same `runs.jsonl`
-schema. Until then, infrastructure faults are validated as implementation
-components, not included in the main resilience-effect tables.
+The infrastructure smoke invokes
+`evaluation.infrastructure_orchestrator.run_container_scoped_fault` and writes
+normal `runs.jsonl`, `task_results.csv`, and `infrastructure_summary.csv`
+records. It defaults to a toy dry-run task so it validates lifecycle/safety
+without paid calls. Use a benchmark and real endpoint only for an explicitly
+bounded real-model infrastructure pilot.
+
+Architecture:
+
+```mermaid
+flowchart TB
+  Host[Host infrastructure campaign] --> Pair[Exact pair_id triplet]
+  Pair --> B[direct_baseline container]
+  Pair --> C[cj_control container]
+  Pair --> F[prepared cj_fault container]
+  F --> Target[DockerTarget for exact container]
+  Target --> Fault[CPU/memory/network/disk fault]
+  Fault --> VerifyA[verify_active evidence]
+  VerifyA --> Workload[Run agent workload in same container]
+  Workload --> Revert[stop fault and verify_recovered]
+  Revert --> Infra[infrastructure_summary.csv]
+  B --> Records[runs.jsonl]
+  C --> Records
+  F --> Records
+```
+
+Example commands:
+
+```bash
+evaluation/scripts/run_evaluation_campaign.sh scenario infra-cpu-smoke
+evaluation/scripts/run_evaluation_campaign.sh scenario infra-network-smoke
+evaluation/scripts/run_evaluation_campaign.sh infra --infra-fault memory_pressure
+```
+
+Infrastructure validation is now connected to the output package, but broad
+paper-level infrastructure resilience still requires more tasks, severities,
+and real workload-triggered process/container failure cases.
 
 ## Smoke Wrapper
 
@@ -404,6 +440,8 @@ results/
       autogen-real-humanevalplus-llm_api-qwen2.5-latest/
     multi-agent-reference-pilot/
       reference-linear-humanevalplus-multi_agent-qwen2.5-latest/
+    infrastructure-validation/
+      infra-cpu-smoke/
 ```
 
 ## Paper Readiness Decision Rules
@@ -414,4 +452,4 @@ results/
 | CJ overhead | Direct vs pass-through overhead, once enough unique tasks exist |
 | Individual resilience | Only for valid, baseline-successful, complete triplets |
 | Multi-agent reference | Reference MAS propagation/containment only |
-| Infrastructure | Component validation until publication runner integration exists |
+| Infrastructure | Container-scoped lifecycle validation; paper resilience only after a full infra pilot |

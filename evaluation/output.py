@@ -32,6 +32,39 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _numeric_or_none(value: Any) -> float | None:
+    """Parse a measured numeric value without turning unknowns into zeros."""
+    if value in (None, "", "None", "nan", "NaN", "unavailable", "unknown"):
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mean_numeric(values: list[float | None]) -> float | None:
+    measured = [float(v) for v in values if v is not None]
+    return _mean(measured)
+
+
+def _paired_numeric_diffs(
+    pairs: list[tuple[dict, dict]] | list[tuple[dict, dict, dict]],
+    metric: str,
+    *,
+    left_index: int,
+    right_index: int,
+) -> list[float]:
+    diffs: list[float] = []
+    for pair in pairs:
+        left = _numeric_or_none(pair[left_index].get(metric))
+        right = _numeric_or_none(pair[right_index].get(metric))
+        if left is not None and right is not None:
+            diffs.append(right - left)
+    return diffs
+
+
 def _as_bool_success(record: dict) -> int:
     return 1 if _as_float(record.get("success"), 0.0) >= 0.5 else 0
 
@@ -488,6 +521,8 @@ def _inference_status(*, unique_tasks: int, valid_pairs: int) -> str:
         return "insufficient_unique_tasks"
     if valid_pairs < 2:
         return "insufficient_pairs"
+    if unique_tasks < 5:
+        return "pilot_only"
     return "ok"
 
 
@@ -555,7 +590,13 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
         "cj_source_state", "cj_source_dirty",
         "agent_system", "framework", "requested_framework", "framework_native",
         "multi_agent_impl", "benchmark", "benchmark_subset", "task_id",
-        "task_difficulty", "task_complexity",
+        "task_difficulty", "task_complexity", "complexity_proxy",
+        "complexity_proxy_kind", "complexity_score", "complexity_prompt_chars",
+        "complexity_prompt_words", "complexity_test_chars",
+        "complexity_test_assertions", "complexity_reference_solution_chars",
+        "complexity_reference_solution_lines",
+        "complexity_required_reasoning_steps",
+        "complexity_algorithmic_category", "complexity_classification_rule",
         "model", "model_digest", "endpoint_type", "config_hash",
         "seed", "fault_type", "phase", "validity",
         "executor_success_verdict", "scorer_success_verdict", "task_success_verdict",
@@ -568,6 +609,7 @@ def write_task_results_csv(records: list[dict], path: str) -> None:
         "llm_calls_attempted", "llm_calls_completed",
         "proxy_calls_intercepted", "proxy_calls_affected",
         "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd",
+        "token_usage_status", "cost_status",
         "tests_passed", "tests_total", "termination_reason",
         "lifecycle.triggered", "lifecycle.manifested", "lifecycle.reverted", "lifecycle.recovered",
         "lifecycle.activated", "lifecycle.verdict",
@@ -897,29 +939,21 @@ def write_cj_overhead_summary_csv(records: list[dict], path: str) -> None:
                 _as_float(ctrl.get("tool_calls")) - _as_float(base.get("tool_calls"))
                 for base, ctrl in pairs
             ]),
-            "token_overhead": _mean([
-                _as_float(ctrl.get("total_tokens")) - _as_float(base.get("total_tokens"))
-                for base, ctrl in pairs
-            ]),
-            "cost_overhead_usd": _mean([
-                _as_float(ctrl.get("cost_usd")) - _as_float(base.get("cost_usd"))
-                for base, ctrl in pairs
-            ]),
-            "cpu_usage_overhead": _mean([
-                _as_float(ctrl.get("cpu_usage")) - _as_float(base.get("cpu_usage"))
-                for base, ctrl in pairs
-                if "cpu_usage" in ctrl or "cpu_usage" in base
-            ]),
-            "peak_memory_overhead": _mean([
-                _as_float(ctrl.get("peak_memory_bytes")) - _as_float(base.get("peak_memory_bytes"))
-                for base, ctrl in pairs
-                if "peak_memory_bytes" in ctrl or "peak_memory_bytes" in base
-            ]),
-            "network_bytes_overhead": _mean([
-                _as_float(ctrl.get("network_bytes")) - _as_float(base.get("network_bytes"))
-                for base, ctrl in pairs
-                if "network_bytes" in ctrl or "network_bytes" in base
-            ]),
+            "token_overhead": _mean(_paired_numeric_diffs(
+                pairs, "total_tokens", left_index=0, right_index=1,
+            )),
+            "cost_overhead_usd": _mean(_paired_numeric_diffs(
+                pairs, "cost_usd", left_index=0, right_index=1,
+            )),
+            "cpu_usage_overhead": _mean(_paired_numeric_diffs(
+                pairs, "cpu_usage", left_index=0, right_index=1,
+            )),
+            "peak_memory_overhead": _mean(_paired_numeric_diffs(
+                pairs, "peak_memory_bytes", left_index=0, right_index=1,
+            )),
+            "network_bytes_overhead": _mean(_paired_numeric_diffs(
+                pairs, "network_bytes", left_index=0, right_index=1,
+            )),
         })
     fields = list(rows[0].keys()) if rows else [
         "agent_level", "framework", "topology", "benchmark", "model", "n_pairs",
@@ -1438,10 +1472,9 @@ def write_agent_resilience_summary_csv(records: list[dict], path: str) -> None:
                 _as_float(f.get("turns")) - _as_float(c.get("turns"))
                 for _b, c, f in triplets
             ]),
-            "extra_tokens": _mean([
-                _as_float(f.get("total_tokens")) - _as_float(c.get("total_tokens"))
-                for _b, c, f in triplets
-            ]),
+            "extra_tokens": _mean(_paired_numeric_diffs(
+                triplets, "total_tokens", left_index=1, right_index=2,
+            )),
         })
 
     fields = list(rows[0].keys()) if rows else [
@@ -1661,6 +1694,183 @@ def write_data_quality_summary_csv(records: list[dict], path: str) -> None:
         w.writerows(rows)
 
 
+def write_task_complexity_catalog_csv(records: list[dict], path: str) -> None:
+    """Write one deterministic, pre-execution complexity row per task."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    by_task: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in records:
+        benchmark = str(record.get("benchmark", ""))
+        task_id = str(record.get("task_id", ""))
+        if not benchmark or not task_id:
+            continue
+        key = (benchmark, task_id)
+        current = by_task.setdefault(key, {
+            "benchmark": benchmark,
+            "task_id": task_id,
+            "task_complexity": record.get("task_complexity", ""),
+            "complexity_proxy": record.get("complexity_proxy", record.get("task_complexity", "")),
+            "complexity_proxy_kind": record.get("complexity_proxy_kind", ""),
+            "complexity_score": record.get("complexity_score", ""),
+            "complexity_prompt_chars": record.get("complexity_prompt_chars", ""),
+            "complexity_prompt_words": record.get("complexity_prompt_words", ""),
+            "complexity_test_chars": record.get("complexity_test_chars", ""),
+            "complexity_test_assertions": record.get("complexity_test_assertions", ""),
+            "complexity_reference_solution_chars": record.get("complexity_reference_solution_chars", ""),
+            "complexity_reference_solution_lines": record.get("complexity_reference_solution_lines", ""),
+            "complexity_required_reasoning_steps": record.get("complexity_required_reasoning_steps", ""),
+            "complexity_algorithmic_category": record.get("complexity_algorithmic_category", ""),
+            "complexity_classification_rule": record.get("complexity_classification_rule", ""),
+            "benchmark_subset": record.get("benchmark_subset", ""),
+            "record_count": 0,
+        })
+        current["record_count"] += 1
+        for field in (
+            "task_complexity", "complexity_proxy", "complexity_proxy_kind",
+            "complexity_score", "complexity_prompt_chars",
+            "complexity_prompt_words", "complexity_test_chars",
+            "complexity_test_assertions",
+            "complexity_reference_solution_chars",
+            "complexity_reference_solution_lines",
+            "complexity_required_reasoning_steps",
+            "complexity_algorithmic_category",
+            "complexity_classification_rule", "benchmark_subset",
+        ):
+            if current.get(field) in (None, "") and record.get(field) not in (None, ""):
+                current[field] = record.get(field)
+
+    rows = [by_task[key] for key in sorted(by_task)]
+    fields = [
+        "benchmark", "task_id", "benchmark_subset", "task_complexity",
+        "complexity_proxy", "complexity_proxy_kind", "complexity_score",
+        "complexity_prompt_chars", "complexity_prompt_words",
+        "complexity_test_chars", "complexity_test_assertions",
+        "complexity_reference_solution_chars",
+        "complexity_reference_solution_lines",
+        "complexity_required_reasoning_steps",
+        "complexity_algorithmic_category", "complexity_classification_rule",
+        "record_count",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_task_complexity_summary_csv(records: list[dict], path: str) -> None:
+    """Write fault-effect summaries stratified by static complexity proxy."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    by_pair = _condition_index(records)
+    grouped: dict[tuple, list[tuple[dict | None, dict | None, dict]]] = {}
+    for fault in _fault_records(records):
+        pair = by_pair.get(str(fault.get("pair_id")), {})
+        complexity = (
+            fault.get("complexity_proxy")
+            or fault.get("task_complexity")
+            or "unclassified"
+        )
+        key = (*_science_key(fault), complexity)
+        grouped.setdefault(key, []).append((
+            pair.get("direct_baseline"),
+            pair.get("cj_control"),
+            fault,
+        ))
+
+    rows: list[dict[str, Any]] = []
+    for key, triplet_like in sorted(grouped.items()):
+        (
+            level, system, topology, benchmark, model,
+            fault_type, severity, complexity,
+        ) = key
+        complete = [(b, c, f) for b, c, f in triplet_like if b and c]
+        valid = [(b, c, f) for b, c, f in complete if f.get("validity") == "valid"]
+        baseline_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(b)]
+        control_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(c)]
+        unique_tasks = len({f.get("task_id") for _b, _c, f in complete if f.get("task_id")})
+        inference_status = _inference_status(
+            unique_tasks=unique_tasks,
+            valid_pairs=len(valid),
+        )
+        rows.append({
+            "agent_level": level,
+            "system": system,
+            "topology": topology,
+            "benchmark": benchmark,
+            "model": model,
+            "fault": fault_type,
+            "severity": severity,
+            "complexity_proxy": complexity,
+            "unique_tasks": unique_tasks,
+            "complete_triplets": len(complete),
+            "valid_pairs": len(valid),
+            "baseline_eligible_pairs": len(baseline_eligible),
+            "control_eligible_pairs": len(control_eligible),
+            "stratum_status": inference_status,
+            "baseline_pass_at_1": _mean([
+                _as_float(b.get("success")) for b, _c, _f in valid
+            ]),
+            "control_pass_at_1": _mean([
+                _as_float(c.get("success")) for _b, c, _f in valid
+            ]),
+            "fault_pass_at_1": _mean([
+                _as_float(f.get("success")) for _b, _c, f in valid
+            ]),
+            "conditional_robustness": _ratio(
+                sum(1 for _b, _c, f in baseline_eligible if _as_bool_success(f)),
+                len(baseline_eligible),
+            ),
+            "fault_specific_degradation": _mean([
+                _as_float(c.get("success")) - _as_float(f.get("success"))
+                for _b, c, f in control_eligible
+            ]),
+            "mean_control_duration_s": _mean_numeric([
+                _numeric_or_none(c.get("duration_s")) for _b, c, _f in valid
+            ]),
+            "mean_fault_duration_s": _mean_numeric([
+                _numeric_or_none(f.get("duration_s")) for _b, _c, f in valid
+            ]),
+            "mean_control_llm_calls": _mean_numeric([
+                _numeric_or_none(c.get("llm_calls")) for _b, c, _f in valid
+            ]),
+            "mean_fault_llm_calls": _mean_numeric([
+                _numeric_or_none(f.get("llm_calls")) for _b, _c, f in valid
+            ]),
+            "mean_control_tool_calls": _mean_numeric([
+                _numeric_or_none(c.get("tool_calls")) for _b, c, _f in valid
+            ]),
+            "mean_fault_tool_calls": _mean_numeric([
+                _numeric_or_none(f.get("tool_calls")) for _b, _c, f in valid
+            ]),
+            "mean_control_tokens": _mean_numeric([
+                _numeric_or_none(c.get("total_tokens")) for _b, c, _f in valid
+            ]),
+            "mean_fault_tokens": _mean_numeric([
+                _numeric_or_none(f.get("total_tokens")) for _b, _c, f in valid
+            ]),
+            **_validity_counts([f for _b, _c, f in triplet_like]),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "topology", "benchmark", "model", "fault",
+        "severity", "complexity_proxy", "unique_tasks", "complete_triplets",
+        "valid_pairs", "baseline_eligible_pairs", "control_eligible_pairs",
+        "stratum_status", "baseline_pass_at_1", "control_pass_at_1",
+        "fault_pass_at_1", "conditional_robustness",
+        "fault_specific_degradation", "mean_control_duration_s",
+        "mean_fault_duration_s", "mean_control_llm_calls",
+        "mean_fault_llm_calls", "mean_control_tool_calls",
+        "mean_fault_tool_calls", "mean_control_tokens", "mean_fault_tokens",
+        "configured_count", "activated_count", "triggered_count",
+        "manifested_count", "reverted_count", "recovered_count",
+        "activation_rate", "trigger_rate", "manifestation_rate",
+        "reversion_rate", "verified_recovery_rate", "invalid_experiment_rate",
+        "inconclusive_rate", "untriggered_rate",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
 def write_multi_agent_process_summary_csv(records: list[dict], path: str) -> None:
     """Summarize process metrics from multi-agent execution traces."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -1752,6 +1962,255 @@ def write_multi_agent_process_summary_csv(records: list[dict], path: str) -> Non
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         w.writerows(rows)
+
+
+def write_infrastructure_summary_csv(records: list[dict], path: str) -> None:
+    """Summarize container-scoped infrastructure fault evidence.
+
+    This intentionally looks only for records that explicitly identify an
+    infrastructure layer.  LLM/proxy records are not coerced into this table.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        lifecycle = _lifecycle(record)
+        evidence_source = str(lifecycle.get("evidence_source", ""))
+        is_infra = (
+            record.get("fault_layer") == "infrastructure"
+            or record.get("experiment_layer") == "infrastructure"
+            or evidence_source == "docker_target"
+            or bool(record.get("activation_evidence"))
+            or bool(record.get("recovery_evidence"))
+        )
+        if not is_infra:
+            continue
+        limits = record.get("container_resource_limits")
+        if not isinstance(limits, dict):
+            limits = record.get("resource_limits")
+        if not isinstance(limits, dict):
+            limits = {}
+        activation = record.get("activation_evidence")
+        recovery = record.get("recovery_evidence")
+        if not isinstance(activation, dict):
+            activation = {}
+        if not isinstance(recovery, dict):
+            recovery = {}
+        observed = activation.get("observed") if isinstance(activation.get("observed"), dict) else {}
+        recovered_observed = recovery.get("observed") if isinstance(recovery.get("observed"), dict) else {}
+        rows.append({
+            "study_id": record.get("study_id", ""),
+            "campaign_id": record.get("campaign_id", ""),
+            "pair_id": record.get("pair_id", ""),
+            "run_id": record.get("run_id", ""),
+            "condition": record.get("condition", ""),
+            "agent_level": record.get("agent_level", ""),
+            "agent_system": record.get("agent_system", ""),
+            "topology": record.get("topology", ""),
+            "benchmark": record.get("benchmark", ""),
+            "task_id": record.get("task_id", ""),
+            "model": record.get("model", ""),
+            "fault_type": record.get("fault_type", ""),
+            "fault_layer": record.get("fault_layer", "infrastructure"),
+            "validity": record.get("validity", ""),
+            "configured": lifecycle.get("configured", ""),
+            "activated": lifecycle.get("activated", ""),
+            "triggered": lifecycle.get("triggered", ""),
+            "manifested": lifecycle.get("manifested", ""),
+            "reverted": lifecycle.get("reverted", ""),
+            "infrastructure_recovered": lifecycle.get("infrastructure_recovered", lifecycle.get("recovered", "")),
+            "agent_recovered": lifecycle.get("agent_recovered", ""),
+            "task_success": _as_bool_success(record),
+            "lifecycle_verdict": lifecycle.get("verdict", ""),
+            "evidence_source": evidence_source,
+            "cpu_limit": limits.get("cpus", ""),
+            "memory_limit": limits.get("memory", ""),
+            "capabilities": json.dumps(limits.get("capabilities", []), sort_keys=True),
+            "read_only_root": limits.get("read_only_root", ""),
+            "observed_cpu": (
+                observed.get("cpu_percent")
+                or observed.get("cpu_usage")
+                or record.get("cpu_usage", "")
+            ),
+            "peak_memory_bytes": (
+                observed.get("peak_memory_bytes")
+                or observed.get("memory_bytes")
+                or record.get("peak_memory_bytes", "")
+            ),
+            "oom_event": observed.get("oom_event", record.get("oom_event", "")),
+            "network_bytes": observed.get("network_bytes", record.get("network_bytes", "")),
+            "packet_loss_rate": observed.get("packet_loss_rate", observed.get("loss_rate", "")),
+            "disk_used_bytes": observed.get("disk_used_bytes", record.get("disk_used_bytes", "")),
+            "container_exit_reason": record.get("container_exit_reason", record.get("termination_reason", "")),
+            "restart_count": observed.get("restart_count", record.get("restart_count", "")),
+            "recovery_latency_s": lifecycle.get("recovery_latency_s", ""),
+            "activation_evidence_json": _sanitized_json_cell(activation),
+            "recovery_evidence_json": _sanitized_json_cell(recovery),
+            "recovery_observed_json": _sanitized_json_cell(recovered_observed),
+            "lifecycle_details": lifecycle.get("details", ""),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "study_id", "campaign_id", "pair_id", "run_id", "condition",
+        "agent_level", "agent_system", "topology", "benchmark", "task_id",
+        "model", "fault_type", "fault_layer", "validity", "configured",
+        "activated", "triggered", "manifested", "reverted",
+        "infrastructure_recovered", "agent_recovered", "task_success",
+        "lifecycle_verdict", "evidence_source", "cpu_limit", "memory_limit",
+        "capabilities", "read_only_root", "observed_cpu",
+        "peak_memory_bytes", "oom_event", "network_bytes", "packet_loss_rate",
+        "disk_used_bytes", "container_exit_reason", "restart_count",
+        "recovery_latency_s", "activation_evidence_json",
+        "recovery_evidence_json", "recovery_observed_json",
+        "lifecycle_details",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_distributed_process_summary_csv(records: list[dict], path: str) -> None:
+    """Summarize genuinely distributed multi-agent executions only."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("deployment_mode") != "distributed":
+            continue
+        result = record.get("result") if isinstance(record.get("result"), dict) else record
+        trace = (
+            result.get("distributed_trace")
+            or result.get("execution_trace")
+            or record.get("distributed_trace")
+            or []
+        )
+        if not isinstance(trace, list):
+            trace = []
+        roles = {
+            str(e.get("agent_role"))
+            for e in trace
+            if isinstance(e, dict) and e.get("agent_role")
+        }
+        containers = {
+            str(e.get("container_id"))
+            for e in trace
+            if isinstance(e, dict) and e.get("container_id")
+        }
+        targeted_role = record.get("fault_target_role", "")
+        affected_roles = {
+            str(e.get("agent_role"))
+            for e in trace
+            if isinstance(e, dict)
+            and e.get("agent_role")
+            and e.get("event_type") in {"error_detection", "attempted_recovery", "error", "fault_observed"}
+        }
+        propagation_roles = {
+            role for role in affected_roles
+            if targeted_role and role != targeted_role
+        }
+        rows.append({
+            "study_id": record.get("study_id", ""),
+            "campaign_id": record.get("campaign_id", ""),
+            "pair_id": record.get("pair_id", ""),
+            "run_id": record.get("run_id", ""),
+            "condition": record.get("condition", ""),
+            "agent_system": record.get("agent_system", ""),
+            "framework": record.get("framework", ""),
+            "topology": record.get("topology", ""),
+            "task_id": record.get("task_id", ""),
+            "fault_type": record.get("fault_type", ""),
+            "fault_target_role": targeted_role,
+            "role_count": len(roles),
+            "role_container_count": len(containers),
+            "message_count": len(trace),
+            "affected_role_count": len(affected_roles),
+            "affected_roles": json.dumps(sorted(affected_roles)),
+            "fault_propagation_probability": 1.0 if propagation_roles else 0.0 if targeted_role else "",
+            "propagation_depth": len(propagation_roles) if targeted_role else "",
+            "time_to_propagation_s": _distributed_time_to_propagation(trace, targeted_role),
+            "containment_rate": (
+                1.0 if targeted_role and not propagation_roles
+                else 0.0 if targeted_role
+                else ""
+            ),
+            "successful_handoff_count": sum(
+                1 for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "handoff"
+            ),
+            "failed_handoff_count": sum(
+                1 for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "handoff_failed"
+            ),
+            "message_loss_count": sum(
+                1 for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "message_loss"
+            ),
+            "message_corruption_count": sum(
+                1 for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "message_corruption"
+            ),
+            "message_duplication_count": sum(
+                1 for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "message_duplication"
+            ),
+            "detection_role": _first_nonempty([
+                e.get("agent_role")
+                for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "error_detection"
+            ]),
+            "repairing_role": _first_nonempty([
+                e.get("agent_role")
+                for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "attempted_recovery"
+            ]),
+            "revision_rounds": sum(
+                1 for e in trace
+                if isinstance(e, dict) and e.get("event_type") == "revision_request"
+            ),
+            "coordination_overhead_s": record.get("coordination_overhead_s", ""),
+            "topology_conditional_robustness": record.get("topology_conditional_robustness", ""),
+            "final_pass1": result.get("success", record.get("success", "")),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "study_id", "campaign_id", "pair_id", "run_id", "condition",
+        "agent_system", "framework", "topology", "task_id", "fault_type",
+        "fault_target_role", "role_count", "role_container_count",
+        "message_count", "affected_role_count", "affected_roles",
+        "fault_propagation_probability", "propagation_depth",
+        "time_to_propagation_s", "containment_rate",
+        "successful_handoff_count", "failed_handoff_count",
+        "message_loss_count", "message_corruption_count",
+        "message_duplication_count", "detection_role", "repairing_role",
+        "revision_rounds", "coordination_overhead_s",
+        "topology_conditional_robustness", "final_pass1",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _distributed_time_to_propagation(trace: list[Any], targeted_role: str) -> float | str:
+    if not targeted_role:
+        return ""
+    target_time = None
+    first_other = None
+    for event in trace:
+        if not isinstance(event, dict):
+            continue
+        if event.get("event_type") not in {"fault_observed", "error_detection", "attempted_recovery", "error"}:
+            continue
+        role = event.get("agent_role")
+        timestamp = _numeric_or_none(event.get("timestamp"))
+        if timestamp is None:
+            continue
+        if role == targeted_role and target_time is None:
+            target_time = timestamp
+        elif role and role != targeted_role and first_other is None:
+            first_other = timestamp
+    if target_time is None or first_other is None:
+        return ""
+    return max(0.0, first_other - target_time)
 
 
 def write_study_manifest(records: list[dict], path: str, study_id: str | None) -> None:
@@ -2004,119 +2463,204 @@ def write_stats_summary_csv(records: list[dict], path: str) -> None:
 
 
 def write_inferential_summary_csv(records: list[dict], path: str) -> None:
-    """Write paired, task-aware inferential tests for valid fault records."""
+    """Write paired, task-aware inferential tests with explicit comparisons.
+
+    ``control_vs_fault`` is the primary fault-effect comparison.  The direct
+    baseline is retained separately for CJ overhead (``direct_vs_control``) and
+    total degradation (``direct_vs_fault``).
+    """
     from evaluation.analysis.statistics import (
+        exact_pair_matches,
         holm_correction,
         mcnemar_exact,
         paired_permutation_test,
         task_clustered_bootstrap_ci,
     )
-    from evaluation.analysis.validity import classify_records
     from itertools import groupby
 
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
-    direct = [r for r in records if r.get("condition") == "direct_baseline"]
     faults = [r for r in records if r.get("phase") == "fault"]
+    by_pair = _condition_index(records)
 
     def key(r: dict):
-        return (
-            r.get("agent_level", ""),
-            r.get("agent_system", ""),
-            r.get("topology", ""),
-            r.get("benchmark", ""),
-            r.get("fault_type", "none"),
-        )
+        return _science_key(r)
 
-    rows: list[dict[str, Any]] = []
-    for (level, system, topology, bench, fault), group_recs in groupby(
-        sorted(faults, key=key), key=key
-    ):
-        valid_faults = classify_records(list(group_recs)).valid
-        pair_ids = {r.get("pair_id") for r in valid_faults if r.get("pair_id")}
-        base = [
-            r for r in direct
-            if r.get("pair_id") in pair_ids
-            and r.get("agent_system") == system
-            and r.get("benchmark") == bench
-        ]
-        if not valid_faults or not base:
-            continue
-        unique_tasks = len({
-            r.get("task_id", "")
-            for r in valid_faults + base
-            if r.get("task_id")
-        })
-        inference_status = _inference_status(
-            unique_tasks=unique_tasks,
-            valid_pairs=len(pair_ids),
-        )
-        if inference_status != "ok":
-            rows.append({
-                "agent_level": level,
-                "agent_system": system,
-                "topology": topology,
-                "benchmark": bench,
-                "fault_type": fault,
-                "metric": "all",
-                "test": "not_run",
-                "inference_status": inference_status,
-                "n_pairs": len(pair_ids),
-                "n_tasks": unique_tasks,
-                "effect": None,
-                "ci_low": None,
-                "ci_high": None,
-                "p_value": None,
-                "missing_pairs": 0,
-                "baseline_only_success": "",
-                "condition_only_success": "",
-            })
-            continue
-
-        mcn = mcnemar_exact(base, valid_faults, metric="success")
-        boot = task_clustered_bootstrap_ci(base, valid_faults, metric="success")
-        rows.append({
+    def _metadata_row(
+        *,
+        level: str,
+        system: str,
+        topology: str,
+        benchmark: str,
+        model: str,
+        fault_type: str,
+        severity: str,
+        comparison_type: str,
+        metric: str,
+        test: str,
+        inference_status: str,
+        n_pairs: int,
+        n_tasks: int,
+        missing_pairs: int,
+        effect: Any = None,
+        ci_low: Any = None,
+        ci_high: Any = None,
+        p_value: Any = None,
+        baseline_only_success: Any = "",
+        condition_only_success: Any = "",
+    ) -> dict[str, Any]:
+        return {
             "agent_level": level,
             "agent_system": system,
             "topology": topology,
-            "benchmark": bench,
-            "fault_type": fault,
-            "metric": "success",
-            "test": "mcnemar_exact",
-            "inference_status": "ok",
-            "n_pairs": mcn.get("n_pairs"),
-            "n_tasks": boot.get("n_tasks"),
-            "effect": boot.get("mean_diff"),
-            "ci_low": boot.get("ci_low"),
-            "ci_high": boot.get("ci_high"),
-            "p_value": mcn.get("p_value"),
-            "missing_pairs": mcn.get("missing_pairs"),
-            "baseline_only_success": mcn.get("baseline_only_success"),
-            "condition_only_success": mcn.get("condition_only_success"),
+            "benchmark": benchmark,
+            "model": model,
+            "fault_type": fault_type,
+            "severity": severity,
+            "comparison_type": comparison_type,
+            "metric": metric,
+            "test": test,
+            "inference_status": inference_status,
+            "n_pairs": n_pairs,
+            "n_tasks": n_tasks,
+            "effect": effect,
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+            "p_value": p_value,
+            "missing_pairs": missing_pairs,
+            "baseline_only_success": baseline_only_success,
+            "condition_only_success": condition_only_success,
+        }
+
+    def _task_count(*record_lists: list[dict]) -> int:
+        return len({
+            str(r.get("task_id"))
+            for recs in record_lists
+            for r in recs
+            if r.get("task_id")
         })
 
-        for metric in ("duration_s", "llm_calls", "tool_calls", "turns", "total_tokens"):
-            perm = paired_permutation_test(base, valid_faults, metric=metric)
-            boot = task_clustered_bootstrap_ci(base, valid_faults, metric=metric)
-            rows.append({
-                "agent_level": level,
-                "agent_system": system,
-                "topology": topology,
-                "benchmark": bench,
-                "fault_type": fault,
-                "metric": metric,
-                "test": "paired_permutation",
-                "inference_status": "ok",
-                "n_pairs": perm.get("n_pairs"),
-                "n_tasks": boot.get("n_tasks"),
-                "effect": boot.get("mean_diff"),
-                "ci_low": boot.get("ci_low"),
-                "ci_high": boot.get("ci_high"),
-                "p_value": perm.get("p_value"),
-                "missing_pairs": perm.get("missing_pairs"),
-                "baseline_only_success": "",
-                "condition_only_success": "",
-            })
+    def _pair_count(records_a: list[dict], records_b: list[dict]) -> int:
+        ids_a = {r.get("pair_id") for r in records_a if r.get("pair_id")}
+        ids_b = {r.get("pair_id") for r in records_b if r.get("pair_id")}
+        return len(ids_a & ids_b)
+
+    rows: list[dict[str, Any]] = []
+    for (level, system, topology, bench, model, fault, severity), group_recs in groupby(
+        sorted(faults, key=key), key=key
+    ):
+        group_list = list(group_recs)
+        complete = [
+            (pair.get("direct_baseline"), pair.get("cj_control"), fault_record)
+            for fault_record in group_list
+            for pair in [by_pair.get(str(fault_record.get("pair_id")), {})]
+            if pair.get("direct_baseline") and pair.get("cj_control")
+        ]
+        valid = [(b, c, f) for b, c, f in complete if f.get("validity") == "valid"]
+        comparisons = [
+            (
+                "control_vs_fault",
+                [c for _b, c, _f in valid],
+                [f for _b, _c, f in valid],
+            ),
+            (
+                "direct_vs_control",
+                [b for b, _c, _f in complete],
+                [c for _b, c, _f in complete],
+            ),
+            (
+                "direct_vs_fault",
+                [b for b, _c, _f in valid],
+                [f for _b, _c, f in valid],
+            ),
+        ]
+        for comparison_type, baseline_records, condition_records in comparisons:
+            n_pairs = _pair_count(baseline_records, condition_records)
+            unique_tasks = _task_count(baseline_records, condition_records)
+            inference_status = _inference_status(
+                unique_tasks=unique_tasks,
+                valid_pairs=n_pairs,
+            )
+            if not baseline_records or not condition_records:
+                inference_status = "insufficient_pairs"
+            if inference_status != "ok":
+                metric_pairs, missing = exact_pair_matches(
+                    baseline_records,
+                    condition_records,
+                    metric="success",
+                )
+                effect = _mean([
+                    float(cond.get("success", 0.0)) - float(base.get("success", 0.0))
+                    for base, cond in metric_pairs
+                ])
+                rows.append(_metadata_row(
+                    level=level,
+                    system=system,
+                    topology=topology,
+                    benchmark=bench,
+                    model=model,
+                    fault_type=fault,
+                    severity=severity,
+                    comparison_type=comparison_type,
+                    metric="success",
+                    test="not_run",
+                    inference_status=inference_status,
+                    n_pairs=len(metric_pairs),
+                    n_tasks=unique_tasks,
+                    missing_pairs=missing,
+                    effect=effect,
+                ))
+                continue
+
+            mcn = mcnemar_exact(baseline_records, condition_records, metric="success")
+            boot = task_clustered_bootstrap_ci(baseline_records, condition_records, metric="success")
+            rows.append(_metadata_row(
+                level=level,
+                system=system,
+                topology=topology,
+                benchmark=bench,
+                model=model,
+                fault_type=fault,
+                severity=severity,
+                comparison_type=comparison_type,
+                metric="success",
+                test="mcnemar_exact",
+                inference_status="ok",
+                n_pairs=mcn.get("n_pairs"),
+                n_tasks=boot.get("n_tasks"),
+                effect=boot.get("mean_diff"),
+                ci_low=boot.get("ci_low"),
+                ci_high=boot.get("ci_high"),
+                p_value=mcn.get("p_value"),
+                missing_pairs=mcn.get("missing_pairs"),
+                baseline_only_success=mcn.get("baseline_only_success"),
+                condition_only_success=mcn.get("condition_only_success"),
+            ))
+
+            for metric in ("duration_s", "llm_calls", "tool_calls", "turns", "total_tokens"):
+                perm = paired_permutation_test(baseline_records, condition_records, metric=metric)
+                boot = task_clustered_bootstrap_ci(baseline_records, condition_records, metric=metric)
+                metric_status = "ok" if perm.get("n_pairs", 0) else "insufficient_metric_pairs"
+                rows.append(_metadata_row(
+                    level=level,
+                    system=system,
+                    topology=topology,
+                    benchmark=bench,
+                    model=model,
+                    fault_type=fault,
+                    severity=severity,
+                    comparison_type=comparison_type,
+                    metric=metric,
+                    test="paired_permutation" if metric_status == "ok" else "not_run",
+                    inference_status=metric_status,
+                    n_pairs=perm.get("n_pairs"),
+                    n_tasks=boot.get("n_tasks"),
+                    effect=boot.get("mean_diff"),
+                    ci_low=boot.get("ci_low"),
+                    ci_high=boot.get("ci_high"),
+                    p_value=perm.get("p_value") if metric_status == "ok" else None,
+                    missing_pairs=perm.get("missing_pairs"),
+                ))
 
     p_adjusted = holm_correction([
         float(r["p_value"]) if r.get("p_value") is not None else None
@@ -2126,9 +2670,10 @@ def write_inferential_summary_csv(records: list[dict], path: str) -> None:
         row["p_value_holm"] = p_holm
 
     fields = [
-        "agent_level", "agent_system", "topology", "benchmark", "fault_type",
-        "metric", "test", "inference_status", "n_pairs", "n_tasks", "effect",
-        "ci_low", "ci_high", "p_value", "p_value_holm", "missing_pairs",
+        "agent_level", "agent_system", "topology", "benchmark", "model",
+        "fault_type", "severity", "comparison_type", "metric", "test",
+        "inference_status", "n_pairs", "n_tasks", "effect", "ci_low",
+        "ci_high", "p_value", "p_value_holm", "missing_pairs",
         "baseline_only_success", "condition_only_success",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -2188,7 +2733,11 @@ def generate_all_outputs(
     write_cj_overhead_summary_csv(records, os.path.join(results_dir, "cj_overhead_summary.csv"))
     write_agent_resilience_summary_csv(records, os.path.join(results_dir, "agent_resilience_summary.csv"))
     write_data_quality_summary_csv(records, os.path.join(results_dir, "data_quality_summary.csv"))
+    write_task_complexity_catalog_csv(records, os.path.join(results_dir, "task_complexity_catalog.csv"))
+    write_task_complexity_summary_csv(records, os.path.join(results_dir, "task_complexity_summary.csv"))
     write_multi_agent_process_summary_csv(records, os.path.join(results_dir, "multi_agent_process_summary.csv"))
+    write_infrastructure_summary_csv(records, os.path.join(results_dir, "infrastructure_summary.csv"))
+    write_distributed_process_summary_csv(records, os.path.join(results_dir, "distributed_process_summary.csv"))
     write_stats_summary_csv(records, os.path.join(results_dir, "stats_summary.csv"))
     write_inferential_summary_csv(records, os.path.join(results_dir, "inferential_summary.csv"))
     write_study_manifest(records, os.path.join(results_dir, "study_manifest.json"), study_id)

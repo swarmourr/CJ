@@ -396,6 +396,14 @@ def _publication_model_config(args: argparse.Namespace, yaml_model_cfg: dict | N
         cfg["name"] = args.model
     elif os.environ.get("CJ_EVAL_MODEL"):
         cfg.setdefault("name", os.environ["CJ_EVAL_MODEL"])
+    for env_name, key in (
+        ("CJ_EVAL_INPUT_PRICE_PER_1K_TOKENS", "input_price_per_1k_tokens"),
+        ("LLM_INPUT_PRICE_PER_1K_TOKENS", "input_price_per_1k_tokens"),
+        ("CJ_EVAL_OUTPUT_PRICE_PER_1K_TOKENS", "output_price_per_1k_tokens"),
+        ("LLM_OUTPUT_PRICE_PER_1K_TOKENS", "output_price_per_1k_tokens"),
+    ):
+        if env_name in os.environ:
+            cfg.setdefault(key, os.environ[env_name])
     cfg.setdefault("api_key_env", "CJ_EVAL_API_KEY")
     cfg.setdefault("transport_retries", 0)
     return cfg

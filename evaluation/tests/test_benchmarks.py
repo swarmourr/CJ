@@ -60,9 +60,12 @@ class TestBenchmarkLoading:
         assert len(tasks1) == 3
         assert len(tasks2) == 3
 
-    def test_agent_prompt_equals_prompt(self):
+    def test_agent_prompt_preserves_prompt_and_requires_entry_point(self):
         task = _bundled_tasks()[0]
-        assert task.agent_prompt() == task.prompt
+        prompt = task.agent_prompt()
+        assert prompt.startswith(task.prompt)
+        assert f"named `{task.entry_point}` exactly" in prompt
+        assert "Return only the final Python source code" in prompt
 
     def test_full_exec_code_contains_test(self):
         task = _bundled_tasks()[0]
@@ -77,6 +80,34 @@ class TestBenchmarkLoading:
         for t in tasks:
             assert t.benchmark == "mbppplus"
             assert t.entry_point
+
+    def test_mbpp_bundled_canonical_solutions_pass(self):
+        for task in mbpp_bundled():
+            ok, passed, total, output = score_task(task, task.canonical_solution)
+            assert ok is True, f"{task.task_id} failed: {output}"
+            assert passed > 0
+            assert total > 0
+
+    def test_complexity_metadata_is_deterministic(self):
+        from evaluation.task_complexity import classify_task_complexity
+        task = mbpp_bundled()[0]
+        first = classify_task_complexity(
+            benchmark=task.benchmark,
+            task_id=task.task_id,
+            prompt=task.prompt,
+            test_code=task.test_code,
+            canonical_solution=task.canonical_solution,
+        )
+        second = classify_task_complexity(
+            benchmark=task.benchmark,
+            task_id=task.task_id,
+            prompt=task.prompt,
+            test_code=task.test_code,
+            canonical_solution=task.canonical_solution,
+        )
+        assert first == second
+        assert first.complexity_proxy in {"small", "medium", "large"}
+        assert first.complexity_proxy_kind == "static_pre_execution_proxy"
 
 
 # ── Sandbox executor ──────────────────────────────────────────────────────────

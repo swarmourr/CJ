@@ -63,12 +63,23 @@ case "${profile}" in
     CJ_EVAL_BENCHMARKS="${CJ_EVAL_BENCHMARKS:-humanevalplus}" \
     CJ_EVAL_TOPOLOGIES="${CJ_EVAL_TOPOLOGIES:-linear}" \
       "${script_dir}/run_multi_agent_reference_pilot.sh"
+
+    if [[ "${CJ_EVAL_RUN_INFRA:-1}" == "1" ]]; then
+      CJ_EVAL_INFRA_FAULT="${CJ_EVAL_INFRA_FAULT:-cpu_pressure}" \
+      CJ_EVAL_BENCHMARK="${CJ_EVAL_INFRA_BENCHMARK:-toy}" \
+      CJ_EVAL_TASKS="${CJ_EVAL_INFRA_TASKS:-1}" \
+      CJ_EVAL_DRY_RUN="${CJ_EVAL_INFRA_DRY_RUN:-1}" \
+        "${script_dir}/run_infrastructure_fault_smoke.sh"
+    fi
     ;;
   pilot)
     "${script_dir}/run_injector_validation.sh"
     "${script_dir}/run_cj_overhead_study.sh"
     "${script_dir}/run_individual_resilience_pilot.sh"
     "${script_dir}/run_multi_agent_reference_pilot.sh"
+    if [[ "${CJ_EVAL_RUN_INFRA:-1}" == "1" ]]; then
+      "${script_dir}/run_infrastructure_fault_smoke.sh"
+    fi
     ;;
   *)
     echo "Unknown CJ_EVAL_PROFILE=${profile}; expected smoke or pilot" >&2
