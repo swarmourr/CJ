@@ -28,7 +28,7 @@ cj_eval_default_image() {
 }
 
 cj_eval_results_base() {
-  echo "${CJ_EVAL_RESULTS_ROOT:-${CJ_EVAL_REPO_ROOT}/results/paper}"
+  echo "${CJ_EVAL_RESULTS_ROOT:-${CJ_EVAL_REPO_ROOT}/results}"
 }
 
 cj_eval_slug() {

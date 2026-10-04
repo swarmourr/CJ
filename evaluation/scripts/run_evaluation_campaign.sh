@@ -59,8 +59,8 @@ Common options:
   --cpus N                    Docker CPU limit.
   --memory SIZE               Docker memory limit, for example 2g.
   --proxy-port PORT           CJ proxy port.
-  --results-root PATH         Root folder for generated results.
-  --experiment-run NAME       Group category outputs under results-root/NAME.
+  --results-root PATH         Root folder for generated results; defaults to repo results/.
+  --experiment-run NAME       Override the auto-generated experiment folder name.
   --run-name NAME             Human-readable run name.
   --profile NAME              smoke or pilot, for bundle modes.
   --rebuild-image             Rebuild the Docker image before running.
@@ -89,8 +89,7 @@ Examples:
     --topologies "linear closed_loop" \
     --tasks 1
 
-  scripts/run_evaluation_campaign.sh smoke \
-    --experiment-run experiment-run-1
+  scripts/run_evaluation_campaign.sh smoke
 EOF
 }
 
