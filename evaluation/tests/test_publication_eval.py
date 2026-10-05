@@ -992,6 +992,30 @@ def test_container_entrypoint_preflight_failure_records_diagnostics(tmp_path, mo
     assert "zero tests executed" in preflight["strict_evalplus"]["worker_exception"]
 
 
+def test_evalplus_preflight_uses_raw_problem_prompt_not_agent_prompt():
+    import evaluation.container_entrypoint as entrypoint
+
+    task = BenchmarkTask(
+        task_id="HumanEval/0",
+        benchmark="humanevalplus",
+        prompt="def f(x):\n    pass\n\nImplementation requirement:\n- Return only code.",
+        entry_point="f",
+        test_code="",
+        canonical_solution="    return x + 1\n",
+        metadata={
+            "source": "evalplus",
+            "evalplus_problem": {
+                "prompt": "def f(x):\n    pass\n",
+            },
+        },
+    )
+
+    solution = entrypoint._canonical_evalplus_solution(task)
+
+    assert "Implementation requirement" not in solution
+    assert solution == "def f(x):\n    pass\n    return x + 1\n"
+
+
 def test_container_entrypoint_keeps_condition_specific_base_url(tmp_path, monkeypatch):
     monkeypatch.setenv("CJ_EVAL_BASE_URL", "http://condition-proxy.invalid/v1")
     req = {

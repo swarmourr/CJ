@@ -132,7 +132,12 @@ def _task_from_request(task_data: dict[str, Any]) -> BenchmarkTask:
 def _canonical_evalplus_solution(task: BenchmarkTask) -> str:
     """Build a full official EvalPlus solution for preflight scoring."""
     canonical = task.canonical_solution or ""
-    prompt = task.prompt or ""
+    problem = task.metadata.get("evalplus_problem") if isinstance(task.metadata, dict) else None
+    prompt = (
+        str(problem.get("prompt", ""))
+        if isinstance(problem, dict) and problem.get("prompt")
+        else task.prompt or ""
+    )
     if canonical.lstrip().startswith(("def ", "class ", "import ", "from ")):
         return canonical
     return f"{prompt.rstrip()}\n{canonical}"
