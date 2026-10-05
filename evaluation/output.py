@@ -304,6 +304,14 @@ def _proxy_calls(record: dict) -> list[dict]:
     return [call for call in calls if isinstance(call, dict)]
 
 
+def _proxy_call_totals(record: dict) -> dict[str, Any]:
+    evidence = _lifecycle(record).get("evidence")
+    if not isinstance(evidence, dict):
+        return {}
+    totals = evidence.get("proxy_call_totals") or {}
+    return totals if isinstance(totals, dict) else {}
+
+
 def _matching_proxy_call(entry: dict | None, calls: list[dict], fallback_index: int) -> dict:
     if not calls:
         return {}
@@ -370,6 +378,12 @@ def _affected_call_count(record: dict) -> int:
         "", "none", "passthrough",
     }:
         return 0
+    lifecycle_count = _lifecycle(record).get("proxy_calls_affected_count")
+    if lifecycle_count not in (None, ""):
+        return int(_as_float(lifecycle_count, 0.0))
+    totals = _proxy_call_totals(record)
+    if totals.get("affected_calls") not in (None, ""):
+        return int(_as_float(totals.get("affected_calls"), 0.0))
     entries = _evidence_entries(record)
     if entries:
         return sum(
@@ -393,7 +407,13 @@ def _affected_call_count(record: dict) -> int:
 def _call_accounting(record: dict) -> dict[str, int]:
     """Separate agent-reported calls from CJ proxy-observed calls."""
     agent_reported = int(_as_float(record.get("llm_calls"), 0.0))
-    intercepted = int(_lifecycle(record).get("proxy_call_count") or 0)
+    totals = _proxy_call_totals(record)
+    intercepted = int(
+        _as_float(
+            totals.get("intercepted_calls", _lifecycle(record).get("proxy_call_count")),
+            0.0,
+        )
+    )
     affected = _affected_call_count(record)
     return {
         "agent_reported_llm_calls": agent_reported,
@@ -430,6 +450,13 @@ def _success_verdicts(record: dict) -> dict[str, str]:
         "scorer_success_verdict": scorer_verdict,
         "task_success_verdict": "success" if _as_bool_success(record) else "failure",
     }
+
+
+def _is_success_scored(record: dict) -> bool:
+    return (
+        str(record.get("scorer_status", "")).lower() == "ok"
+        and int(_as_float(record.get("tests_total"), 0.0)) > 0
+    )
 
 
 def _run_failure_verdicts(record: dict) -> dict[str, Any]:
@@ -1345,6 +1372,17 @@ def _observed_evidence_values(records: list[dict]) -> dict[str, set[str]]:
         "target": set(),
     }
     for record in records:
+        totals = _proxy_call_totals(record)
+        status_counts = totals.get("http_status_counts") if isinstance(totals, dict) else {}
+        if isinstance(status_counts, dict):
+            for status, count in status_counts.items():
+                if _as_float(count, 0.0) > 0:
+                    values["http_status"].add(str(status))
+        mode_counts = totals.get("mode_counts") if isinstance(totals, dict) else {}
+        if isinstance(mode_counts, dict):
+            for mode, count in mode_counts.items():
+                if _as_float(count, 0.0) > 0:
+                    values["mode"].add(str(mode))
         for call in _proxy_calls(record):
             status = call.get("http_status")
             if status not in (None, ""):
@@ -1362,6 +1400,36 @@ def _observed_evidence_values(records: list[dict]) -> dict[str, set[str]]:
     return values
 
 
+def _aggregate_numeric_sum(records: list[dict], *keys: str) -> float | None:
+    total = 0.0
+    found = False
+    for record in records:
+        totals = _proxy_call_totals(record)
+        numeric_sums = totals.get("numeric_sums") if isinstance(totals, dict) else {}
+        if not isinstance(numeric_sums, dict):
+            continue
+        for key in keys:
+            if key in numeric_sums and numeric_sums[key] not in (None, ""):
+                total += _as_float(numeric_sums[key])
+                found = True
+                break
+    return total if found else None
+
+
+def _aggregate_numeric_count(records: list[dict], *keys: str) -> int:
+    count = 0
+    for record in records:
+        totals = _proxy_call_totals(record)
+        numeric_counts = totals.get("numeric_counts") if isinstance(totals, dict) else {}
+        if not isinstance(numeric_counts, dict):
+            continue
+        for key in keys:
+            if key in numeric_counts and numeric_counts[key] not in (None, ""):
+                count += int(_as_float(numeric_counts[key], 0.0))
+                break
+    return count
+
+
 def _proxy_latencies_for_fault(
     records: list[dict],
     fault_names: set[str],
@@ -1370,6 +1438,14 @@ def _proxy_latencies_for_fault(
 ) -> list[float]:
     latencies: list[float] = []
     for record in records:
+        totals = _proxy_call_totals(record)
+        if http_status is not None and isinstance(totals.get("http_status_counts"), dict):
+            count = int(_as_float(totals["http_status_counts"].get(str(http_status)), 0.0))
+            if count and isinstance(totals.get("numeric_sums"), dict):
+                summed = totals["numeric_sums"].get("latency_s")
+                if summed not in (None, ""):
+                    latencies.append(_as_float(summed))
+                    continue
         for call in _proxy_calls(record):
             status_matches = (
                 http_status is None
@@ -1391,6 +1467,12 @@ def _fault_evidence_numbers(
     fault_names: set[str] | None = None,
 ) -> list[float]:
     values: list[float] = []
+    aggregate_total = _aggregate_numeric_sum(records, *keys)
+    aggregate_count = _aggregate_numeric_count(records, *keys)
+    if aggregate_total is not None and aggregate_count > 0:
+        # Return one value per observed evidence item so callers that divide by
+        # len(samples) still report per-affected-call fidelity correctly.
+        return [aggregate_total / aggregate_count for _ in range(aggregate_count)]
     names = fault_names or set()
     for record in records:
         for entry in _evidence_entries(record):
@@ -2598,20 +2680,29 @@ def write_inferential_summary_csv(records: list[dict], path: str) -> None:
             ),
         ]
         for comparison_type, baseline_records, condition_records in comparisons:
-            n_pairs = _pair_count(baseline_records, condition_records)
-            unique_tasks = _task_count(baseline_records, condition_records)
+            complete_pair_count = _pair_count(baseline_records, condition_records)
+            baseline_records_scored = [r for r in baseline_records if _is_success_scored(r)]
+            condition_records_scored = [r for r in condition_records if _is_success_scored(r)]
+            scored_success_pairs, scored_missing = exact_pair_matches(
+                baseline_records_scored,
+                condition_records_scored,
+                metric="success",
+            )
+            n_pairs = len(scored_success_pairs)
+            unique_tasks = _task_count(
+                [base for base, _cond in scored_success_pairs],
+                [cond for _base, cond in scored_success_pairs],
+            )
             inference_status = _inference_status(
                 unique_tasks=unique_tasks,
                 valid_pairs=n_pairs,
             )
-            if not baseline_records or not condition_records:
+            if complete_pair_count > 0 and n_pairs == 0:
+                inference_status = "no_eligible_scored_pairs"
+            elif not baseline_records or not condition_records:
                 inference_status = "insufficient_pairs"
             if inference_status != "ok":
-                metric_pairs, missing = exact_pair_matches(
-                    baseline_records,
-                    condition_records,
-                    metric="success",
-                )
+                metric_pairs = scored_success_pairs
                 effect = _mean([
                     float(cond.get("success", 0.0)) - float(base.get("success", 0.0))
                     for base, cond in metric_pairs
@@ -2630,11 +2721,13 @@ def write_inferential_summary_csv(records: list[dict], path: str) -> None:
                     inference_status=inference_status,
                     n_pairs=len(metric_pairs),
                     n_tasks=unique_tasks,
-                    missing_pairs=missing,
+                    missing_pairs=max(scored_missing, complete_pair_count - n_pairs),
                     effect=effect,
                 ))
                 continue
 
+            baseline_records = baseline_records_scored
+            condition_records = condition_records_scored
             mcn = mcnemar_exact(baseline_records, condition_records, metric="success")
             boot = task_clustered_bootstrap_ci(baseline_records, condition_records, metric="success")
             rows.append(_metadata_row(

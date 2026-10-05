@@ -98,6 +98,9 @@ def _make_exact_triplet_records():
         "cj_commit": "abc123",
         "docker_image_digest": "sha256:test",
         "framework_versions": {"python": "3.12"},
+        "scorer_status": "ok",
+        "tests_total": 3,
+        "tests_passed": 3,
     }
     direct = {
         **common,
@@ -169,6 +172,7 @@ def _make_exact_triplet_records():
         "fault_parameters": {"delay_s": 3.0},
         "validity": "valid",
         "success": 0.0,
+        "tests_passed": 0,
         "duration_s": 15.0,
         "llm_calls": 1,
         "tool_calls": 1,
@@ -314,7 +318,7 @@ class TestCSVOutput:
         control = next(r for r in rows if r["condition"] == "cj_control")
         fault = next(r for r in rows if r["condition"] == "cj_fault")
         assert control["executor_success_verdict"] == "success"
-        assert control["scorer_success_verdict"] == "not_available"
+        assert control["scorer_success_verdict"] == "success"
         assert control["task_success_verdict"] == "success"
         assert control["agent_reported_llm_calls"] == "1"
         assert control["proxy_intercepted_calls"] == "1"
@@ -505,6 +509,35 @@ class TestCSVOutput:
         assert float(row["affected_call_fraction"]) == pytest.approx(1.0)
         assert float(row["affected_call_precision"]) == pytest.approx(1.0)
 
+    def test_fault_fidelity_uses_full_proxy_aggregates_not_preview_caps(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[2]["lifecycle"]["proxy_call_count"] = 22
+        records[2]["lifecycle"]["proxy_calls_affected_count"] = 22
+        records[2]["lifecycle"]["evidence"]["fault_evidence"] = []
+        records[2]["lifecycle"]["evidence"]["proxy_calls"] = []
+        records[2]["lifecycle"]["evidence"]["proxy_call_totals"] = {
+            "intercepted_calls": 22,
+            "affected_calls": 22,
+            "numeric_sums": {
+                "observed_injected_delay_s": 66.15,
+                "configured_delay_s": 66.0,
+            },
+            "numeric_counts": {
+                "observed_injected_delay_s": 22,
+                "configured_delay_s": 22,
+            },
+        }
+
+        path = str(tmp_path / "fault_fidelity_summary.csv")
+        write_fault_fidelity_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+
+        assert int(row["intercepted_calls"]) == 22
+        assert int(row["affected_calls"]) == 22
+        assert float(row["observed_added_latency_s"]) == pytest.approx(66.15)
+        assert float(row["expected_added_latency_s"]) == pytest.approx(66.0)
+
     def test_fault_fidelity_latency_missing_proxy_sleep_evidence_has_no_runtime_fallback(self, tmp_path):
         records = _make_exact_triplet_records()
         records[2]["duration_s"] = 100.0
@@ -661,6 +694,24 @@ class TestCSVOutput:
             "direct_vs_fault",
         }
         assert all(r["inference_status"] == "ok" for r in success_rows)
+
+    def test_inferential_summary_suppresses_unscored_success_tests(self, tmp_path):
+        path = str(tmp_path / "inferential_summary.csv")
+        records = _make_triplets(5, control_successes=5, fault_successes=0)
+        for record in records:
+            record["scorer_status"] = "error"
+            record["tests_total"] = 0
+            record["scorer_error"] = "EVALPLUS ERROR: [Errno 28] No space left on device"
+
+        write_inferential_summary_csv(records, path)
+        with open(path) as f:
+            rows = list(csv.DictReader(f))
+
+        success_rows = [r for r in rows if r["metric"] == "success"]
+        assert success_rows
+        assert all(r["test"] == "not_run" for r in success_rows)
+        assert all(r["inference_status"] == "no_eligible_scored_pairs" for r in success_rows)
+        assert all(r["p_value"] == "" for r in success_rows)
 
     def test_inferential_control_vs_fault_effect_uses_cj_control(self, tmp_path):
         path = str(tmp_path / "inferential_summary.csv")

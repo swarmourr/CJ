@@ -28,7 +28,8 @@ _SECRET_EXACT_KEYS = {
 _SAFE_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _RUNTIME_WRITABLE_ENV = {
     "HOME": "/tmp/cj-home",
-    "TMPDIR": "/tmp",
+    "TMPDIR": "/cj/output/tmp",
+    "CJ_EVAL_OUTPUT_DIR": "/cj/output",
     "XDG_CACHE_HOME": "/tmp/cj-cache",
     "XDG_CONFIG_HOME": "/tmp/cj-config",
     "XDG_DATA_HOME": "/tmp/cj-data",
@@ -73,6 +74,7 @@ class DockerExecutionConfig:
     user: str = "1000:1000"
     network: str = "bridge"
     read_only_root: bool = True
+    tmpfs_size: str = "1g"
     capabilities: list[str] = field(default_factory=list)
     workdir: str = "/cj/work"
     entrypoint_module: str = "evaluation.container_entrypoint"
@@ -88,6 +90,7 @@ class DockerExecutionConfig:
             "user": self.user,
             "network": self.network,
             "read_only_root": self.read_only_root,
+            "tmpfs_size": self.tmpfs_size,
             "capabilities": sorted(self.capabilities),
             "add_host_gateway": self.add_host_gateway,
         }
@@ -427,7 +430,7 @@ class DockerAgentRunner:
             "--mount",
             f"type=bind,source={output_dir},target=/cj/output",
             "--tmpfs",
-            "/tmp:rw,noexec,nosuid,size=64m",
+            f"/tmp:rw,nosuid,size={self.config.tmpfs_size}",
         ]
         if self.config.add_host_gateway:
             cmd += ["--add-host", "host.docker.internal:host-gateway"]

@@ -226,9 +226,13 @@ def test_docker_runner_create_command_sets_writable_runtime_dirs(tmp_path):
         if item == "--env"
     }
     assert "HOME=/tmp/cj-home" in env_values
+    assert "TMPDIR=/cj/output/tmp" in env_values
+    assert "CJ_EVAL_OUTPUT_DIR=/cj/output" in env_values
     assert "XDG_CACHE_HOME=/tmp/cj-cache" in env_values
     assert "CREWAI_STORAGE_DIR=/tmp/cj-crewai" in env_values
     assert "LITELLM_CACHE_DIR=/tmp/cj-litellm" in env_values
+    tmpfs_index = cmd.index("--tmpfs")
+    assert cmd[tmpfs_index + 1] == "/tmp:rw,nosuid,size=1g"
 
 
 def test_docker_runner_image_digest_uses_inspect_format_before_image(monkeypatch):
@@ -919,6 +923,8 @@ def test_container_entrypoint_dry_run_individual(tmp_path, monkeypatch):
     assert result["scorer_status"] == "ok"
     assert result["success"] == 1.0
     assert result["tests_total"] == 1
+    assert result["scoring_preflight"]["filesystem"][str(tmp_path)]["write_probe_ok"] is True
+    assert result["scoring_preflight"]["strict_evalplus"]["status"] == "skipped"
     assert os.environ["CJ_EVAL_BASE_URL"] == "http://example.invalid/v1"
     assert (tmp_path / "execution_trace.json").exists()
 

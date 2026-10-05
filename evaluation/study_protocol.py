@@ -947,6 +947,7 @@ def _merge_control_lifecycle(
     try:
         calls = db.get_llm_calls(session_id, phase="control")
         lifecycle["proxy_call_count"] = len(calls)
+        lifecycle["proxy_calls_affected_count"] = 0
         lifecycle["triggered"] = False
         lifecycle["manifested"] = False
         lifecycle["reverted"] = True
@@ -970,6 +971,11 @@ def _merge_control_lifecycle(
                 _proxy_call_evidence(row)
                 for row in calls[:20]
             ],
+            "proxy_call_totals": {
+                "intercepted_calls": len(calls),
+                "affected_calls": 0,
+                "http_status_counts": _proxy_status_counts(calls),
+            },
         }
         lifecycle["details"] = (
             "CJ pass-through proxy captured "
@@ -995,7 +1001,9 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
         calls = runner.db.get_llm_calls(session_id, phase="fault")
         export = runner.db.export_session(session_id)
         faults = export.get("faults", [])
+        aggregate = _proxy_fault_aggregate(calls)
         lifecycle["proxy_call_count"] = len(calls)
+        lifecycle["proxy_calls_affected_count"] = aggregate["affected_calls"]
         lifecycle["triggered"] = any(_proxy_row_triggered_fault(row) for row in calls)
         lifecycle["manifested"] = any(_proxy_row_manifested_fault(row) for row in calls)
         lifecycle["evidence"] = {
@@ -1025,6 +1033,7 @@ def _merge_runner_lifecycle(lifecycle: dict[str, Any], runner: ChaosRunner) -> N
                 _proxy_call_evidence(row)
                 for row in calls[:20]
             ],
+            "proxy_call_totals": aggregate,
         }
         if faults:
             lifecycle["activated"] = all(bool(f.get("verified_active")) for f in faults)
@@ -1050,8 +1059,18 @@ def _proxy_lifecycle_entries(row: dict[str, Any]) -> list[dict[str, Any]]:
     return [entry for entry in parsed if isinstance(entry, dict)]
 
 
+def _truthy_proxy_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "none", "null"}
+    return bool(value)
+
+
 def _proxy_row_triggered_fault(row: dict[str, Any]) -> bool:
-    if bool(row.get("fault_triggered")):
+    if _truthy_proxy_value(row.get("fault_triggered")):
         return True
     triggered = row.get("triggered_faults_json") or "[]"
     try:
@@ -1069,8 +1088,82 @@ def _proxy_row_manifested_fault(row: dict[str, Any]) -> bool:
     if any(entry.get("manifested") is True for entry in _proxy_lifecycle_entries(row)):
         return True
     return _proxy_row_triggered_fault(row) and (
-        bool(row.get("was_blocked")) or bool(row.get("was_modified"))
+        _truthy_proxy_value(row.get("was_blocked"))
+        or _truthy_proxy_value(row.get("was_modified"))
     )
+
+
+def _proxy_status_counts(calls: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in calls:
+        status = row.get("http_status")
+        if status in (None, ""):
+            continue
+        key = str(status)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _proxy_fault_aggregate(calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate full CJ proxy evidence while keeping row previews capped."""
+    numeric_sums: dict[str, float] = {}
+    numeric_counts: dict[str, int] = {}
+    mode_counts: dict[str, int] = {}
+    triggered_fault_counts: dict[str, int] = {}
+
+    for row in calls:
+        for row_key in ("latency_s",):
+            value = row.get(row_key)
+            try:
+                if value in (None, ""):
+                    continue
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            numeric_sums[row_key] = numeric_sums.get(row_key, 0.0) + numeric
+            numeric_counts[row_key] = numeric_counts.get(row_key, 0) + 1
+
+        triggered = row.get("triggered_faults_json") or "[]"
+        try:
+            triggered_list = json.loads(triggered)
+        except Exception:
+            triggered_list = []
+        if isinstance(triggered_list, list):
+            for item in triggered_list:
+                key = str(item)
+                triggered_fault_counts[key] = triggered_fault_counts.get(key, 0) + 1
+
+        for entry in _proxy_lifecycle_entries(row):
+            evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else {}
+            fault_type = str(entry.get("fault_type") or "")
+            if fault_type:
+                triggered_fault_counts.setdefault(fault_type, 0)
+            mode = evidence.get("mode")
+            if mode not in (None, ""):
+                key = str(mode)
+                mode_counts[key] = mode_counts.get(key, 0) + 1
+            for key, value in evidence.items():
+                if isinstance(value, bool):
+                    continue
+                try:
+                    if value in (None, ""):
+                        continue
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    continue
+                numeric_sums[key] = numeric_sums.get(key, 0.0) + numeric
+                numeric_counts[key] = numeric_counts.get(key, 0) + 1
+
+    return {
+        "intercepted_calls": len(calls),
+        "affected_calls": sum(1 for row in calls if _proxy_row_triggered_fault(row)),
+        "manifested_calls": sum(1 for row in calls if _proxy_row_manifested_fault(row)),
+        "http_status_counts": _proxy_status_counts(calls),
+        "triggered_fault_counts": triggered_fault_counts,
+        "mode_counts": mode_counts,
+        "numeric_sums": numeric_sums,
+        "numeric_counts": numeric_counts,
+    }
 
 
 def _proxy_call_evidence(row: dict[str, Any]) -> dict[str, Any]:

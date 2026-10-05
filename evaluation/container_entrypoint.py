@@ -7,6 +7,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -54,9 +55,10 @@ def _apply_llm_env_aliases() -> None:
 
 def _prepare_writable_runtime_dirs() -> None:
     """Create writable cache/home directories before framework SDK startup."""
+    output_dir = os.environ.get("CJ_EVAL_OUTPUT_DIR", "/cj/output")
     defaults = {
         "HOME": "/tmp/cj-home",
-        "TMPDIR": "/tmp",
+        "TMPDIR": str(Path(output_dir) / "tmp"),
         "XDG_CACHE_HOME": "/tmp/cj-cache",
         "XDG_CONFIG_HOME": "/tmp/cj-config",
         "XDG_DATA_HOME": "/tmp/cj-data",
@@ -69,6 +71,85 @@ def _prepare_writable_runtime_dirs() -> None:
     for key in defaults:
         path = Path(os.environ[key])
         path.mkdir(parents=True, exist_ok=True)
+
+
+def _filesystem_probe(paths: list[str]) -> dict[str, Any]:
+    """Return free-space/inode evidence and write-probe status for paths."""
+    probes: dict[str, Any] = {}
+    for raw_path in paths:
+        path = Path(raw_path)
+        path.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(path)
+        stat = os.statvfs(path)
+        probe_path = path / ".cj_eval_write_probe"
+        write_ok = False
+        write_error = ""
+        try:
+            probe_path.write_text("ok\n", encoding="utf-8")
+            write_ok = probe_path.read_text(encoding="utf-8") == "ok\n"
+        except Exception as exc:  # noqa: BLE001
+            write_error = repr(exc)
+        finally:
+            try:
+                probe_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        probes[str(path)] = {
+            "total_bytes": usage.total,
+            "free_bytes": usage.free,
+            "used_bytes": usage.used,
+            "free_inodes": stat.f_favail,
+            "total_inodes": stat.f_files,
+            "write_probe_ok": write_ok,
+            "write_probe_error": write_error,
+        }
+    return probes
+
+
+def _task_from_request(task_data: dict[str, Any]) -> BenchmarkTask:
+    return BenchmarkTask(
+        task_id=str(task_data.get("task_id", "")),
+        benchmark=str(task_data.get("benchmark", "")),
+        prompt=str(task_data.get("prompt") or task_data.get("input") or ""),
+        entry_point=str(task_data.get("entry_point", "")),
+        test_code=str(task_data.get("test_code", "")),
+        canonical_solution=str(task_data.get("canonical_solution", "")),
+        metadata=dict(task_data.get("metadata") or {}),
+    )
+
+
+def _canonical_evalplus_solution(task: BenchmarkTask) -> str:
+    """Build a full official EvalPlus solution for preflight scoring."""
+    canonical = task.canonical_solution or ""
+    prompt = task.prompt or ""
+    if canonical.lstrip().startswith(("def ", "class ", "import ", "from ")):
+        return canonical
+    return f"{prompt.rstrip()}\n{canonical}"
+
+
+def _strict_evalplus_preflight(task_data: dict[str, Any], timeout_s: float) -> dict[str, Any]:
+    """Execute one strict EvalPlus scoring call before paid model work."""
+    metadata = task_data.get("metadata") if isinstance(task_data.get("metadata"), dict) else {}
+    if metadata.get("source") != "evalplus":
+        return {"required": False, "status": "skipped", "reason": "task is not EvalPlus-sourced"}
+    task = _task_from_request(task_data)
+    if not task.canonical_solution:
+        raise RuntimeError("strict EvalPlus preflight cannot run: missing canonical_solution")
+    ok, passed, total, output = score_task(
+        task,
+        _canonical_evalplus_solution(task),
+        timeout_s=timeout_s,
+    )
+    preflight = {
+        "required": True,
+        "status": "ok" if ok and total > 0 else "error",
+        "tests_passed": passed,
+        "tests_total": total,
+        "output_preview": output[:1000],
+    }
+    if not ok or total <= 0:
+        raise RuntimeError(f"strict EvalPlus preflight failed: {preflight}")
+    return preflight
 
 
 def _package_versions() -> dict[str, str]:
@@ -115,15 +196,7 @@ def _score_result(task_data: dict[str, Any], result: AgentRunResult, timeout_s: 
             "scorer_status": "not_available",
             "scorer_error": "request did not include test_code or EvalPlus metadata",
         }
-    task = BenchmarkTask(
-        task_id=str(task_data.get("task_id", "")),
-        benchmark=str(task_data.get("benchmark", "")),
-        prompt=str(task_data.get("prompt") or task_data.get("input") or ""),
-        entry_point=str(task_data.get("entry_point", "")),
-        test_code=str(task_data.get("test_code", "")),
-        canonical_solution=str(task_data.get("canonical_solution", "")),
-        metadata=dict(task_data.get("metadata") or {}),
-    )
+    task = _task_from_request(task_data)
     ok, passed, total, output = score_task(task, result.generated_code, timeout_s=timeout_s)
     return {
         "scorer_status": "ok" if total > 0 else "error",
@@ -176,6 +249,16 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
     max_turns = int(execution_config.get("max_turns", 10))
     dry_run = bool(execution_config.get("dry_run", False))
     score_timeout_s = float(execution_config.get("score_timeout_s", 10.0))
+    output_dir = os.environ.get("CJ_EVAL_OUTPUT_DIR", "/cj/output")
+    preflight = {
+        "filesystem": _filesystem_probe(["/tmp", output_dir, os.environ.get("TMPDIR", "/tmp")]),
+        "strict_evalplus": {"required": False, "status": "skipped"},
+    }
+    if bool(execution_config.get("strict_scoring_preflight", True)):
+        preflight["strict_evalplus"] = _strict_evalplus_preflight(
+            task,
+            timeout_s=score_timeout_s,
+        )
 
     t0 = time.time()
     if agent_level == "multi_agent":
@@ -205,6 +288,7 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
     payload.update({
         "executor_status": "ok",
         "executor_duration_s": time.time() - t0,
+        "scoring_preflight": preflight,
         "framework_versions": _package_versions(),
         "python_version": platform.python_version(),
         "agent_system": req["agent_system"],
@@ -230,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("CJ_EVAL_OUTPUT_DIR", str(output_path.parent))
 
     try:
         _prepare_writable_runtime_dirs()
