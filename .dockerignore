@@ -10,6 +10,10 @@ __pycache__/
 venv/
 env/
 results/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
 *.pyc
 *.pyo
 *.log

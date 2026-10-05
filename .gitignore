@@ -53,6 +53,10 @@ id_ed25519
 
 # Experiment results (generated data, not source)
 results/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
 FAULTS.md
 SCENARIOS.md
 scenarios/
