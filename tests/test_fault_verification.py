@@ -94,6 +94,16 @@ class TestNetworkLossVerification:
 # ── Resource faults ───────────────────────────────────────────────────────────
 
 class TestCPUStressVerification:
+    def test_start_runs_from_writable_tmp(self):
+        from chaos_jungle.faults.resources import CPUStress
+        target = MockTarget()
+        fault = CPUStress(cores=1, duration_s=30)
+
+        fault.start(target)
+
+        assert target.commands
+        assert target.commands[0][0].startswith("cd /tmp && nohup stress-ng --cpu")
+
     def test_verify_active_returns_true_when_process_running(self):
         from chaos_jungle.faults.resources import CPUStress
         target = MockTarget(responses={
@@ -141,6 +151,30 @@ class TestCPUStressVerification:
 
         result = fault.verify_recovered(target)
         assert result.verified is False
+
+
+class TestMemoryStressVerification:
+    def test_start_runs_from_writable_tmp(self):
+        from chaos_jungle.faults.resources import MemoryStress
+        target = MockTarget()
+        fault = MemoryStress(mb=64, duration_s=30)
+
+        fault.start(target)
+
+        assert target.commands
+        assert target.commands[0][0].startswith("cd /tmp && nohup stress-ng --vm")
+
+
+class TestIOStressVerification:
+    def test_start_runs_from_configured_writable_path(self):
+        from chaos_jungle.faults.resources import IOStress
+        target = MockTarget()
+        fault = IOStress(workers=1, duration_s=30, path="/tmp")
+
+        fault.start(target)
+
+        assert target.commands
+        assert target.commands[0][0].startswith("cd /tmp && nohup stress-ng --hdd")
 
 
 class TestDiskFullVerification:

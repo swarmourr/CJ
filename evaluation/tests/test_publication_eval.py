@@ -20,6 +20,7 @@ from evaluation.analysis.statistics import (
 )
 from evaluation.container_entrypoint import main as container_main
 from evaluation.costing import estimate_condition_count, estimate_cost_usd, pilot_power_recommendation
+from evaluation import infrastructure_campaign, infrastructure_orchestrator
 from evaluation.docker_runner import (
     DockerAgentRunResult,
     DockerAgentRunner,
@@ -32,7 +33,12 @@ from evaluation.infrastructure_orchestrator import run_container_scoped_fault
 from evaluation.benchmarks.base import BenchmarkTask
 from evaluation.multi_agent import LINEAR, MultiAgentWorkflow, TraceEvent, validate_event_schema
 from evaluation.output import generate_all_outputs
-from evaluation.run import _publication_fault_names, build_parser, run_publication_study
+from evaluation.run import (
+    _ensure_evalplus_available_for_subset,
+    _publication_fault_names,
+    build_parser,
+    run_publication_study,
+)
 from evaluation.schema import OUTPUT_SCHEMA_VERSION
 from evaluation.study_protocol import (
     PublicationStudyOrchestrator,
@@ -209,6 +215,20 @@ def test_docker_runner_create_command_rejects_secret_env(tmp_path, monkeypatch):
     runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
     with pytest.raises(ValueError):
         runner._create_command("name", tmp_path / "in", tmp_path / "out", {"OPENAI_API_KEY": "secret"})
+
+
+def test_docker_runner_create_command_sets_writable_runtime_dirs(tmp_path):
+    runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
+    cmd = runner._create_command("name", tmp_path / "in", tmp_path / "out", {})
+    env_values = {
+        cmd[index + 1]
+        for index, item in enumerate(cmd)
+        if item == "--env"
+    }
+    assert "HOME=/tmp/cj-home" in env_values
+    assert "XDG_CACHE_HOME=/tmp/cj-cache" in env_values
+    assert "CREWAI_STORAGE_DIR=/tmp/cj-crewai" in env_values
+    assert "LITELLM_CACHE_DIR=/tmp/cj-litellm" in env_values
 
 
 def test_docker_runner_image_digest_uses_inspect_format_before_image(monkeypatch):
@@ -581,6 +601,31 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "--fault", "llm_latency,llm_unavailable",
     ])
     assert _publication_fault_names(list_args) == ["llm_latency", "llm_unavailable"]
+
+
+def test_evalplus_preflight_is_skipped_for_smoke(monkeypatch):
+    def fail_if_called(name):
+        raise AssertionError("smoke subset must not inspect evalplus")
+
+    monkeypatch.setattr("importlib.util.find_spec", fail_if_called)
+
+    _ensure_evalplus_available_for_subset("smoke", 5)
+
+
+def test_evalplus_preflight_reports_host_install_command(monkeypatch):
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
+
+    with pytest.raises(SystemExit) as exc:
+        _ensure_evalplus_available_for_subset(
+            "development",
+            6,
+            python_executable="/opt/homebrew/bin/python3.12",
+        )
+
+    message = str(exc.value)
+    assert "host Python" in message
+    assert "/opt/homebrew/bin/python3.12 -m pip install -e '.[evaluation]'" in message
+    assert "--benchmark-subset smoke" in message
 
 
 def test_generated_false_response_defaults_to_current_model_endpoint(monkeypatch):
@@ -1321,3 +1366,64 @@ def test_container_scoped_fault_orchestration_sequence(monkeypatch):
         ("verify_recovered", "abc123"),
         ("cleanup", "abc123"),
     ]
+
+
+def test_infrastructure_record_uses_dict_source_provenance():
+    result = DockerAgentRunResult(
+        container_id="abc123",
+        exit_code=0,
+        timed_out=False,
+        duration_s=1.0,
+        stdout="",
+        stderr="",
+        result={
+            "run_id": "run-1",
+            "success": 1.0,
+            "duration_s": 1.0,
+            "framework": "autogen-real",
+            "termination_reason": "completed",
+        },
+        image="cj-eval-agent:test",
+        image_digest="sha256:test",
+        resource_limits={"cpus": 1, "memory": "2g"},
+        artifact_paths={},
+    )
+    record = infrastructure_campaign._record_from_result(
+        result=result,
+        condition="cj_fault",
+        lifecycle={"verdict": "valid"},
+        validity="valid",
+        fault_type="cpu_pressure",
+        activation_evidence={"activated": True},
+        recovery_evidence={"recovered": True},
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        agent_system="autogen-real",
+        agent_level="individual",
+        topology="single",
+        task={
+            "benchmark": "toy",
+            "task_id": "toy/solution",
+            "metadata": {"complexity_proxy": "small"},
+        },
+        seed=7,
+        model_config={"name": "test-model"},
+        execution_config={"dry_run": True},
+        fault_name="cpu_pressure",
+        fault_parameters={"duration_s": 30},
+    )
+    assert record["cj_source_version"]
+    assert record["cj_source_state"] in {"clean", "dirty", "unknown"}
+    assert "cj_source_dirty" in record
+
+
+def test_infrastructure_parses_ping_measurements():
+    loss = infrastructure_orchestrator._parse_ping_loss(
+        "10 packets transmitted, 8 received, 20% packet loss, time 9008ms"
+    )
+    rtt = infrastructure_orchestrator._parse_ping_avg_ms(
+        "rtt min/avg/max/mdev = 100.123/123.456/150.789/10.000 ms"
+    )
+    assert loss == 0.2
+    assert rtt == 123.456

@@ -34,6 +34,7 @@ The API key must never appear in YAML; ``model.api_key_env`` names the env var.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import sys
 
@@ -139,6 +140,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--tasks", type=int, default=5,
                    help="Number of tasks (smoke subset)")
+    p.add_argument(
+        "--benchmark-subset",
+        choices=["auto", "smoke", "development", "full"],
+        default="auto",
+        help=(
+            "Task source for publication runs. auto uses bundled smoke for "
+            "tasks<=5 and EvalPlus development otherwise."
+        ),
+    )
+    p.add_argument(
+        "--complexity-balanced",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Select tasks round-robin across small/medium/large complexity strata when possible.",
+    )
     p.add_argument("--repeats", type=int, default=1,
                    help="Repetitions per task")
     p.add_argument("--seed", type=int, default=42,
@@ -415,18 +431,119 @@ def _default_env_file() -> str | None:
     return path if os.path.exists(path) else None
 
 
-def _load_task_subset(benchmark_name: str, tasks: int, seed: int):
+def _load_task_subset(
+    benchmark_name: str,
+    tasks: int,
+    seed: int,
+    *,
+    benchmark_subset: str = "auto",
+    complexity_balanced: bool = True,
+):
     from evaluation.benchmarks import REGISTRY as BENCH_REGISTRY
 
     if tasks <= 0:
         raise ValueError("--tasks must be positive")
-    if tasks <= 5:
+    subset = benchmark_subset
+    if subset == "auto":
+        subset = "smoke" if tasks <= 5 else "development"
+    _ensure_evalplus_available_for_subset(subset, tasks)
+    if subset == "smoke":
         loader = BENCH_REGISTRY[benchmark_name](subset="smoke")
-        loader.smoke_n = tasks
-    else:
+        loader.smoke_n = max(tasks, getattr(loader, "smoke_n", tasks))
+        candidates = loader.load(seed=seed)
+    elif subset == "development":
         loader = BENCH_REGISTRY[benchmark_name](subset="development")
-        loader.development_n = tasks
-    return loader.load(seed=seed)
+        loader.development_n = max(tasks, getattr(loader, "development_n", tasks))
+        candidates = loader.load(seed=seed)
+    elif subset == "full":
+        loader = BENCH_REGISTRY[benchmark_name](subset="full")
+        candidates = loader.load(seed=seed)
+    else:
+        raise ValueError(f"unsupported benchmark subset: {benchmark_subset!r}")
+    if complexity_balanced:
+        return _select_complexity_balanced(candidates, tasks, seed)
+    return sorted(candidates[:tasks], key=lambda t: t.task_id)
+
+
+def _select_complexity_balanced(tasks: list, n: int, seed: int):
+    import random
+
+    rng = random.Random(seed)
+    groups = {"small": [], "medium": [], "large": []}
+    extras = []
+    for task in tasks:
+        label = _task_complexity_label(task)
+        if label in groups:
+            groups[label].append(task)
+        else:
+            extras.append(task)
+    for bucket in [*groups.values(), extras]:
+        rng.shuffle(bucket)
+    selected = []
+    seen = set()
+    while len(selected) < n and any(groups.values()):
+        for label in ("small", "medium", "large"):
+            if len(selected) >= n:
+                break
+            bucket = groups[label]
+            if not bucket:
+                continue
+            task = bucket.pop(0)
+            selected.append(task)
+            seen.add(task.task_id)
+    if len(selected) < n:
+        remaining = [
+            task for task in [*extras, *tasks]
+            if task.task_id not in seen
+        ]
+        rng.shuffle(remaining)
+        selected.extend(remaining[: n - len(selected)])
+    return sorted(selected[:n], key=lambda t: t.task_id)
+
+
+def _ensure_evalplus_available_for_subset(
+    resolved_subset: str,
+    tasks: int,
+    *,
+    python_executable: str | None = None,
+) -> None:
+    """Fail early when the host Python cannot load official EvalPlus tasks.
+
+    The publication orchestrator selects benchmark tasks on the host before it
+    starts Docker.  That means official EvalPlus subsets need ``evalplus`` in
+    the host Python environment as well as inside the evaluation image.
+    """
+    if resolved_subset not in {"development", "full"}:
+        return
+    if importlib.util.find_spec("evalplus") is not None:
+        return
+
+    py = python_executable or sys.executable
+    raise SystemExit(
+        "Official EvalPlus task loading requires the host Python to have "
+        "evalplus installed before Docker starts.\n\n"
+        "Run this from the CJ repository root:\n"
+        f"  {py} -m pip install -e '.[evaluation]'\n\n"
+        "Minimal alternative:\n"
+        f"  {py} -m pip install evalplus==0.3.1 python-dotenv\n\n"
+        "Do not switch to --benchmark-subset smoke for paper/pilot results; "
+        "smoke is only a bundled diagnostic subset."
+    )
+
+
+def _task_complexity_label(task) -> str:
+    metadata = getattr(task, "metadata", {}) or {}
+    if metadata.get("complexity_proxy"):
+        return str(metadata["complexity_proxy"])
+    from evaluation.task_complexity import classify_task_complexity
+
+    return classify_task_complexity(
+        benchmark=task.benchmark,
+        task_id=task.task_id,
+        prompt=task.prompt,
+        test_code=task.test_code,
+        canonical_solution=task.canonical_solution,
+    ).complexity_proxy
 
 
 PUBLICATION_FAULT_SUITES: dict[str, list[str]] = {
@@ -508,7 +625,13 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
     if model_cfg.get("name"):
         os.environ["CJ_EVAL_MODEL"] = str(model_cfg["name"])
 
-    task_list = _load_task_subset(args.benchmark, args.tasks, args.seed)
+    task_list = _load_task_subset(
+        args.benchmark,
+        args.tasks,
+        args.seed,
+        benchmark_subset=args.benchmark_subset,
+        complexity_balanced=args.complexity_balanced,
+    )
     env_file = args.env_file if args.env_file is not None else _default_env_file()
     if env_file:
         env_file = os.path.abspath(env_file)
@@ -541,7 +664,10 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
     print(f"  system    : {args.system}")
     print(f"  level     : {args.agent_level}")
     print(f"  topology  : {args.topology}")
-    print(f"  benchmark : {args.benchmark} ({len(task_list)} tasks)")
+    print(
+        f"  benchmark : {args.benchmark} "
+        f"({len(task_list)} tasks, subset={args.benchmark_subset})"
+    )
     print(f"  faults    : {', '.join(fault_names)}")
     print(f"  results   : {args.results_dir}")
 

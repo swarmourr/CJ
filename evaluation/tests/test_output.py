@@ -471,6 +471,20 @@ class TestCSVOutput:
         assert row["control_eligible_pairs"] == "0"
         assert row["fault_specific_degradation"] == ""
         assert row["evaluation_scope"] == "fault_injector_validation"
+        assert row["cj_overhead"] == ""
+
+    def test_cj_overhead_summary_suppresses_failed_direct_control_pairs(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[0]["success"] = 0.0
+        records[1]["success"] = 0.0
+        path = str(tmp_path / "cj_overhead_summary.csv")
+        write_cj_overhead_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+        assert row["n_pairs"] == "1"
+        assert row["eligible_pairs"] == "0"
+        assert row["inference_status"] == "no_successful_direct_control_pairs"
+        assert row["median_duration_overhead_ratio"] == ""
 
     def test_fault_fidelity_latency_uses_proxy_sleep_evidence_not_runtime_delta(self, tmp_path):
         records = _make_exact_triplet_records()
@@ -504,6 +518,15 @@ class TestCSVOutput:
         assert row["observed_added_latency_s"] == ""
         assert row["latency_error_s"] == ""
         assert row["latency_fidelity_source"] == "missing_proxy_sleep_evidence"
+
+    def test_fault_fidelity_includes_proxy_http_statuses(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[2]["lifecycle"]["evidence"]["proxy_calls"][0]["http_status"] = 404
+        path = str(tmp_path / "fault_fidelity_summary.csv")
+        write_fault_fidelity_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+        assert row["observed_http_statuses"] == '["404"]'
 
     def test_cj_evidence_csv_preserves_raw_cj_output(self, tmp_path):
         path = str(tmp_path / "cj_evidence.csv")
@@ -715,7 +738,12 @@ class TestCSVOutput:
         }
         infra["activation_evidence"] = {
             "verified": True,
-            "observed": {"cpu_percent": 92.0},
+            "observed": {
+                "cpu_percent": 92.0,
+                "latency_ms": 101.5,
+                "disk_available_bytes": 0,
+                "disk_enospc_verified": True,
+            },
         }
         infra["recovery_evidence"] = {"verified": True, "observed": {"cpu_percent": 3.0}}
         path = str(tmp_path / "infrastructure_summary.csv")
@@ -727,6 +755,8 @@ class TestCSVOutput:
         assert rows[0]["evidence_source"] == "docker_target"
         assert rows[0]["observed_cpu"] == "92.0"
         assert rows[0]["cpu_limit"] == "1.0"
+        assert rows[0]["observed_latency_ms"] == "101.5"
+        assert rows[0]["disk_enospc_verified"] == "True"
 
     def test_distributed_summary_excludes_reference_workflow_by_default(self, tmp_path):
         records = _make_exact_triplet_records()

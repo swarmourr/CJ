@@ -109,6 +109,26 @@ class TestBenchmarkLoading:
         assert first.complexity_proxy in {"small", "medium", "large"}
         assert first.complexity_proxy_kind == "static_pre_execution_proxy"
 
+    def test_complexity_balanced_sampler_uses_available_strata(self):
+        from evaluation.run import _select_complexity_balanced
+
+        tasks = [
+            BenchmarkTask(
+                task_id=f"task/{idx}",
+                benchmark="toy",
+                prompt="p",
+                entry_point="solution",
+                test_code="assert True",
+                metadata={"complexity_proxy": label},
+            )
+            for idx, label in enumerate(["small", "small", "medium", "large", "large"])
+        ]
+
+        selected = _select_complexity_balanced(tasks, 3, seed=1)
+        labels = {task.metadata["complexity_proxy"] for task in selected}
+
+        assert labels == {"small", "medium", "large"}
+
 
 # ── Sandbox executor ──────────────────────────────────────────────────────────
 

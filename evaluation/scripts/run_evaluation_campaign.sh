@@ -52,6 +52,7 @@ Common options:
   --systems LIST              Space/comma-separated systems for pilot modes.
   --benchmark NAME            Single benchmark name.
   --benchmarks LIST           Space/comma-separated benchmarks for pilot modes.
+  --benchmark-subset NAME     auto, smoke, development, or full.
   --topology NAME             Single topology for multi mode.
   --topologies LIST           Space/comma-separated topologies for multi mode.
   --fault-suite NAME          Fault suite, for example smoke, all, llm_api.
@@ -372,6 +373,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --benchmarks)
       export CJ_EVAL_BENCHMARKS="$(normalize_list "$2")"
+      shift 2
+      ;;
+    --benchmark-subset)
+      export CJ_EVAL_BENCHMARK_SUBSET="$2"
       shift 2
       ;;
     --topology)

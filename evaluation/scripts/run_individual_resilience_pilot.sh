@@ -18,6 +18,7 @@ cj_eval_require_image "${image}"
 category="individual-resilience-pilot"
 systems="${CJ_EVAL_SYSTEMS:-autogen-real langgraph-real crewai-real}"
 benchmarks="${CJ_EVAL_BENCHMARKS:-humanevalplus mbppplus}"
+benchmark_subset="${CJ_EVAL_BENCHMARK_SUBSET:-auto}"
 fault_suites="${CJ_EVAL_FAULT_SUITES:-llm_api response tool}"
 tasks="${CJ_EVAL_TASKS:-5}"
 repeats="${CJ_EVAL_REPEATS:-1}"
@@ -54,6 +55,7 @@ for system in ${systems}; do
         --agent-level individual
         --topology single
         --benchmark "${benchmark}"
+        --benchmark-subset "${benchmark_subset}"
         --fault-suite "${suite}"
         --tasks "${tasks}"
         --repeats "${repeats}"

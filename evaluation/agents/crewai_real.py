@@ -34,7 +34,9 @@ supported for this adapter.
 
 from __future__ import annotations
 
+import inspect
 import time
+from typing import Any
 
 from evaluation.agents.base import AgentRunResult, AgentSystem
 from evaluation.model_config import ModelConfig
@@ -86,21 +88,7 @@ class CrewAIRealAgent(AgentSystem):
         final_code = ""
         exception_str = ""
 
-        # CrewAI LLM uses LiteLLM; "openai/" prefix selects the OpenAI provider.
-        # Strip /v1 from base_url for LiteLLM (it appends the path itself).
-        litellm_base_url = base_url.removesuffix("/v1") if base_url.endswith("/v1") else base_url
-
-        # seed passed for reproducible completions.
-        llm = LLM(
-            model=f"openai/{cfg.name}",
-            base_url=litellm_base_url,
-            api_key=api_key,
-            temperature=cfg.temperature,
-            max_tokens=cfg.max_tokens,
-            timeout=cfg.request_timeout_s,
-            max_retries=cfg.transport_retries,
-            seed=seed,
-        )
+        llm = LLM(**_crewai_llm_kwargs(LLM, cfg, api_key=api_key, seed=seed))
 
         # Code-execution tool using CrewAI's BaseTool protocol
         class _ExecuteCodeTool(BaseTool):
@@ -228,3 +216,43 @@ class CrewAIRealAgent(AgentSystem):
             return f"crewai {version('crewai')}"
         except Exception:
             return "crewai (version unknown)"
+
+
+def _crewai_llm_kwargs(
+    llm_cls: type,
+    cfg: ModelConfig,
+    *,
+    api_key: str,
+    seed: int,
+) -> dict[str, Any]:
+    """Return CrewAI LLM kwargs for OpenAI-compatible endpoints.
+
+    CrewAI 1.13 uses its native OpenAI provider with ``base_url``/``api_base``.
+    Newer CrewAI versions add ``custom_openai``.  In both cases the endpoint
+    must remain the OpenAI-compatible ``/v1`` root; stripping it makes the SDK
+    call ``/chat/completions`` and breaks non-OpenAI gateways.
+    """
+    base_url = cfg.current_base_url.rstrip("/")
+    parameters = set(inspect.signature(llm_cls).parameters)
+    kwargs: dict[str, Any] = {
+        "model": cfg.name,
+        "base_url": base_url,
+        "api_key": api_key,
+        "temperature": cfg.temperature,
+        "max_tokens": cfg.max_tokens,
+        "timeout": cfg.request_timeout_s,
+        "seed": seed,
+    }
+    if "api_base" in parameters:
+        kwargs["api_base"] = base_url
+    if "provider" in parameters:
+        kwargs["provider"] = "openai"
+    if "custom_openai" in parameters:
+        kwargs["custom_openai"] = True
+    if "max_retries" in parameters:
+        kwargs["max_retries"] = cfg.transport_retries
+    return {
+        key: value
+        for key, value in kwargs.items()
+        if key in parameters
+    }

@@ -41,7 +41,7 @@ INFRA_FAULTS = {
     "memory_pressure": lambda: MemoryStress(mb=64, duration_s=30),
     "network_latency": lambda: NetworkDelay("100ms", iface="eth0"),
     "packet_loss": lambda: NetworkLoss("5%", iface="eth0"),
-    "disk_full": lambda: DiskFull(path="/tmp", size_mb=32),
+    "disk_full": lambda: DiskFull(path="/tmp", size_mb=63),
 }
 
 NETWORK_FAULTS = {"network_latency", "packet_loss"}
@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         timeout_s=args.container_timeout,
         env_file=args.env_file,
         preserve_io=True,
-        capabilities=["NET_ADMIN"] if args.fault in NETWORK_FAULTS else [],
+        capabilities=["NET_ADMIN", "NET_RAW"] if args.fault in NETWORK_FAULTS else [],
     )
     runner = DockerAgentRunner(docker_cfg)
     model_cfg = {
@@ -350,9 +350,9 @@ def _record_from_result(
         "recovery_evidence": recovery_evidence,
         "experiment_definition": default_experiment_definition(fault_name).to_dict(),
         "cj_commit": _CJ_COMMIT,
-        "cj_source_version": _CJ_SOURCE_PROVENANCE.version,
-        "cj_source_state": _CJ_SOURCE_PROVENANCE.state,
-        "cj_source_dirty": _CJ_SOURCE_PROVENANCE.dirty,
+        "cj_source_version": _CJ_SOURCE_PROVENANCE.get("cj_source_version", _CJ_COMMIT),
+        "cj_source_state": _CJ_SOURCE_PROVENANCE.get("cj_source_state", "unknown"),
+        "cj_source_dirty": _CJ_SOURCE_PROVENANCE.get("cj_source_dirty"),
         "output_schema_version": OUTPUT_SCHEMA_VERSION,
     }
     metadata = task.get("metadata", {}) if isinstance(task.get("metadata"), dict) else {}

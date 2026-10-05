@@ -329,6 +329,69 @@ class TestAdapterConstruction:
         assert agent.client is None
         assert agent.max_turns == 4
 
+    def test_crewai_llm_kwargs_preserve_openai_compatible_v1(self, monkeypatch):
+        from evaluation.agents.crewai_real import _crewai_llm_kwargs
+        from evaluation.model_config import ModelConfig
+
+        class CrewAI113LLM:
+            def __init__(
+                self,
+                *,
+                model,
+                base_url=None,
+                api_key=None,
+                provider="openai",
+                api_base=None,
+                max_tokens=None,
+                timeout=None,
+                temperature=None,
+                seed=None,
+                additional_params=None,
+            ):
+                pass
+
+        monkeypatch.setenv("CJ_EVAL_BASE_URL", "https://gateway.example/v1")
+        cfg = ModelConfig(name="minimax-m2", api_key="dummy", transport_retries=0)
+
+        kwargs = _crewai_llm_kwargs(CrewAI113LLM, cfg, api_key="dummy", seed=7)
+
+        assert kwargs["model"] == "minimax-m2"
+        assert kwargs["base_url"] == "https://gateway.example/v1"
+        assert kwargs["api_base"] == "https://gateway.example/v1"
+        assert kwargs["provider"] == "openai"
+        assert "custom_openai" not in kwargs
+        assert "additional_params" not in kwargs
+
+    def test_crewai_llm_kwargs_uses_custom_openai_when_supported(self, monkeypatch):
+        from evaluation.agents.crewai_real import _crewai_llm_kwargs
+        from evaluation.model_config import ModelConfig
+
+        class CrewAINewerLLM:
+            def __init__(
+                self,
+                *,
+                model,
+                custom_openai=False,
+                base_url=None,
+                api_key=None,
+                max_tokens=None,
+                timeout=None,
+                temperature=None,
+                max_retries=None,
+                seed=None,
+            ):
+                pass
+
+        monkeypatch.setenv("CJ_EVAL_BASE_URL", "https://gateway.example")
+        cfg = ModelConfig(name="minimax-m2", api_key="dummy", transport_retries=0)
+
+        kwargs = _crewai_llm_kwargs(CrewAINewerLLM, cfg, api_key="dummy", seed=7)
+
+        assert kwargs["model"] == "minimax-m2"
+        assert kwargs["base_url"] == "https://gateway.example/v1"
+        assert kwargs["custom_openai"] is True
+        assert kwargs["max_retries"] == 0
+
     def test_real_adapters_in_registry(self):
         from evaluation.agents import REGISTRY
         assert "autogen-real"   in REGISTRY

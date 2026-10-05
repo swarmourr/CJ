@@ -21,6 +21,7 @@ cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${ima
 
 system="${CJ_EVAL_SYSTEM:-autogen-real}"
 benchmark="${CJ_EVAL_BENCHMARK:-humanevalplus}"
+benchmark_subset="${CJ_EVAL_BENCHMARK_SUBSET:-auto}"
 tasks="${CJ_EVAL_TASKS:-5}"
 repeats="${CJ_EVAL_REPEATS:-1}"
 seed="${CJ_EVAL_SEED:-301}"
@@ -40,6 +41,7 @@ cmd=(
   --agent-level individual
   --topology single
   --benchmark "${benchmark}"
+  --benchmark-subset "${benchmark_subset}"
   --fault-suite smoke
   --tasks "${tasks}"
   --repeats "${repeats}"

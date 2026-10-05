@@ -168,7 +168,7 @@ class CPUStress(Fault):
 
     def start(self, target: "Target") -> None:
         target.run(
-            f"nohup stress-ng --cpu {self.cores} --timeout {self.duration_s}s "
+            f"cd /tmp && nohup stress-ng --cpu {self.cores} --timeout {self.duration_s}s "
             f"--metrics-brief > /tmp/cj_cpu_stress.log 2>&1 & echo $! > {self._pid_file}"
         )
 
@@ -221,7 +221,7 @@ class MemoryStress(Fault):
 
     def start(self, target: "Target") -> None:
         target.run(
-            f"nohup stress-ng --vm 1 --vm-bytes {self.mb}M "
+            f"cd /tmp && nohup stress-ng --vm 1 --vm-bytes {self.mb}M "
             f"--timeout {self.duration_s}s "
             f"> /tmp/cj_mem_stress.log 2>&1 & echo $! > {self._pid_file}"
         )
@@ -279,7 +279,7 @@ class IOStress(Fault):
 
     def start(self, target: "Target") -> None:
         target.run(
-            f"nohup stress-ng --hdd {self.workers} --hdd-dir {self.path} "
+            f"cd {self.path} && nohup stress-ng --hdd {self.workers} --hdd-dir {self.path} "
             f"--timeout {self.duration_s}s "
             f"> /tmp/cj_io_stress.log 2>&1 & echo $! > {self._pid_file}"
         )

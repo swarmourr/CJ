@@ -891,12 +891,21 @@ def write_cj_overhead_summary_csv(records: list[dict], path: str) -> None:
         grouped.setdefault(key, []).append((base, ctrl))
     rows = []
     for (level, framework, topology, benchmark, model), pairs in sorted(grouped.items()):
-        triplets = [(base, ctrl, ctrl) for base, ctrl in pairs]
+        overhead_pairs = [
+            (base, ctrl)
+            for base, ctrl in pairs
+            if _as_bool_success(base) and _as_bool_success(ctrl)
+        ]
+        triplets = [(base, ctrl, ctrl) for base, ctrl in overhead_pairs]
         unique_tasks = len({base.get("task_id") or ctrl.get("task_id") or "" for base, ctrl in pairs})
-        inference_status = _inference_status(unique_tasks=unique_tasks, valid_pairs=len(pairs))
+        inference_status = (
+            "no_successful_direct_control_pairs"
+            if not overhead_pairs
+            else _inference_status(unique_tasks=unique_tasks, valid_pairs=len(overhead_pairs))
+        )
         duration_rel = [
             (_as_float(ctrl.get("duration_s")) - _as_float(base.get("duration_s"))) / _as_float(base.get("duration_s"))
-            for base, ctrl in pairs
+            for base, ctrl in overhead_pairs
             if _as_float(base.get("duration_s")) > 0
         ]
         ci = (
@@ -917,6 +926,7 @@ def write_cj_overhead_summary_csv(records: list[dict], path: str) -> None:
             "benchmark": benchmark,
             "model": model,
             "n_pairs": len(pairs),
+            "eligible_pairs": len(overhead_pairs),
             "unique_tasks": unique_tasks,
             "inference_status": inference_status,
             "median_duration_overhead_ratio": _median(duration_rel),
@@ -925,39 +935,39 @@ def write_cj_overhead_summary_csv(records: list[dict], path: str) -> None:
             "duration_overhead_ci_high": ci.get("ci_high"),
             "median_duration_overhead_s": _median([
                 _as_float(ctrl.get("duration_s")) - _as_float(base.get("duration_s"))
-                for base, ctrl in pairs
+                for base, ctrl in overhead_pairs
             ]),
             "correctness_overhead": _mean([
                 _as_float(base.get("success")) - _as_float(ctrl.get("success"))
-                for base, ctrl in pairs
+                for base, ctrl in overhead_pairs
             ]),
             "llm_call_overhead": _mean([
                 _as_float(ctrl.get("llm_calls")) - _as_float(base.get("llm_calls"))
-                for base, ctrl in pairs
+                for base, ctrl in overhead_pairs
             ]),
             "tool_call_overhead": _mean([
                 _as_float(ctrl.get("tool_calls")) - _as_float(base.get("tool_calls"))
-                for base, ctrl in pairs
+                for base, ctrl in overhead_pairs
             ]),
             "token_overhead": _mean(_paired_numeric_diffs(
-                pairs, "total_tokens", left_index=0, right_index=1,
+                overhead_pairs, "total_tokens", left_index=0, right_index=1,
             )),
             "cost_overhead_usd": _mean(_paired_numeric_diffs(
-                pairs, "cost_usd", left_index=0, right_index=1,
+                overhead_pairs, "cost_usd", left_index=0, right_index=1,
             )),
             "cpu_usage_overhead": _mean(_paired_numeric_diffs(
-                pairs, "cpu_usage", left_index=0, right_index=1,
+                overhead_pairs, "cpu_usage", left_index=0, right_index=1,
             )),
             "peak_memory_overhead": _mean(_paired_numeric_diffs(
-                pairs, "peak_memory_bytes", left_index=0, right_index=1,
+                overhead_pairs, "peak_memory_bytes", left_index=0, right_index=1,
             )),
             "network_bytes_overhead": _mean(_paired_numeric_diffs(
-                pairs, "network_bytes", left_index=0, right_index=1,
+                overhead_pairs, "network_bytes", left_index=0, right_index=1,
             )),
         })
     fields = list(rows[0].keys()) if rows else [
         "agent_level", "framework", "topology", "benchmark", "model", "n_pairs",
-        "unique_tasks", "inference_status", "median_duration_overhead_ratio",
+        "eligible_pairs", "unique_tasks", "inference_status", "median_duration_overhead_ratio",
         "mean_duration_overhead_ratio", "duration_overhead_ci_low", "duration_overhead_ci_high",
         "median_duration_overhead_s", "correctness_overhead",
         "llm_call_overhead", "tool_call_overhead", "token_overhead",
@@ -1011,9 +1021,14 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
         )
         counts = _validity_counts([f for _b, _c, f in triplet_like])
         selectivity = _selectivity_metrics([f for _b, _c, f in triplet_like])
+        overhead_eligible = [
+            (b, c, f)
+            for b, c, f in complete
+            if _as_bool_success(b) and _as_bool_success(c)
+        ]
         overhead_ratios = [
             (_as_float(c.get("duration_s")) - _as_float(b.get("duration_s"))) / _as_float(b.get("duration_s"))
-            for b, c, _f in complete
+            for b, c, _f in overhead_eligible
             if _as_float(b.get("duration_s")) > 0
         ]
         rows.append({
@@ -1330,6 +1345,10 @@ def _observed_evidence_values(records: list[dict]) -> dict[str, set[str]]:
         "target": set(),
     }
     for record in records:
+        for call in _proxy_calls(record):
+            status = call.get("http_status")
+            if status not in (None, ""):
+                values["http_status"].add(str(status))
         for entry in _evidence_entries(record):
             evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else entry
             for key in values:
@@ -2039,7 +2058,10 @@ def write_infrastructure_summary_csv(records: list[dict], path: str) -> None:
             "oom_event": observed.get("oom_event", record.get("oom_event", "")),
             "network_bytes": observed.get("network_bytes", record.get("network_bytes", "")),
             "packet_loss_rate": observed.get("packet_loss_rate", observed.get("loss_rate", "")),
+            "observed_latency_ms": observed.get("latency_ms", observed.get("rtt_avg_ms", "")),
             "disk_used_bytes": observed.get("disk_used_bytes", record.get("disk_used_bytes", "")),
+            "disk_available_bytes": observed.get("disk_available_bytes", ""),
+            "disk_enospc_verified": observed.get("disk_enospc_verified", ""),
             "container_exit_reason": record.get("container_exit_reason", record.get("termination_reason", "")),
             "restart_count": observed.get("restart_count", record.get("restart_count", "")),
             "recovery_latency_s": lifecycle.get("recovery_latency_s", ""),
@@ -2058,7 +2080,8 @@ def write_infrastructure_summary_csv(records: list[dict], path: str) -> None:
         "lifecycle_verdict", "evidence_source", "cpu_limit", "memory_limit",
         "capabilities", "read_only_root", "observed_cpu",
         "peak_memory_bytes", "oom_event", "network_bytes", "packet_loss_rate",
-        "disk_used_bytes", "container_exit_reason", "restart_count",
+        "observed_latency_ms", "disk_used_bytes", "disk_available_bytes",
+        "disk_enospc_verified", "container_exit_reason", "restart_count",
         "recovery_latency_s", "activation_evidence_json",
         "recovery_evidence_json", "recovery_observed_json",
         "lifecycle_details",

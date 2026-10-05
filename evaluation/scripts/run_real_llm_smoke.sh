@@ -47,6 +47,7 @@ fi
 category="real-llm-smoke"
 system="${CJ_EVAL_SYSTEM:-autogen-real}"
 benchmark="${CJ_EVAL_BENCHMARK:-humanevalplus}"
+benchmark_subset="${CJ_EVAL_BENCHMARK_SUBSET:-auto}"
 fault_suite="${CJ_EVAL_FAULT_SUITE:-smoke}"
 tasks="${CJ_EVAL_TASKS:-1}"
 repeats="${CJ_EVAL_REPEATS:-1}"
@@ -70,6 +71,7 @@ cmd=(
   --agent-level individual
   --topology single
   --benchmark "${benchmark}"
+  --benchmark-subset "${benchmark_subset}"
   --fault-suite "${fault_suite}"
   --tasks "${tasks}"
   --repeats "${repeats}"

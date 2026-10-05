@@ -52,6 +52,25 @@ def _apply_llm_env_aliases() -> None:
             os.environ[target] = os.environ[source]
 
 
+def _prepare_writable_runtime_dirs() -> None:
+    """Create writable cache/home directories before framework SDK startup."""
+    defaults = {
+        "HOME": "/tmp/cj-home",
+        "TMPDIR": "/tmp",
+        "XDG_CACHE_HOME": "/tmp/cj-cache",
+        "XDG_CONFIG_HOME": "/tmp/cj-config",
+        "XDG_DATA_HOME": "/tmp/cj-data",
+        "CREWAI_STORAGE_DIR": "/tmp/cj-crewai",
+        "LITELLM_CACHE_DIR": "/tmp/cj-litellm",
+        "MPLCONFIGDIR": "/tmp/cj-matplotlib",
+    }
+    for key, value in defaults.items():
+        os.environ.setdefault(key, value)
+    for key in defaults:
+        path = Path(os.environ[key])
+        path.mkdir(parents=True, exist_ok=True)
+
+
 def _package_versions() -> dict[str, str]:
     versions = {"python": platform.python_version()}
     for names in _VERSION_PACKAGES.values():
@@ -213,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
+        _prepare_writable_runtime_dirs()
         req = json.loads(Path(args.request).read_text(encoding="utf-8"))
         result = _run_request(req)
         result["artifact_paths"] = _write_artifacts(output_path, result)

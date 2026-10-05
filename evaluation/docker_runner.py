@@ -26,6 +26,16 @@ _SECRET_EXACT_KEYS = {
     "password",
 }
 _SAFE_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RUNTIME_WRITABLE_ENV = {
+    "HOME": "/tmp/cj-home",
+    "TMPDIR": "/tmp",
+    "XDG_CACHE_HOME": "/tmp/cj-cache",
+    "XDG_CONFIG_HOME": "/tmp/cj-config",
+    "XDG_DATA_HOME": "/tmp/cj-data",
+    "CREWAI_STORAGE_DIR": "/tmp/cj-crewai",
+    "LITELLM_CACHE_DIR": "/tmp/cj-litellm",
+    "MPLCONFIGDIR": "/tmp/cj-matplotlib",
+}
 
 
 def redact_secrets(value: Any) -> Any:
@@ -427,7 +437,9 @@ class DockerAgentRunner:
             cmd += ["--cap-add", cap]
         if self.config.env_file:
             cmd += ["--env-file", self.config.env_file]
-        for key, value in sorted(env.items()):
+        runtime_env = dict(_RUNTIME_WRITABLE_ENV)
+        runtime_env.update(env)
+        for key, value in sorted(runtime_env.items()):
             if not _SAFE_ENV_NAME_RE.match(key):
                 raise ValueError(f"unsafe environment variable name: {key!r}")
             if _SECRET_ENV_NAME_RE.search(key):

@@ -53,7 +53,7 @@ def _verify_tc_netem(
     """
     observed: dict = {}
     for iface in ifaces:
-        code, stdout, _ = target.run(f"tc qdisc show dev {iface} 2>/dev/null")
+        code, stdout, _ = target.sudo(f"tc qdisc show dev {iface} 2>/dev/null")
         observed[iface] = stdout.strip()
         has_netem = "netem" in stdout.lower()
         if expect_present and not has_netem:
