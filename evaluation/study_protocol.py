@@ -136,6 +136,108 @@ class PublicationStudyOrchestrator:
         self._jsonl_path = os.path.join(results_dir, "runs.jsonl")
         os.makedirs(results_dir, exist_ok=True)
 
+    def run_campaign_preflight(
+        self,
+        *,
+        agent_system: str,
+        agent_level: str,
+        topology: str,
+        task: BenchmarkTask,
+        seed: int,
+        model_config: dict[str, Any],
+        execution_config: dict[str, Any],
+        container_direct_base_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Run one Docker-only filesystem/EvalPlus preflight before a campaign."""
+        task_dict = _task_to_request_dict(task)
+        direct_base_url = (
+            container_direct_base_url
+            or model_config.get("container_base_url")
+            or model_config.get("base_url")
+            or os.environ.get("CJ_EVAL_CONTAINER_BASE_URL")
+            or os.environ.get("CJ_EVAL_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or ""
+        )
+        run_id = f"preflight-{uuid.uuid4().hex[:12]}"
+        context = RunContext(
+            study_id=self.study_id,
+            campaign_id=f"{self.study_id}-preflight",
+            pair_id=f"{self.study_id}-preflight",
+            run_id=run_id,
+            condition="preflight",
+            output_root=os.path.join(self.results_dir, run_id),
+            environment=self._base_env(
+                model_config,
+                {"CJ_EVAL_BASE_URL": str(direct_base_url)} if direct_base_url else None,
+            ),
+        )
+        preflight_exec = {
+            **execution_config,
+            "agent_level": agent_level,
+            "dry_run": True,
+            "preflight_only": True,
+            "strict_scoring_preflight": True,
+        }
+        result = self.docker_runner.run(
+            agent_system=agent_system,
+            topology=topology,
+            task=task_dict,
+            seed=seed,
+            model_config=model_config,
+            execution_config=preflight_exec,
+            run_context=context,
+        )
+        record = _flatten_docker_result(result)
+        record.update({
+            "study_id": self.study_id,
+            "run_id": run_id,
+            "condition": "preflight",
+            "evaluation_scope": (
+                "preflight_failure"
+                if record.get("executor_exit_code") or record.get("executor_status") == "error"
+                else "preflight"
+            ),
+            "agent_level": agent_level,
+            "agent_system": agent_system,
+            "topology": topology,
+            "benchmark": task.benchmark,
+            "task_id": task.task_id,
+            "seed": seed,
+            "model": model_config.get("name") or model_config.get("model", ""),
+            "docker_image": result.image,
+            "docker_image_digest": result.image_digest,
+            "container_resource_limits": result.resource_limits,
+        })
+        preflight_path = os.path.join(self.results_dir, "campaign_preflight.json")
+        with open(preflight_path, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=2, sort_keys=True)
+
+        strict = {}
+        scoring_preflight = record.get("scoring_preflight")
+        if isinstance(scoring_preflight, dict):
+            strict = scoring_preflight.get("strict_evalplus") or {}
+        source = (task.metadata or {}).get("source")
+        strict_failed = source == "evalplus" and strict.get("status") != "ok"
+        executor_failed = (
+            int(record.get("executor_exit_code") or 0) != 0
+            or str(record.get("executor_status", "")).lower() == "error"
+        )
+        if strict_failed or executor_failed:
+            diagnostic = {
+                "preflight_result": preflight_path,
+                "executor_exit_code": record.get("executor_exit_code"),
+                "executor_error": record.get("executor_error", ""),
+                "executor_stdout": str(record.get("stdout", ""))[:2000],
+                "executor_stderr": str(record.get("stderr", ""))[:2000],
+                "strict_evalplus": strict,
+            }
+            raise RuntimeError(
+                "campaign preflight failed before model calls:\n"
+                + json.dumps(diagnostic, indent=2, sort_keys=True)
+            )
+        return record
+
     def run_pair(
         self,
         *,

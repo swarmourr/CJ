@@ -459,6 +459,26 @@ def _is_success_scored(record: dict) -> bool:
     )
 
 
+def _is_scored_triplet(baseline: dict, control: dict, fault: dict) -> bool:
+    return (
+        _is_success_scored(baseline)
+        and _is_success_scored(control)
+        and _is_success_scored(fault)
+    )
+
+
+def _has_preflight_failure(record: dict) -> bool:
+    if str(record.get("evaluation_scope", "")).lower() == "preflight_failure":
+        return True
+    preflight = record.get("scoring_preflight")
+    if not isinstance(preflight, dict):
+        return False
+    strict = preflight.get("strict_evalplus")
+    if isinstance(strict, dict) and strict.get("status") == "error":
+        return True
+    return "preflight failed" in str(record.get("executor_error", "")).lower()
+
+
 def _run_failure_verdicts(record: dict) -> dict[str, Any]:
     success = _success_verdicts(record)
     agent_detected = _agent_detected_fault(record)
@@ -770,10 +790,11 @@ def _condition_effect_columns(
             triplets.append((baseline, control, fault))
 
     valid = [(b, c, f) for b, c, f in triplets if f.get("validity") == "valid"]
-    control_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(c)]
+    valid_scored = [(b, c, f) for b, c, f in valid if _is_scored_triplet(b, c, f)]
+    control_eligible = [(b, c, f) for b, c, f in valid_scored if _as_bool_success(c)]
     total_effect = _mean([
         _as_float(b.get("success")) - _as_float(f.get("success"))
-        for b, _c, f in valid
+        for b, _c, f in valid_scored
     ])
     fault_effect = _mean([
         _as_float(c.get("success")) - _as_float(f.get("success"))
@@ -781,15 +802,16 @@ def _condition_effect_columns(
     ])
     overhead_effect = _mean([
         _as_float(b.get("success")) - _as_float(c.get("success"))
-        for b, c, _f in valid
+        for b, c, _f in valid_scored
     ])
     return {
         "complete_triplets": len(triplets),
         "valid_pairs": len(valid),
+        "scored_triplets": len(valid_scored),
         "control_eligible_pairs": len(control_eligible),
-        "pass_at_1_direct_baseline": _mean([_as_float(b.get("success")) for b, _c, _f in valid]),
-        "pass_at_1_cj_control": _mean([_as_float(c.get("success")) for _b, c, _f in valid]),
-        "pass_at_1_cj_fault": _mean([_as_float(f.get("success")) for _b, _c, f in valid]),
+        "pass_at_1_direct_baseline": _mean([_as_float(b.get("success")) for b, _c, _f in valid_scored]),
+        "pass_at_1_cj_control": _mean([_as_float(c.get("success")) for _b, c, _f in valid_scored]),
+        "pass_at_1_cj_fault": _mean([_as_float(f.get("success")) for _b, _c, f in valid_scored]),
         "total_degradation_direct_minus_fault": total_effect,
         "fault_specific_degradation_control_minus_fault": fault_effect,
         "cj_correctness_overhead_direct_minus_control": overhead_effect,
@@ -1030,14 +1052,17 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
         level, system, topology, benchmark, model, fault_type, severity = key
         complete = [(b, c, f) for b, c, f in triplet_like if b and c]
         valid = [(b, c, f) for b, c, f in complete if f.get("validity") == "valid"]
-        baseline_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(b)]
-        control_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(c)]
+        valid_scored = [(b, c, f) for b, c, f in valid if _is_scored_triplet(b, c, f)]
+        baseline_eligible = [(b, c, f) for b, c, f in valid_scored if _as_bool_success(b)]
+        control_eligible = [(b, c, f) for b, c, f in valid_scored if _as_bool_success(c)]
         conditional_success = [f for _b, _c, f in baseline_eligible if _as_bool_success(f)]
         unique_tasks = len({(f.get("task_id") or "") for _b, _c, f in complete})
         inference_status = _inference_status(
             unique_tasks=unique_tasks,
-            valid_pairs=len(valid),
+            valid_pairs=len(valid_scored),
         )
+        if complete and not valid_scored:
+            inference_status = "no_eligible_scored_pairs"
         fault_deg_ci = (
             _ci_from_triplet_diffs(
                 control_eligible,
@@ -1050,7 +1075,7 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
         selectivity = _selectivity_metrics([f for _b, _c, f in triplet_like])
         overhead_eligible = [
             (b, c, f)
-            for b, c, f in complete
+            for b, c, f in valid_scored
             if _as_bool_success(b) and _as_bool_success(c)
         ]
         overhead_ratios = [
@@ -1072,17 +1097,21 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
             "complete_triplets": len(complete),
             "missing_pair_count": len(triplet_like) - len(complete),
             "valid_pairs": len(valid),
+            "scored_triplets": len(valid_scored),
             "baseline_eligible_pairs": len(baseline_eligible),
             "control_eligible_pairs": len(control_eligible),
             "inference_status": inference_status,
             "evaluation_scope": (
+                "preflight_failure"
+                if any(_has_preflight_failure(record) for triplet in complete for record in triplet if record)
+                else
                 "agent_resilience"
                 if baseline_eligible and control_eligible
                 else "fault_injector_validation"
             ),
-            "baseline_pass_at_1": _mean([_as_float(b.get("success")) for b, _c, _f in valid]),
-            "control_pass_at_1": _mean([_as_float(c.get("success")) for _b, c, _f in valid]),
-            "fault_pass_at_1": _mean([_as_float(f.get("success")) for _b, _c, f in valid]),
+            "baseline_pass_at_1": _mean([_as_float(b.get("success")) for b, _c, _f in valid_scored]),
+            "control_pass_at_1": _mean([_as_float(c.get("success")) for _b, c, _f in valid_scored]),
+            "fault_pass_at_1": _mean([_as_float(f.get("success")) for _b, _c, f in valid_scored]),
             "total_degradation": _mean([
                 _as_float(b.get("success")) - _as_float(f.get("success"))
                 for b, _c, f in baseline_eligible
@@ -1093,7 +1122,7 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
             ]),
             "cj_correctness_overhead": _mean([
                 _as_float(b.get("success")) - _as_float(c.get("success"))
-                for b, c, _f in valid
+                for b, c, _f in valid_scored
             ]),
             "conditional_robustness": _ratio(len(conditional_success), len(baseline_eligible)),
             "catastrophic_failure_rate": _ratio(len(baseline_eligible) - len(conditional_success), len(baseline_eligible)),
@@ -1123,8 +1152,8 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
     fields = list(rows[0].keys()) if rows else [
         "agent_level", "output_schema_version", "system", "model", "fault", "severity", "topology",
         "benchmark", "tasks", "unique_tasks", "complete_triplets",
-        "missing_pair_count", "valid_pairs", "baseline_eligible_pairs",
-        "control_eligible_pairs", "inference_status", "evaluation_scope",
+        "missing_pair_count", "valid_pairs", "scored_triplets",
+        "baseline_eligible_pairs", "control_eligible_pairs", "inference_status", "evaluation_scope",
         "baseline_pass_at_1", "control_pass_at_1", "fault_pass_at_1",
         "total_degradation", "fault_specific_degradation",
         "cj_correctness_overhead", "conditional_robustness",
@@ -1246,11 +1275,15 @@ def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
             evidence_values,
             "tool_name", "tool_call_target", "operation", "target",
         )
-        completion_token_reduction = _mean([
-            _as_float(c.get("completion_tokens")) - _as_float(f.get("completion_tokens"))
-            for c, f in pairs
-            if c is not None
-        ])
+        completion_token_reduction = (
+            _mean([
+                _as_float(c.get("completion_tokens")) - _as_float(f.get("completion_tokens"))
+                for c, f in pairs
+                if c is not None
+            ])
+            if fault_type in {"token_starvation", "response_truncation"}
+            else None
+        )
         selectivity = _selectivity_metrics(fault_records)
         affected_call_fraction = _ratio(affected_calls, intercepted_calls)
         rows.append({
@@ -1760,7 +1793,7 @@ def write_data_quality_summary_csv(records: list[dict], path: str) -> None:
             "expected_condition_records_for_complete_triplets": len(complete) * 3,
             "tasks": len([f.get("task_id") for f in fault_records]),
             "unique_tasks": len({f.get("task_id") for f in fault_records}),
-            "repetitions": len({(f.get("task_id"), f.get("seed")) for f in fault_records}),
+            "repetitions": len({f.get("seed") for f in fault_records if f.get("seed") not in (None, "")}),
             "complete_triplets": len(complete),
             "missing_pair_count": len(triplet_like) - len(complete),
             "baseline_eligible_pair_count": len(baseline_eligible),
@@ -1884,13 +1917,16 @@ def write_task_complexity_summary_csv(records: list[dict], path: str) -> None:
         ) = key
         complete = [(b, c, f) for b, c, f in triplet_like if b and c]
         valid = [(b, c, f) for b, c, f in complete if f.get("validity") == "valid"]
-        baseline_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(b)]
-        control_eligible = [(b, c, f) for b, c, f in valid if _as_bool_success(c)]
         unique_tasks = len({f.get("task_id") for _b, _c, f in complete if f.get("task_id")})
+        valid_scored = [(b, c, f) for b, c, f in valid if _is_scored_triplet(b, c, f)]
+        baseline_eligible = [(b, c, f) for b, c, f in valid_scored if _as_bool_success(b)]
+        control_eligible = [(b, c, f) for b, c, f in valid_scored if _as_bool_success(c)]
         inference_status = _inference_status(
             unique_tasks=unique_tasks,
-            valid_pairs=len(valid),
+            valid_pairs=len(valid_scored),
         )
+        if complete and not valid_scored:
+            inference_status = "no_eligible_scored_pairs"
         rows.append({
             "agent_level": level,
             "system": system,
@@ -1903,17 +1939,18 @@ def write_task_complexity_summary_csv(records: list[dict], path: str) -> None:
             "unique_tasks": unique_tasks,
             "complete_triplets": len(complete),
             "valid_pairs": len(valid),
+            "scored_triplets": len(valid_scored),
             "baseline_eligible_pairs": len(baseline_eligible),
             "control_eligible_pairs": len(control_eligible),
             "stratum_status": inference_status,
             "baseline_pass_at_1": _mean([
-                _as_float(b.get("success")) for b, _c, _f in valid
+                _as_float(b.get("success")) for b, _c, _f in valid_scored
             ]),
             "control_pass_at_1": _mean([
-                _as_float(c.get("success")) for _b, c, _f in valid
+                _as_float(c.get("success")) for _b, c, _f in valid_scored
             ]),
             "fault_pass_at_1": _mean([
-                _as_float(f.get("success")) for _b, _c, f in valid
+                _as_float(f.get("success")) for _b, _c, f in valid_scored
             ]),
             "conditional_robustness": _ratio(
                 sum(1 for _b, _c, f in baseline_eligible if _as_bool_success(f)),
@@ -2544,10 +2581,14 @@ def write_stats_summary_csv(records: list[dict], path: str) -> None:
         else:
             base_recs = [r for r in all_base_recs
                          if r.get("agent_system") == sys and r.get("benchmark") == bench]
+        base_recs = [r for r in base_recs if _is_success_scored(r)]
+        valid_scored = [r for r in filt.valid if _is_success_scored(r)]
+        if not base_recs or not valid_scored:
+            continue
 
         stats_list = compute_condition_stats(
             baseline_records=base_recs,
-            fault_records=filt.valid,
+            fault_records=valid_scored,
             condition_name=fault,
         )
         for s in stats_list:

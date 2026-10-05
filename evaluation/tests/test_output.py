@@ -43,6 +43,7 @@ def _make_records():
             "retries": 0, "llm_calls": 3, "tool_calls": 1, "turns": 3,
             "prompt_tokens": 50, "completion_tokens": 100, "total_tokens": 150,
             "cost_usd": 0.0001, "tests_passed": 3, "tests_total": 3,
+            "scorer_status": "ok",
             "generated_code_hash": "abc", "termination_reason": "success",
             "exception": "", "oracle_outcome": {}, "validity": "unchecked",
             "lifecycle": {"configured": False}, "artifact_path": "",
@@ -59,6 +60,7 @@ def _make_records():
             "retries": 1, "llm_calls": 1, "tool_calls": 0, "turns": 1,
             "prompt_tokens": 50, "completion_tokens": 0, "total_tokens": 50,
             "cost_usd": 0.0, "tests_passed": 0, "tests_total": 3,
+            "scorer_status": "ok",
             "generated_code_hash": "", "termination_reason": "api_error",
             "exception": "LLM timeout", "oracle_outcome": {"silent_failure": False},
             "validity": "valid",
@@ -476,6 +478,61 @@ class TestCSVOutput:
         assert row["fault_specific_degradation"] == ""
         assert row["evaluation_scope"] == "fault_injector_validation"
         assert row["cj_overhead"] == ""
+
+    def test_scientific_summary_suppresses_unscored_triplets(self, tmp_path):
+        records = _make_exact_triplet_records()
+        for record in records:
+            record["scorer_status"] = "error"
+            record["tests_total"] = 0
+            record["scorer_error"] = "EVALPLUS: zero tests executed"
+            record["success"] = 0.0
+        path = str(tmp_path / "scientific_summary.csv")
+        write_scientific_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+        assert row["complete_triplets"] == "1"
+        assert row["valid_pairs"] == "1"
+        assert row["scored_triplets"] == "0"
+        assert row["baseline_eligible_pairs"] == "0"
+        assert row["inference_status"] == "no_eligible_scored_pairs"
+        assert row["baseline_pass_at_1"] == ""
+        assert row["control_pass_at_1"] == ""
+        assert row["fault_pass_at_1"] == ""
+
+    def test_scientific_summary_marks_preflight_failure_scope(self, tmp_path):
+        records = _make_exact_triplet_records()
+        for record in records:
+            record["scorer_status"] = "error"
+            record["tests_total"] = 0
+            record["success"] = 0.0
+            record["scoring_preflight"] = {
+                "strict_evalplus": {
+                    "status": "error",
+                    "worker_exception": "EVALPLUS: zero tests executed",
+                }
+            }
+        path = str(tmp_path / "scientific_summary.csv")
+        write_scientific_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+        assert row["evaluation_scope"] == "preflight_failure"
+
+    def test_condition_summary_suppresses_unscored_pass_at_1(self, tmp_path):
+        records = _make_exact_triplet_records()
+        for record in records:
+            record["scorer_status"] = "error"
+            record["tests_total"] = 0
+            record["success"] = 0.0
+        path = str(tmp_path / "condition_summary.csv")
+        write_condition_summary_csv(records, path)
+        with open(path) as f:
+            row = next(r for r in csv.DictReader(f) if r["fault_type"] == "llm_latency")
+        assert row["pass_at_1_baseline"] == ""
+        assert row["pass_at_1_fault"] == ""
+        assert row["pass_at_1_direct_baseline"] == ""
+        assert row["pass_at_1_cj_control"] == ""
+        assert row["pass_at_1_cj_fault"] == ""
+        assert row["scored_triplets"] == "0"
 
     def test_cj_overhead_summary_suppresses_failed_direct_control_pairs(self, tmp_path):
         records = _make_exact_triplet_records()

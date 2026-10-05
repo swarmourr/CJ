@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.metadata
+import io
 import json
 import os
 import platform
@@ -16,7 +18,7 @@ from typing import Any
 from evaluation.agents import REGISTRY
 from evaluation.agents.base import AgentRunResult, ModelClient
 from evaluation.benchmarks.base import BenchmarkTask
-from evaluation.benchmarks.executor import score_task
+from evaluation.benchmarks.executor import _configure_evalplus_cache_dir, score_task
 from evaluation.model_config import load_model_config
 from evaluation.multi_agent import MultiAgentWorkflow
 
@@ -27,6 +29,14 @@ _VERSION_PACKAGES = {
     "crewai": ("crewai", "litellm"),
     "evalplus": ("evalplus",),
 }
+
+
+class PreflightFailure(RuntimeError):
+    """Container preflight failed before any agent/model execution."""
+
+    def __init__(self, message: str, evidence: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.evidence = evidence
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -63,6 +73,7 @@ def _prepare_writable_runtime_dirs() -> None:
         "XDG_CONFIG_HOME": "/tmp/cj-config",
         "XDG_DATA_HOME": "/tmp/cj-data",
         "CREWAI_STORAGE_DIR": "/tmp/cj-crewai",
+        "EVALPLUS_CACHE_DIR": str(Path(output_dir) / "evalplus-cache"),
         "LITELLM_CACHE_DIR": "/tmp/cj-litellm",
         "MPLCONFIGDIR": "/tmp/cj-matplotlib",
     }
@@ -134,21 +145,38 @@ def _strict_evalplus_preflight(task_data: dict[str, Any], timeout_s: float) -> d
         return {"required": False, "status": "skipped", "reason": "task is not EvalPlus-sourced"}
     task = _task_from_request(task_data)
     if not task.canonical_solution:
-        raise RuntimeError("strict EvalPlus preflight cannot run: missing canonical_solution")
-    ok, passed, total, output = score_task(
-        task,
-        _canonical_evalplus_solution(task),
-        timeout_s=timeout_s,
-    )
+        evidence = {
+            "required": True,
+            "status": "error",
+            "worker_exception": "missing canonical_solution",
+            "worker_exit_code": 1,
+            "worker_stdout": "",
+            "worker_stderr": "",
+        }
+        raise PreflightFailure("strict EvalPlus preflight cannot run: missing canonical_solution", evidence)
+    cache_dir = _configure_evalplus_cache_dir()
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+    with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+        ok, passed, total, output = score_task(
+            task,
+            _canonical_evalplus_solution(task),
+            timeout_s=timeout_s,
+        )
     preflight = {
         "required": True,
         "status": "ok" if ok and total > 0 else "error",
         "tests_passed": passed,
         "tests_total": total,
+        "evalplus_cache_dir": cache_dir,
+        "worker_exit_code": 0 if ok and total > 0 else 1,
+        "worker_stdout": stdout_buf.getvalue()[:4000],
+        "worker_stderr": stderr_buf.getvalue()[:4000],
+        "worker_exception": "" if ok and total > 0 else output[:4000],
         "output_preview": output[:1000],
     }
     if not ok or total <= 0:
-        raise RuntimeError(f"strict EvalPlus preflight failed: {preflight}")
+        raise PreflightFailure("strict EvalPlus preflight failed", preflight)
     return preflight
 
 
@@ -255,10 +283,37 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
         "strict_evalplus": {"required": False, "status": "skipped"},
     }
     if bool(execution_config.get("strict_scoring_preflight", True)):
-        preflight["strict_evalplus"] = _strict_evalplus_preflight(
-            task,
-            timeout_s=score_timeout_s,
-        )
+        try:
+            preflight["strict_evalplus"] = _strict_evalplus_preflight(
+                task,
+                timeout_s=score_timeout_s,
+            )
+        except PreflightFailure as exc:
+            preflight["strict_evalplus"] = exc.evidence
+            raise PreflightFailure(str(exc), preflight) from exc
+    if bool(execution_config.get("preflight_only", False)):
+        return {
+            "executor_status": "ok",
+            "executor_duration_s": 0.0,
+            "success": 0.0,
+            "reported_error": 0.0,
+            "duration_s": 0.0,
+            "scorer_status": "not_available",
+            "tests_passed": 0,
+            "tests_total": 0,
+            "scoring_preflight": preflight,
+            "framework_versions": _package_versions(),
+            "python_version": platform.python_version(),
+            "agent_system": req["agent_system"],
+            "topology": req.get("topology"),
+            "agent_level": agent_level,
+            "study_id": run_context.get("study_id", ""),
+            "campaign_id": run_context.get("campaign_id", ""),
+            "pair_id": run_context.get("pair_id", ""),
+            "run_id": run_context.get("run_id", ""),
+            "condition": run_context.get("condition", "preflight"),
+            "preflight_only": True,
+        }
 
     t0 = time.time()
     if agent_level == "multi_agent":
@@ -335,6 +390,9 @@ def main(argv: list[str] | None = None) -> int:
             "framework_versions": _package_versions(),
             "python_version": platform.python_version(),
         }
+        if isinstance(exc, PreflightFailure):
+            result["evaluation_scope"] = "preflight_failure"
+            result["scoring_preflight"] = exc.evidence
         output_path.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
         print(repr(exc), file=sys.stderr)
         return 2

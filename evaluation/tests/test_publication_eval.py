@@ -686,6 +686,9 @@ def test_publication_study_runs_selected_fault_suite_once_per_fault(tmp_path, mo
             self.results_dir = results_dir
             self.proxy_port = proxy_port
 
+        def run_campaign_preflight(self, **kwargs):
+            return {"executor_status": "ok", "scoring_preflight": {"strict_evalplus": {"status": "skipped"}}}
+
         def run_pair(self, **kwargs):
             calls.append((kwargs["fault_name"], kwargs["fault"], kwargs["task"].task_id))
             return []
@@ -927,6 +930,66 @@ def test_container_entrypoint_dry_run_individual(tmp_path, monkeypatch):
     assert result["scoring_preflight"]["strict_evalplus"]["status"] == "skipped"
     assert os.environ["CJ_EVAL_BASE_URL"] == "http://example.invalid/v1"
     assert (tmp_path / "execution_trace.json").exists()
+
+
+def test_container_entrypoint_preflight_failure_records_diagnostics(tmp_path, monkeypatch):
+    import evaluation.container_entrypoint as entrypoint
+
+    monkeypatch.setenv("CJ_EVAL_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+
+    def fake_score_task(*_args, **_kwargs):
+        return False, 0, 0, "EVALPLUS: zero tests executed — base=timeout (0/0)"
+
+    monkeypatch.setattr(entrypoint, "score_task", fake_score_task)
+    req = {
+        "agent_system": "autogen",
+        "topology": "single",
+        "task": {
+            "task_id": "HumanEval/0",
+            "benchmark": "humanevalplus",
+            "prompt": "def f(x):\n    pass\n",
+            "entry_point": "f",
+            "test_code": "",
+            "canonical_solution": "    return x\n",
+            "metadata": {
+                "source": "evalplus",
+                "evalplus_dataset": "humaneval",
+                "evalplus_problem": {
+                    "task_id": "HumanEval/0",
+                    "prompt": "def f(x):\n    pass\n",
+                    "entry_point": "f",
+                    "canonical_solution": "    return x\n",
+                    "base_input": [[1]],
+                    "plus_input": [[2]],
+                },
+            },
+        },
+        "seed": 0,
+        "model_config": {"name": "fake", "base_url": "http://example.invalid/v1"},
+        "execution_config": {
+            "preflight_only": True,
+            "strict_scoring_preflight": True,
+            "agent_level": "individual",
+            "score_timeout_s": 2,
+        },
+        "run_context": {"study_id": "s", "pair_id": "p", "run_id": "r"},
+    }
+    request_path = tmp_path / "request.json"
+    output_path = tmp_path / "result.json"
+    request_path.write_text(json.dumps(req), encoding="utf-8")
+
+    code = container_main(["--request", str(request_path), "--output", str(output_path)])
+    result = json.loads(output_path.read_text())
+
+    assert code == 2
+    assert result["executor_status"] == "error"
+    assert result["evaluation_scope"] == "preflight_failure"
+    preflight = result["scoring_preflight"]
+    assert preflight["filesystem"][str(tmp_path)]["write_probe_ok"] is True
+    assert preflight["strict_evalplus"]["status"] == "error"
+    assert preflight["strict_evalplus"]["worker_exit_code"] == 1
+    assert "zero tests executed" in preflight["strict_evalplus"]["worker_exception"]
 
 
 def test_container_entrypoint_keeps_condition_specific_base_url(tmp_path, monkeypatch):

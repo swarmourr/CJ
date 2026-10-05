@@ -32,6 +32,39 @@ _DEFAULT_TIMEOUT = 10   # seconds
 # Populated lazily by _get_evalplus_groundtruth(); isolated per process so tests
 # can patch it without affecting other tests.
 _EVALPLUS_GROUNDTRUTH: dict[str, dict] = {}
+_EVALPLUS_TASK_GROUNDTRUTH: dict[tuple[str, str], dict] = {}
+
+
+def _configure_evalplus_cache_dir() -> str:
+    """Force EvalPlus cache files into a writable evaluation directory.
+
+    EvalPlus 0.3.1 resolves ``CACHE_DIR`` at import time through ``appdirs``.
+    In read-only or sandboxed containers this can point at a non-writable home
+    cache and cause the official evaluator to execute zero tests.  Keep the
+    cache explicit and local to the experiment output area.
+    """
+    cache_dir = (
+        os.environ.get("EVALPLUS_CACHE_DIR")
+        or os.path.join(
+            os.environ.get("CJ_EVAL_OUTPUT_DIR")
+            or os.environ.get("TMPDIR")
+            or tempfile.gettempdir(),
+            "evalplus-cache",
+        )
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+    os.environ["EVALPLUS_CACHE_DIR"] = cache_dir
+    try:
+        import evalplus.data.utils as data_utils  # type: ignore[import]
+        data_utils.CACHE_DIR = cache_dir
+    except Exception:
+        pass
+    try:
+        import evalplus.evaluate as evaluate  # type: ignore[import]
+        evaluate.CACHE_DIR = cache_dir
+    except Exception:
+        pass
+    return cache_dir
 
 
 def sandbox_exec(
@@ -115,6 +148,7 @@ def _get_evalplus_groundtruth(dataset: str) -> dict:
     if dataset in _EVALPLUS_GROUNDTRUTH:
         return _EVALPLUS_GROUNDTRUTH[dataset]
 
+    _configure_evalplus_cache_dir()
     if dataset == "humaneval":
         from evalplus.data import get_human_eval_plus, get_human_eval_plus_hash  # type: ignore[import]
         from evalplus.evaluate import get_groundtruth  # type: ignore[import]
@@ -133,6 +167,51 @@ def _get_evalplus_groundtruth(dataset: str) -> dict:
 
     _EVALPLUS_GROUNDTRUTH[dataset] = gt
     return gt
+
+
+def _get_evalplus_task_groundtruth(dataset: str, task_id: str, problem: dict) -> dict:
+    """Compute official EvalPlus expected output for one provided problem.
+
+    Loading the full EvalPlus dataset can require a cache download and can hide
+    the real scoring problem behind environment/network failures.  The loaded
+    benchmark task already carries the official problem object, so compute just
+    that task's oracle with EvalPlus' own trusted executor.
+    """
+    key = (dataset, task_id)
+    if key in _EVALPLUS_TASK_GROUNDTRUTH:
+        return _EVALPLUS_TASK_GROUNDTRUTH[key]
+
+    _configure_evalplus_cache_dir()
+    from evalplus.gen.util import trusted_exec  # type: ignore[import]
+
+    output_not_none = False
+    if dataset == "mbpp":
+        from evalplus.eval._special_oracle import MBPP_OUTPUT_NOT_NONE_TASKS  # type: ignore[import]
+        output_not_none = problem.get("entry_point") in MBPP_OUTPUT_NOT_NONE_TASKS
+
+    solution = str(problem.get("prompt", "")) + str(problem.get("canonical_solution", ""))
+    base_output, base_time = trusted_exec(
+        solution,
+        problem.get("base_input", []),
+        problem.get("entry_point"),
+        record_time=True,
+        output_not_none=output_not_none,
+    )
+    plus_output, plus_time = trusted_exec(
+        solution,
+        problem.get("plus_input", []),
+        problem.get("entry_point"),
+        record_time=True,
+        output_not_none=output_not_none,
+    )
+    oracle = {
+        "base": base_output,
+        "base_time": base_time,
+        "plus": plus_output,
+        "plus_time": plus_time,
+    }
+    _EVALPLUS_TASK_GROUNDTRUTH[key] = oracle
+    return oracle
 
 
 def _score_evalplus(
@@ -174,11 +253,8 @@ def _score_evalplus(
     from evalplus.evaluate import check_correctness  # type: ignore[import]
     from evalplus.eval import PASS  # type: ignore[import]
 
-    gt       = _get_evalplus_groundtruth(dataset)
     task_id  = task.task_id
-    expected = gt.get(task_id)
-    if expected is None:
-        return False, 0, 0, f"EVALPLUS: no ground truth for {task_id!r}"
+    expected = _get_evalplus_task_groundtruth(dataset, task_id, problem)
 
     result = check_correctness(
         dataset,

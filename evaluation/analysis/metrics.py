@@ -183,6 +183,14 @@ def _silent_failure(record: dict) -> bool:
     return not _reported_or_detected_error(record)
 
 
+def _is_scored(record: dict) -> bool:
+    try:
+        tests_total = int(float(record.get("tests_total", 0) or 0))
+    except (TypeError, ValueError):
+        tests_total = 0
+    return str(record.get("scorer_status", "")).lower() == "ok" and tests_total > 0
+
+
 def compute_metrics(records: list[dict]) -> AggregationMetrics:
     """Compute all aggregation metrics from a list of RunRecord dicts.
 
@@ -201,15 +209,20 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
     m.n_fault_untriggered  = len(filt.untriggered)
 
     # ── pass@1 ─────────────────────────────────────────────────────────────────
+    scored_baseline = [r for r in filt.baseline if _is_scored(r)]
+    scored_valid = [r for r in filt.valid if _is_scored(r)]
+
+    if scored_baseline:
+        m.pass_at_1_baseline = sum(r["success"] for r in scored_baseline) / len(scored_baseline)
     if filt.baseline:
-        m.pass_at_1_baseline = sum(r["success"] for r in filt.baseline) / len(filt.baseline)
         m.baseline_llm_calls  = _mean([r.get("llm_calls",0) for r in filt.baseline])
         m.baseline_duration_s = _mean([r.get("duration_s",0.0) for r in filt.baseline])
         m.baseline_tokens     = _mean([r.get("total_tokens",0) for r in filt.baseline])
         m.baseline_cost_usd   = _mean([r.get("cost_usd",0.0) for r in filt.baseline])
 
+    if scored_valid:
+        m.pass_at_1_fault    = sum(r["success"] for r in scored_valid) / len(scored_valid)
     if filt.valid:
-        m.pass_at_1_fault    = sum(r["success"] for r in filt.valid) / len(filt.valid)
         m.fault_llm_calls    = _mean([r.get("llm_calls",0) for r in filt.valid])
         m.fault_duration_s   = _mean([r.get("duration_s",0.0) for r in filt.valid])
         m.fault_tokens       = _mean([r.get("total_tokens",0) for r in filt.valid])
@@ -218,11 +231,11 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
     # ── degradation: paired-baseline − fault (positive = fault made things worse) ─
     # Only use baselines whose pair_id matches a valid fault record so that
     # orphaned, invalid, or untriggered pairs do not skew the comparison.
-    if filt.valid and filt.baseline and m.pass_at_1_fault is not None:
-        valid_pair_ids = {r["pair_id"] for r in filt.valid if r.get("pair_id")}
+    if scored_valid and scored_baseline and m.pass_at_1_fault is not None:
+        valid_pair_ids = {r["pair_id"] for r in scored_valid if r.get("pair_id")}
         if valid_pair_ids:
             paired_baselines = [
-                r for r in filt.baseline if r.get("pair_id") in valid_pair_ids
+                r for r in scored_baseline if r.get("pair_id") in valid_pair_ids
             ]
             if paired_baselines:
                 paired_base_pass = (
@@ -243,22 +256,22 @@ def compute_metrics(records: list[dict]) -> AggregationMetrics:
     # Prefer pair_id for exact (task, repeat) matching; fall back to task_id
     # for legacy records without pair_id.
     baseline_success_faults: list[dict] = []
-    if filt.baseline and filt.valid:
+    if scored_baseline and scored_valid:
         baseline_success_pairs = {
-            r["pair_id"] for r in filt.baseline
+            r["pair_id"] for r in scored_baseline
             if r.get("success", 0.0) >= 0.5 and r.get("pair_id")
         }
         if baseline_success_pairs:
             baseline_success_faults = [
-                r for r in filt.valid if r.get("pair_id") in baseline_success_pairs
+                r for r in scored_valid if r.get("pair_id") in baseline_success_pairs
             ]
         else:
             # Legacy: match by task_id
             baseline_success_tasks = {
-                r["task_id"] for r in filt.baseline if r.get("success", 0.0) >= 0.5
+                r["task_id"] for r in scored_baseline if r.get("success", 0.0) >= 0.5
             }
             baseline_success_faults = [
-                r for r in filt.valid if r.get("task_id") in baseline_success_tasks
+                r for r in scored_valid if r.get("task_id") in baseline_success_tasks
             ]
         m.baseline_eligible_pairs = len(baseline_success_faults)
         if baseline_success_faults:

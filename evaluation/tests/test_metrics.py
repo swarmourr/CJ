@@ -27,6 +27,7 @@ def _b(task_id, success=1.0, llm_calls=5, duration_s=1.0, tool_calls=1,
         "tool_calls": tool_calls, "total_tokens": total_tokens,
         "cost_usd": cost_usd, "reported_error": reported_error,
         "retries": 0, "turns": llm_calls,
+        "scorer_status": "ok", "tests_total": 1,
     }
 
 
@@ -40,6 +41,7 @@ def _f(task_id, success=0.0, llm_calls=8, duration_s=5.0, validity="valid",
         "tool_calls": tool_calls, "total_tokens": total_tokens,
         "cost_usd": cost_usd, "reported_error": reported_error,
         "retries": 1, "turns": llm_calls,
+        "scorer_status": "ok", "tests_total": 1,
         "lifecycle": {"recovered": recovered},
     }
 

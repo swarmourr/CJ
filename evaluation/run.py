@@ -671,6 +671,24 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
     print(f"  faults    : {', '.join(fault_names)}")
     print(f"  results   : {args.results_dir}")
 
+    print("[eval] Running one Docker scoring preflight before model calls...")
+    orchestrator.run_campaign_preflight(
+        agent_system=args.system,
+        agent_level=args.agent_level,
+        topology=args.topology,
+        task=task_list[0],
+        seed=args.seed,
+        model_config=model_cfg,
+        execution_config=execution_cfg,
+        container_direct_base_url=(
+            args.container_base_url
+            or os.environ.get("CJ_EVAL_CONTAINER_BASE_URL")
+            or None
+        ),
+    )
+    execution_cfg["strict_scoring_preflight"] = False
+    print("[eval] Docker scoring preflight passed.")
+
     for fault_name in fault_names:
         print(f"[eval] --- fault: {fault_name} ---")
         for rep in range(args.repeats):
