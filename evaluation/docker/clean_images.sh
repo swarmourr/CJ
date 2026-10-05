@@ -79,15 +79,13 @@ if [[ -z "${keep_ref}" ]]; then
 fi
 
 refs=()
+image_refs_output="$(docker image ls "${image_name}" --format '{{.Repository}}:{{.Tag}}')"
 while IFS= read -r ref; do
-  [[ -n "${ref}" ]] && refs+=("${ref}")
-done < <(
-  docker image ls "${image_name}" --format '{{.Repository}}:{{.Tag}}' \
-    | grep -v ':<none>$' || true
-)
+  [[ -n "${ref}" && "${ref}" != *":<none>" ]] && refs+=("${ref}")
+done <<< "${image_refs_output}"
 
 remove_refs=()
-for ref in "${refs[@]}"; do
+for ref in "${refs[@]+"${refs[@]}"}"; do
   if [[ "${remove_all}" -eq 0 && "${ref}" == "${keep_ref}" ]]; then
     continue
   fi
