@@ -30,7 +30,8 @@ Options:
   --with-all-scenarios  Run every currently implemented evaluation scenario
                         through run_all_current_scenarios.sh.
   --with-missing        Run the missing paper experiment bundle once. This runs
-                        implemented missing categories and writes unsupported
+                        implemented missing categories, including the
+                        distributed reference smoke, and writes unsupported
                         artifacts for planned architectures.
   --paper-all           Build image, debug image, run validation, gateway, and
                         all current + missing scenario categories in one result

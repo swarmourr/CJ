@@ -917,8 +917,9 @@ def test_missing_paper_bundle_records_all_remaining_categories():
         "model-sensitivity",
         "cpu_pressure memory_pressure network_latency packet_loss disk_full",
         "run_process_container_fault_smoke.sh",
+        "run_distributed_reference_smoke.sh",
         "native-multi-agent",
-        "distributed-multi-agent",
+        "distributed-faults",
         "communication-faults",
         "comparator",
     ):

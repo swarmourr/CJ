@@ -357,6 +357,45 @@ Important limitation: this is currently reported as `reference-multi-agent`.
 It must not be described as native AutoGen, LangGraph, or CrewAI multi-agent
 coordination until those framework-native workflows are implemented.
 
+## E2. Distributed Reference Multi-Agent Smoke
+
+Goal: validate a real container-per-role deployment without changing the
+existing single-container reference multi-agent pilot.
+
+```bash
+evaluation/scripts/run_distributed_reference_smoke.sh --env-file .env --model minimax-m2
+```
+
+Architecture:
+
+```mermaid
+flowchart TB
+  Host[Host distributed coordinator] --> PlannerC[Planner Docker container]
+  Host --> CoderC[Coder Docker container]
+  Host --> ReviewerC[Reviewer Docker container]
+
+  PlannerC --> Plan[Plan message]
+  Plan --> Host
+  Host --> CoderC
+  CoderC --> Code[Candidate code]
+  Code --> Host
+  Host --> ReviewerC
+  ReviewerC --> Review[ACCEPT or REVISION_REQUEST]
+  Review --> Host
+  Host -. closed_loop, max 2 revisions .-> CoderC
+
+  CoderC --> Score[EvalPlus/local scoring inside Docker]
+  Host --> Trace[distributed_trace with role, step, container_id]
+  Trace --> Summary[distributed_process_summary.csv]
+```
+
+This experiment records `deployment_mode=distributed`,
+`agent_system=distributed-reference-multi-agent`, and
+`framework_native=false`. It validates distribution and traceability, but it
+does not yet validate role-local DockerTarget/process/container fault
+injection; that remains explicitly recorded as `distributed-faults`
+unsupported evidence.
+
 ## F. Docker Infrastructure Validation
 
 Goal: validate Docker execution and container-scoped fault safety.

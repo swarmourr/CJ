@@ -15,6 +15,8 @@ unsupported artifacts where they do not.
 
 This script is additive: it does not replace the existing injector,
 individual-agent, multi-agent-reference, overhead, or infrastructure scripts.
+It now runs a distributed reference smoke where Planner, Coder, and Reviewer
+execute in separate Docker containers.
 
 Options:
   --env-file PATH       Load model config/secrets from PATH. Default: .env.
@@ -187,6 +189,23 @@ if [[ "${run_process}" -eq 1 ]]; then
   "${script_dir}/run_process_container_fault_smoke.sh"
 fi
 
+if [[ "${run_real_model}" -eq 1 ]]; then
+  CJ_EVAL_BENCHMARK="${CJ_EVAL_DISTRIBUTED_BENCHMARK:-humanevalplus}" \
+  CJ_EVAL_BENCHMARK_SUBSET="${CJ_EVAL_DISTRIBUTED_SUBSET:-smoke}" \
+  CJ_EVAL_TOPOLOGY="${CJ_EVAL_DISTRIBUTED_TOPOLOGY:-linear}" \
+  CJ_EVAL_TASKS="${CJ_EVAL_DISTRIBUTED_TASKS:-1}" \
+  CJ_EVAL_RUN_NAME="container-per-role-${CJ_EVAL_MODEL}" \
+    "${script_dir}/run_distributed_reference_smoke.sh"
+else
+  CJ_EVAL_DISTRIBUTED_DRY_RUN=1 \
+  CJ_EVAL_BENCHMARK="${CJ_EVAL_DISTRIBUTED_BENCHMARK:-humanevalplus}" \
+  CJ_EVAL_BENCHMARK_SUBSET="${CJ_EVAL_DISTRIBUTED_SUBSET:-smoke}" \
+  CJ_EVAL_TOPOLOGY="${CJ_EVAL_DISTRIBUTED_TOPOLOGY:-linear}" \
+  CJ_EVAL_TASKS="${CJ_EVAL_DISTRIBUTED_TASKS:-1}" \
+  CJ_EVAL_RUN_NAME="container-per-role-dry-run" \
+    "${script_dir}/run_distributed_reference_smoke.sh"
+fi
+
 "${script_dir}/write_unsupported_experiment.sh" \
   "native-multi-agent" "native-autogen-langgraph-crewai" \
   "native framework multi-agent planner/coder/reviewer workflows are not implemented yet" \
@@ -196,12 +215,11 @@ fi
   "framework_native=true records from real native adapters"
 
 "${script_dir}/write_unsupported_experiment.sh" \
-  "distributed-multi-agent" "container-per-role" \
-  "one-container-per-agent-role distributed architecture is not implemented yet" \
-  "planner container" \
-  "coder container" \
-  "reviewer container" \
-  "message bus with trace IDs" \
+  "distributed-faults" "role-local-distributed-faults" \
+  "container-per-role execution is implemented, but role-local DockerTarget/process/container faults are not yet connected to the distributed runner" \
+  "role-local DockerTarget fault activation" \
+  "role-local process kill" \
+  "role-local container kill" \
   "role-local DockerTarget/process/container faults"
 
 "${script_dir}/write_unsupported_experiment.sh" \
