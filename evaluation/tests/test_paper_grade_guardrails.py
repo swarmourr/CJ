@@ -880,8 +880,10 @@ def test_one_command_paper_runner_includes_image_debug_and_all_scenarios():
 
     assert "--debug-image" in script
     assert "--paper-all" in script
+    assert "--with-missing" in script
     assert "debug_docker_image.sh" in script
     assert "run_all_current_scenarios.sh" in script
+    assert "run_missing_paper_experiments.sh" in script
 
 
 def test_docker_image_debug_script_runs_without_credentials_or_docker_socket_mount():
@@ -903,3 +905,29 @@ def test_common_image_requirement_does_not_autobuild_on_docker_daemon_error():
     assert "Docker image inspection failed before image existence could be verified" in script
     assert "permission denied|cannot connect|docker daemon" in script
     assert "Auto-building missing evaluation image" in script
+
+
+def test_missing_paper_bundle_records_all_remaining_categories():
+    script = open("evaluation/scripts/run_missing_paper_experiments.sh", encoding="utf-8").read()
+
+    for token in (
+        "strict-evalplus-gate",
+        "tool-required",
+        "semantic-static-vs-generated",
+        "model-sensitivity",
+        "cpu_pressure memory_pressure network_latency packet_loss disk_full",
+        "run_process_container_fault_smoke.sh",
+        "native-multi-agent",
+        "distributed-multi-agent",
+        "communication-faults",
+        "comparator",
+    ):
+        assert token in script
+
+
+def test_unsupported_experiment_writer_prevents_silent_missing_categories():
+    script = open("evaluation/scripts/write_unsupported_experiment.sh", encoding="utf-8").read()
+
+    assert '"status": "unsupported"' in script
+    assert "Do not claim this category as evaluated" in script
+    assert "missing_requirements" in script

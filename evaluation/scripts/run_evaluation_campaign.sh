@@ -25,6 +25,7 @@ Modes:
   pilot        Run the broader pilot bundle from run_all_paper_scenarios.sh.
   real-smoke   Run the low-count real-LLM smoke script.
   all-scenarios Run every current scenario category explicitly.
+  missing      Run the missing paper experiment bundle once.
   help         Show this help.
 
 Preconfigured scenarios:
@@ -41,6 +42,7 @@ Preconfigured scenarios:
   infra-network-smoke         Container-scoped network-latency smoke, dry-run task.
   paper-smoke                 Small bundle across implemented paper categories.
   all-current                 Every current scenario category and infra fault.
+  missing-paper               Missing paper experiments bundle.
 
 Common options:
   --env-file PATH             Load model credentials/config from PATH.
@@ -59,6 +61,7 @@ Common options:
   --infra-fault NAME          Infrastructure fault: cpu_pressure, memory_pressure,
                               network_latency, packet_loss, or disk_full.
   --infra-faults LIST         Space/comma-separated infrastructure faults for all-scenarios.
+  --models LIST               Space/comma-separated models for model sensitivity.
   --tasks N                   Number of tasks.
   --repeats N                 Repetitions per task.
   --seed N                    Random seed.
@@ -183,6 +186,14 @@ Preconfigured evaluation scenarios:
     Purpose: run the complete current evaluation surface without using the
              legacy smoke wrapper.
 
+  missing-paper
+    Mode: missing
+    Defaults: strict EvalPlus gate, tool-required pass, semantic static vs
+              generated pass, all infrastructure faults, process/container
+              diagnostic, model sensitivity, and unsupported manifests for
+              native/distributed/communication/comparator categories.
+    Purpose: record every remaining paper category in one run.
+
 All scenario defaults can be overridden with ordinary flags after the scenario
 name, for example:
 
@@ -299,6 +310,12 @@ apply_scenario() {
       export CJ_EVAL_RUN_NAME="all-current"
       echo "all-scenarios"
       ;;
+    missing-paper)
+      export CJ_EVAL_TASKS="${CJ_EVAL_TASKS:-1}"
+      export CJ_EVAL_REPEATS="${CJ_EVAL_REPEATS:-1}"
+      export CJ_EVAL_RUN_NAME="missing-paper"
+      echo "missing"
+      ;;
     *)
       echo "[cj-eval] unknown scenario: ${name}" >&2
       print_scenarios >&2
@@ -403,6 +420,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --infra-faults)
       export CJ_EVAL_INFRA_FAULTS="$(normalize_list "$2")"
+      shift 2
+      ;;
+    --models)
+      export CJ_EVAL_MODELS="$(normalize_list "$2")"
       shift 2
       ;;
     --tasks)
@@ -553,6 +574,10 @@ case "${mode}" in
   all-scenarios|all)
     ensure_image
     "${script_dir}/run_all_current_scenarios.sh"
+    ;;
+  missing)
+    ensure_image
+    "${script_dir}/run_missing_paper_experiments.sh"
     ;;
   *)
     echo "[cj-eval] unknown campaign mode: ${mode}" >&2

@@ -29,8 +29,12 @@ Options:
   --with-real-e2e       Run the bounded real-model smoke experiment.
   --with-all-scenarios  Run every currently implemented evaluation scenario
                         through run_all_current_scenarios.sh.
+  --with-missing        Run the missing paper experiment bundle once. This runs
+                        implemented missing categories and writes unsupported
+                        artifacts for planned architectures.
   --paper-all           Build image, debug image, run validation, gateway, and
-                        all current scenario categories in one result folder.
+                        all current + missing scenario categories in one result
+                        folder.
   --env-file PATH       Load model config/secrets from PATH. Default: .env.
   --results-run NAME    Result folder under results/.
   --skip-safe           Skip safe unit/integration tests.
@@ -63,6 +67,7 @@ run_infra=0
 run_real_e2e=0
 run_all_scenarios=0
 run_image_debug=0
+run_missing=0
 build_image=0
 build_mode="--keep-old"
 no_cache=0
@@ -84,6 +89,7 @@ while [[ $# -gt 0 ]]; do
       run_docker=1
       run_gateway=1
       run_all_scenarios=1
+      run_missing=1
       shift
       ;;
     --build-image)
@@ -120,6 +126,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --with-all-scenarios)
       run_all_scenarios=1
+      shift
+      ;;
+    --with-missing)
+      run_missing=1
       shift
       ;;
     --env-file)
@@ -172,6 +182,7 @@ cat <<EOF
 [cj-eval] infra smoke  : ${run_infra}
 [cj-eval] real e2e     : ${run_real_e2e}
 [cj-eval] all scenarios: ${run_all_scenarios}
+[cj-eval] missing exp. : ${run_missing}
 [cj-eval] model        : ${CJ_EVAL_MODEL}
 [cj-eval] base url     : ${CJ_EVAL_BASE_URL}
 EOF
@@ -185,7 +196,7 @@ if [[ "${build_image}" -eq 1 ]]; then
   cj_eval_metadata "${build_dir}/metadata.json" "docker-build" "evaluation-image" "${image}"
   cj_eval_write_command "${build_dir}/build_command.sh" "${build_cmd[@]}"
   cj_eval_run_logged "${build_dir}/logs/docker_build.log" "${build_cmd[@]}"
-elif [[ "${run_image_debug}" -eq 1 || "${run_docker}" -eq 1 || "${run_infra}" -eq 1 || "${run_real_e2e}" -eq 1 || "${run_all_scenarios}" -eq 1 ]]; then
+elif [[ "${run_image_debug}" -eq 1 || "${run_docker}" -eq 1 || "${run_infra}" -eq 1 || "${run_real_e2e}" -eq 1 || "${run_all_scenarios}" -eq 1 || "${run_missing}" -eq 1 ]]; then
   cj_eval_require_image "${image}"
 else
   echo "[cj-eval] Docker image not required for selected test groups."
@@ -242,6 +253,10 @@ fi
 if [[ "${run_all_scenarios}" -eq 1 ]]; then
   CJ_EVAL_REBUILD_IMAGE="${CJ_EVAL_REBUILD_IMAGE:-0}" \
     "${script_dir}/run_all_current_scenarios.sh"
+fi
+
+if [[ "${run_missing}" -eq 1 ]]; then
+  "${script_dir}/run_missing_paper_experiments.sh"
 fi
 
 echo "[cj-eval] paper-grade validation complete under $(cj_eval_results_root)"
