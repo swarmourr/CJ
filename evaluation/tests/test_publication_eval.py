@@ -1501,6 +1501,101 @@ def test_container_scoped_fault_orchestration_sequence(monkeypatch):
     ]
 
 
+def test_container_scoped_fault_requires_manifestation_evidence(monkeypatch):
+    events = []
+
+    class FakeFault:
+        def start(self, target):
+            events.append(("start", target.container_id))
+
+        def stop(self, target):
+            events.append(("stop", target.container_id))
+
+        def verify_active(self, target):
+            events.append(("verify_active", target.container_id))
+            return VerificationResult(verified=True, reason="active", observed={"state": "active"})
+
+        def verify_recovered(self, target):
+            events.append(("verify_recovered", target.container_id))
+            return VerificationResult(verified=True, reason="recovered", observed={"state": "clean"})
+
+    class FakeRunner:
+        def prepare(self, **kwargs):
+            return PreparedContainer(
+                container_id="abc123",
+                image="image",
+                image_digest="sha256:test",
+                input_dir="/tmp/in",
+                output_dir="/tmp/out",
+                request_path="/cj/input/request.json",
+                resource_limits={},
+                created_at=0.0,
+            )
+
+        def start_container(self, container):
+            return subprocess.CompletedProcess(["docker", "start", container.container_id], 0, "", "")
+
+        def exec_agent(self, container):
+            events.append(("exec", container.container_id))
+            return object()
+
+        def collect(self, execution):
+            return DockerAgentRunResult(
+                container_id="abc123",
+                exit_code=0,
+                timed_out=False,
+                duration_s=1.0,
+                stdout="",
+                stderr="",
+                result={"success": 1.0, "termination_reason": "completed"},
+                image="image",
+                image_digest="sha256:test",
+                resource_limits={},
+                artifact_paths={},
+            )
+
+        def cleanup(self, container):
+            events.append(("cleanup", container.container_id))
+
+    monkeypatch.setattr("evaluation.infrastructure_orchestrator.DockerTarget.connect", lambda self: setattr(self, "_connected", True))
+    monkeypatch.setattr("evaluation.infrastructure_orchestrator.DockerTarget.disconnect", lambda self: setattr(self, "_connected", False))
+    monkeypatch.setattr(
+        "evaluation.infrastructure_orchestrator._collect_manifestation_evidence",
+        lambda target, fault: {
+            "manifested": False,
+            "reason": "probe did not observe resource pressure",
+            "observed": {"cpu_percent": 0.0},
+        },
+    )
+
+    result = run_container_scoped_fault(
+        docker_runner=FakeRunner(),
+        fault=FakeFault(),
+        agent_system="autogen",
+        topology="single",
+        task={"prompt": "x"},
+        seed=0,
+        model_config={},
+        execution_config={},
+        run_context=RunContext(
+            study_id="s",
+            campaign_id="c",
+            pair_id="p",
+            run_id="r",
+            condition="cj_fault",
+        ),
+    )
+
+    assert result.lifecycle["activated"] is True
+    assert result.lifecycle["triggered"] is True
+    assert result.lifecycle["manifested"] is False
+    assert result.lifecycle["verdict"] == "invalid"
+    assert "resource pressure" in result.lifecycle["details"]
+    assert result.activation_evidence["observed"]["cpu_percent"] == 0.0
+    assert ("exec", "abc123") in events
+    assert ("cleanup", "abc123") in events
+
+
 def test_infrastructure_record_uses_dict_source_provenance():
     result = DockerAgentRunResult(
         container_id="abc123",

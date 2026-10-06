@@ -595,6 +595,55 @@ class TestCSVOutput:
         assert float(row["observed_added_latency_s"]) == pytest.approx(66.15)
         assert float(row["expected_added_latency_s"]) == pytest.approx(66.0)
 
+    def test_fault_fidelity_http_statuses_use_full_proxy_aggregates_not_preview_caps(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[2]["fault_type"] = "llm_rate_limit"
+        records[2]["fault_parameters"] = {"status_code": 429}
+        records[2]["lifecycle"]["proxy_call_count"] = 30
+        records[2]["lifecycle"]["proxy_calls_affected_count"] = 30
+        records[2]["lifecycle"]["evidence"]["fault_evidence"] = []
+        records[2]["lifecycle"]["evidence"]["proxy_calls"] = []
+        records[2]["lifecycle"]["evidence"]["proxy_call_totals"] = {
+            "intercepted_calls": 30,
+            "affected_calls": 30,
+            "http_status_counts": {"429": 30},
+        }
+
+        path = str(tmp_path / "fault_fidelity_summary.csv")
+        write_fault_fidelity_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+
+        assert row["fault"] == "llm_rate_limit"
+        assert int(row["intercepted_calls"]) == 30
+        assert int(row["affected_calls"]) == 30
+        assert row["observed_http_statuses"] == '["429"]'
+
+    def test_fault_fidelity_timeout_uses_full_proxy_aggregate_latency(self, tmp_path):
+        records = _make_exact_triplet_records()
+        records[2]["fault_type"] = "llm_timeout"
+        records[2]["fault_parameters"] = {"timeout_s": 5.0}
+        records[2]["lifecycle"]["proxy_call_count"] = 30
+        records[2]["lifecycle"]["proxy_calls_affected_count"] = 30
+        records[2]["lifecycle"]["evidence"]["fault_evidence"] = []
+        records[2]["lifecycle"]["evidence"]["proxy_calls"] = []
+        records[2]["lifecycle"]["evidence"]["proxy_call_totals"] = {
+            "intercepted_calls": 30,
+            "affected_calls": 30,
+            "http_status_counts": {"504": 30},
+            "numeric_sums": {"latency_s": 150.3},
+        }
+
+        path = str(tmp_path / "fault_fidelity_summary.csv")
+        write_fault_fidelity_summary_csv(records, path)
+        with open(path) as f:
+            row = list(csv.DictReader(f))[0]
+
+        assert row["fault"] == "llm_timeout"
+        assert float(row["observed_timeout_duration_s"]) == pytest.approx(150.3)
+        assert float(row["expected_timeout_duration_s"]) == pytest.approx(150.0)
+        assert row["timeout_fidelity_source"] == "cj_proxy_latency_s"
+
     def test_fault_fidelity_latency_missing_proxy_sleep_evidence_has_no_runtime_fallback(self, tmp_path):
         records = _make_exact_triplet_records()
         records[2]["duration_s"] = 100.0
