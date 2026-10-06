@@ -18,8 +18,13 @@ from typing import Any
 
 _SECRET_NAME_RE = re.compile(r"(secret|password|credential)", re.I)
 _SECRET_ENV_NAME_RE = re.compile(r"(api[_-]?key|token|secret|password|credential)", re.I)
+_SECRET_VALUE_PATTERNS = (
+    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-]{8,}", re.I),
+)
 _SECRET_EXACT_KEYS = {
     "api_key",
+    "token",
     "access_token",
     "refresh_token",
     "secret_key",
@@ -53,8 +58,10 @@ def redact_secrets(value: Any) -> Any:
     if isinstance(value, list):
         return [redact_secrets(item) for item in value]
     if isinstance(value, str):
-        if value.startswith(("sk-", "Bearer ")):
-            return "[REDACTED]"
+        redacted = value
+        for pattern in _SECRET_VALUE_PATTERNS:
+            redacted = pattern.sub("[REDACTED]", redacted)
+        return redacted
     return value
 
 
