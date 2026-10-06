@@ -585,11 +585,13 @@ def _selectivity_metrics(records: list[dict]) -> dict[str, Any]:
             evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else {}
             request_meta = evidence.get("request_meta") if isinstance(evidence.get("request_meta"), dict) else {}
             agent_role = target.get("agent_role") or request_meta.get("agent_role")
-            if role:
-                target_matched = agent_role == role
-                has_target = True
-            elif "target_matched" in entry:
+            if "target_matched" in entry:
                 target_matched = entry.get("target_matched") is True
+                if role and agent_role:
+                    target_matched = target_matched and agent_role == role
+                has_target = True
+            elif role:
+                target_matched = agent_role == role
                 has_target = True
             else:
                 target_matched = False
