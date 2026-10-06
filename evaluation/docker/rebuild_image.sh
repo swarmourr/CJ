@@ -13,6 +13,7 @@ Options:
   --image-name NAME      Docker image repository name. Default: cj-eval-agent
   --tag TAG             Docker tag. Default: current git commit SHA
   --commit COMMIT       Build-time CJ_COMMIT value. Default: current git commit SHA
+  --no-short-tag        Do not also tag the image with the 7-character commit SHA
   --force-remove        Pass --force to docker image rm for old image tags
   --keep-old            Do not remove existing image tags before building
   --no-cache            Build without Docker layer cache
@@ -34,6 +35,7 @@ tag=""
 force_remove=0
 keep_old=0
 no_cache=0
+short_tag=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
     --commit)
       commit="${2:?--commit requires a value}"
       shift 2
+      ;;
+    --no-short-tag)
+      short_tag=0
+      shift
       ;;
     --force-remove)
       force_remove=1
@@ -83,10 +89,17 @@ if [[ -z "${tag}" ]]; then
 fi
 
 new_ref="${image_name}:${tag}"
+short_ref=""
+if [[ "${short_tag}" -eq 1 && "${commit}" != "unknown" && "${#commit}" -ge 7 ]]; then
+  short_ref="${image_name}:${commit:0:7}"
+fi
 
 echo "[cj-eval] repo root : ${repo_root}"
 echo "[cj-eval] commit    : ${commit}"
 echo "[cj-eval] image     : ${new_ref}"
+if [[ -n "${short_ref}" && "${short_ref}" != "${new_ref}" ]]; then
+  echo "[cj-eval] alias     : ${short_ref}"
+fi
 
 if [[ "${keep_old}" -eq 0 ]]; then
   old_refs=()
@@ -118,6 +131,9 @@ build_args=(
   --build-arg "CJ_COMMIT=${commit}"
   -t "${new_ref}"
 )
+if [[ -n "${short_ref}" && "${short_ref}" != "${new_ref}" ]]; then
+  build_args+=(-t "${short_ref}")
+fi
 if [[ "${no_cache}" -eq 1 ]]; then
   build_args+=(--no-cache)
 fi
