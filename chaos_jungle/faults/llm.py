@@ -121,7 +121,14 @@ class _LLMProxyFault(Fault):
     def _read_proxy_config(self) -> dict:
         import urllib.request as _ur
 
-        with _ur.urlopen(f"http://127.0.0.1:{self.port}/_cj/config", timeout=0.3) as resp:
+        try:
+            probe_timeout_s = float(os.environ.get("CJ_EVAL_PROXY_PROBE_TIMEOUT_S", "1.0"))
+        except ValueError:
+            probe_timeout_s = 1.0
+        with _ur.urlopen(
+            f"http://127.0.0.1:{self.port}/_cj/config",
+            timeout=probe_timeout_s,
+        ) as resp:
             return json.loads(resp.read())
 
     def _fault_config(self) -> dict:
@@ -168,7 +175,11 @@ class _LLMProxyFault(Fault):
         # Poll the config endpoint until this exact fault is ready.  A stale
         # pass-through proxy on the same port can answer /_cj/health, so health
         # alone is not sufficient activation evidence.
-        deadline = time.time() + 5.0
+        try:
+            startup_timeout_s = float(os.environ.get("CJ_EVAL_PROXY_STARTUP_TIMEOUT_S", "30"))
+        except ValueError:
+            startup_timeout_s = 30.0
+        deadline = time.time() + startup_timeout_s
         last_cfg: dict | None = None
         last_error: str = ""
         while time.time() < deadline:
@@ -191,7 +202,8 @@ class _LLMProxyFault(Fault):
                     self._proc.kill()
             raise RuntimeError(
                 f"LLM proxy did not become ready with fault={self._fault_name!r} "
-                f"on port {self.port}; last_config={last_cfg!r}; last_error={last_error}"
+                f"on port {self.port}; last_config={last_cfg!r}; last_error={last_error}; "
+                f"timeout_s={startup_timeout_s}"
             )
 
         if self._proc.poll() is not None:

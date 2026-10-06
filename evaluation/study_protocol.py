@@ -7,6 +7,7 @@ import hashlib
 import os
 import platform
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -253,8 +254,7 @@ class PublicationStudyOrchestrator:
         repetition: int = 0,
         container_direct_base_url: str | None = None,
     ) -> list[dict[str, Any]]:
-        control_proxy_port = self.proxy_port
-        fault_proxy_port = self.proxy_port + 1
+        control_proxy_port, fault_proxy_port = self._select_proxy_ports()
         _configure_proxy_fault(fault, model_config, fault_proxy_port)
         pair_id = make_pair_id(
             study_id=self.study_id,
@@ -662,7 +662,9 @@ class PublicationStudyOrchestrator:
                 "control",
             ])
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        deadline = time.time() + 5
+        startup_timeout_s = _float_env("CJ_EVAL_PROXY_STARTUP_TIMEOUT_S", 30.0)
+        probe_timeout_s = _float_env("CJ_EVAL_PROXY_PROBE_TIMEOUT_S", 1.0)
+        deadline = time.time() + startup_timeout_s
         last_cfg: dict[str, Any] | None = None
         last_error = ""
 
@@ -672,7 +674,8 @@ class PublicationStudyOrchestrator:
                 raise RuntimeError(f"CJ pass-through proxy failed to start: {out}")
             try:
                 with urlrequest.urlopen(
-                    f"http://127.0.0.1:{proxy_port}/_cj/config", timeout=0.3
+                    f"http://127.0.0.1:{proxy_port}/_cj/config",
+                    timeout=probe_timeout_s,
                 ) as resp:
                     cfg = json.loads(resp.read())
                 last_cfg = cfg
@@ -690,13 +693,43 @@ class PublicationStudyOrchestrator:
                     return proc
             except Exception as exc:
                 last_error = repr(exc)
-                time.sleep(0.05)
+                time.sleep(0.1)
         self._stop_process(proc)
         raise RuntimeError(
             "CJ pass-through proxy did not become ready with the expected "
             f"control config on port {proxy_port}; last_config={last_cfg!r}; "
-            f"last_error={last_error}"
+            f"last_error={last_error}; timeout_s={startup_timeout_s}"
         )
+
+    def _select_proxy_ports(self) -> tuple[int, int]:
+        """Return host proxy ports for one paired experiment.
+
+        Long publication campaigns start and stop hundreds of short-lived proxy
+        processes.  Reusing the same port pair for every task makes one slow or
+        stale process fatal for the whole campaign.  By default, allocate a fresh
+        free pair per triplet and record the chosen ports in each output record.
+        Set CJ_EVAL_FIXED_PROXY_PORTS=1 to preserve the historical fixed pair.
+        """
+        if _truthy_env("CJ_EVAL_FIXED_PROXY_PORTS"):
+            return self.proxy_port, self.proxy_port + 1
+
+        sockets: list[socket.socket] = []
+        try:
+            ports: list[int] = []
+            for _ in range(2):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("127.0.0.1", 0))
+                sock.listen(1)
+                sockets.append(sock)
+                ports.append(int(sock.getsockname()[1]))
+            return ports[0], ports[1]
+        finally:
+            for sock in sockets:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
 
     def _docker_reachable_proxy_url(self, port: int | None = None) -> str:
         if platform.system().lower() == "darwin":
@@ -744,9 +777,7 @@ class PublicationStudyOrchestrator:
     def _wait_proxy_down(self, port: int, *, timeout_s: float = 5.0) -> None:
         deadline = time.time() + timeout_s
         while time.time() < deadline:
-            try:
-                urlrequest.urlopen(f"http://127.0.0.1:{port}/_cj/health", timeout=0.2)
-            except Exception:
+            if not _tcp_port_open(port):
                 return
             time.sleep(0.05)
         raise RuntimeError(f"CJ proxy on port {port} did not stop before next condition")
@@ -762,6 +793,30 @@ def _jsonable(value: Any) -> Any:
         if isinstance(value, (list, tuple)):
             return [_jsonable(v) for v in value]
         return repr(value)
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _tcp_port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.2):
+            return True
+    except (ConnectionRefusedError, OSError):
+        return False
+    except TimeoutError:
+        return True
 
 
 def _utc_now() -> str:

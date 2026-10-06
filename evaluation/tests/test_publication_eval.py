@@ -1328,6 +1328,7 @@ def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatc
         metadata={"source": "bundled"},
     )
     fake_runner = FakeRunner()
+    monkeypatch.setenv("CJ_EVAL_FIXED_PROXY_PORTS", "1")
     orch = PublicationStudyOrchestrator(
         fake_runner,
         study_id="study-x",
@@ -1367,6 +1368,25 @@ def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatc
     assert records[2]["fault_parameters"]["port"] == 18100
     assert records[2]["fault_parameters"]["upstream"] == "http://127.0.0.1:9999"
     assert records[2]["validity"] == "valid"
+
+
+def test_publication_orchestrator_allocates_dynamic_proxy_ports(tmp_path, monkeypatch):
+    monkeypatch.delenv("CJ_EVAL_FIXED_PROXY_PORTS", raising=False)
+    orch = PublicationStudyOrchestrator(
+        object(),
+        study_id="study-x",
+        results_dir=str(tmp_path),
+        proxy_port=18099,
+    )
+    control_port, fault_port = orch._select_proxy_ports()
+    assert isinstance(control_port, int)
+    assert isinstance(fault_port, int)
+    assert control_port > 0
+    assert fault_port > 0
+    assert control_port != fault_port
+
+    monkeypatch.setenv("CJ_EVAL_FIXED_PROXY_PORTS", "1")
+    assert orch._select_proxy_ports() == (18099, 18100)
 
 
 def test_container_scoped_fault_orchestration_sequence(monkeypatch):
