@@ -21,14 +21,16 @@ Options:
   --build-image         Rebuild the evaluation Docker image for this worktree.
   --force-remove        When building, remove old cj-eval-agent tags first.
   --no-cache            Build without Docker cache.
+  --debug-image         Inspect/debug the evaluation Docker image and run one
+                        dry container-entrypoint request with no model calls.
   --with-docker         Run Docker integration tests.
   --with-gateway        Run real LLM gateway tests against the configured endpoint.
   --with-infra-smoke    Run one infrastructure smoke fault.
   --with-real-e2e       Run the bounded real-model smoke experiment.
   --with-all-scenarios  Run every currently implemented evaluation scenario
                         through run_all_current_scenarios.sh.
-  --paper-all           Build image, run validation, gateway, and all current
-                        scenario categories in one result folder.
+  --paper-all           Build image, debug image, run validation, gateway, and
+                        all current scenario categories in one result folder.
   --env-file PATH       Load model config/secrets from PATH. Default: .env.
   --results-run NAME    Result folder under results/.
   --skip-safe           Skip safe unit/integration tests.
@@ -60,6 +62,7 @@ run_gateway=0
 run_infra=0
 run_real_e2e=0
 run_all_scenarios=0
+run_image_debug=0
 build_image=0
 build_mode="--keep-old"
 no_cache=0
@@ -68,6 +71,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --all)
       build_image=1
+      run_image_debug=1
       run_docker=1
       run_gateway=1
       run_infra=1
@@ -76,6 +80,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --paper-all)
       build_image=1
+      run_image_debug=1
       run_docker=1
       run_gateway=1
       run_all_scenarios=1
@@ -91,6 +96,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-cache)
       no_cache=1
+      shift
+      ;;
+    --debug-image)
+      run_image_debug=1
       shift
       ;;
     --with-docker)
@@ -156,6 +165,7 @@ cat <<EOF
 [cj-eval] results root : $(cj_eval_results_root)
 [cj-eval] run          : ${CJ_EVAL_EXPERIMENT_RUN}
 [cj-eval] image        : ${image}
+[cj-eval] image debug  : ${run_image_debug}
 [cj-eval] safe tests   : ${run_safe}
 [cj-eval] docker tests : ${run_docker}
 [cj-eval] gateway      : ${run_gateway}
@@ -175,7 +185,7 @@ if [[ "${build_image}" -eq 1 ]]; then
   cj_eval_metadata "${build_dir}/metadata.json" "docker-build" "evaluation-image" "${image}"
   cj_eval_write_command "${build_dir}/build_command.sh" "${build_cmd[@]}"
   cj_eval_run_logged "${build_dir}/logs/docker_build.log" "${build_cmd[@]}"
-elif [[ "${run_docker}" -eq 1 || "${run_infra}" -eq 1 || "${run_real_e2e}" -eq 1 || "${run_all_scenarios}" -eq 1 ]]; then
+elif [[ "${run_image_debug}" -eq 1 || "${run_docker}" -eq 1 || "${run_infra}" -eq 1 || "${run_real_e2e}" -eq 1 || "${run_all_scenarios}" -eq 1 ]]; then
   cj_eval_require_image "${image}"
 else
   echo "[cj-eval] Docker image not required for selected test groups."
@@ -191,6 +201,10 @@ if [[ "${run_safe}" -eq 1 ]]; then
   cj_eval_metadata "${safe_dir}/metadata.json" "stage-a-static-unit" "safe-suite" "${image}"
   cj_eval_write_command "${safe_dir}/safe_tests_command.sh" "${safe_cmd[@]}"
   cj_eval_run_logged "${safe_dir}/logs/safe_tests.log" "${safe_cmd[@]}"
+fi
+
+if [[ "${run_image_debug}" -eq 1 ]]; then
+  "${script_dir}/debug_docker_image.sh" --image "${image}" --run-name "evaluation-image"
 fi
 
 if [[ "${run_docker}" -eq 1 ]]; then

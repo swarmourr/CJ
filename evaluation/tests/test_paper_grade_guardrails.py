@@ -873,3 +873,33 @@ def test_result_folders_are_isolated_by_condition_run_id(tmp_path):
     assert str(tmp_path) in ctx_a.output_root
     assert "direct_baseline-" in ctx_a.output_root
     assert "cj_fault-" in ctx_b.output_root
+
+
+def test_one_command_paper_runner_includes_image_debug_and_all_scenarios():
+    script = open("evaluation/scripts/run_paper_grade_tests.sh", encoding="utf-8").read()
+
+    assert "--debug-image" in script
+    assert "--paper-all" in script
+    assert "debug_docker_image.sh" in script
+    assert "run_all_current_scenarios.sh" in script
+
+
+def test_docker_image_debug_script_runs_without_credentials_or_docker_socket_mount():
+    script = open("evaluation/scripts/debug_docker_image.sh", encoding="utf-8").read()
+
+    assert "CJ_EVAL_API_KEY" not in script
+    assert "LLM_API_KEY" not in script
+    assert "/var/run/docker.sock" in script
+    assert "-v /var/run/docker.sock" not in script
+    assert "--network none" in script
+    assert "--read-only" in script
+    assert "--cap-drop ALL" in script
+    assert "python -m evaluation.container_entrypoint" in script
+
+
+def test_common_image_requirement_does_not_autobuild_on_docker_daemon_error():
+    script = open("evaluation/scripts/common.sh", encoding="utf-8").read()
+
+    assert "Docker image inspection failed before image existence could be verified" in script
+    assert "permission denied|cannot connect|docker daemon" in script
+    assert "Auto-building missing evaluation image" in script

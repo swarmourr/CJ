@@ -158,8 +158,18 @@ cj_eval_default_env_file() {
 
 cj_eval_require_image() {
   local image="$1"
-  if docker image inspect "${image}" >/dev/null 2>&1; then
+  local inspect_output
+  if inspect_output="$(docker image inspect "${image}" 2>&1 >/dev/null)"; then
     return 0
+  fi
+  if echo "${inspect_output}" | grep -Eqi 'permission denied|cannot connect|docker daemon|is the docker daemon running'; then
+    cat >&2 <<EOF
+[cj-eval] Docker image inspection failed before image existence could be verified.
+[cj-eval] Image : ${image}
+[cj-eval] Error : ${inspect_output}
+[cj-eval] Fix Docker Desktop/daemon access, then rerun this command.
+EOF
+    exit 2
   fi
 
   if [[ "${CJ_EVAL_AUTO_BUILD_IMAGE:-1}" != "1" ]]; then
