@@ -254,6 +254,26 @@ def test_docker_runner_image_digest_uses_inspect_format_before_image(monkeypatch
     ]
 
 
+def test_docker_runner_image_digest_falls_back_to_image_ls(monkeypatch):
+    runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
+
+    def fake_run(cmd, timeout):
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(cmd, 1, "", "No such image")
+        if cmd[:3] == ["docker", "image", "ls"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                "other:tag sha256:other\ncj:test sha256:listed\n",
+                "",
+            )
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+
+    assert runner._image_digest("cj:test") == "sha256:listed"
+
+
 def test_docker_runner_prepare_writes_redacted_request(tmp_path, monkeypatch):
     runner = DockerAgentRunner(DockerExecutionConfig(image="cj:test"))
     monkeypatch.setattr(runner, "_require_docker", lambda: None)

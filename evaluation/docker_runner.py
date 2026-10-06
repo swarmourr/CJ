@@ -498,6 +498,9 @@ class DockerAgentRunner:
             timeout=60,
         )
         if proc.returncode != 0:
+            image_id = self._image_id_from_ls(image)
+            if image_id:
+                return image_id
             raise RuntimeError(f"docker image inspect failed: {proc.stderr or proc.stdout}")
         try:
             digests = json.loads(proc.stdout.strip() or "[]")
@@ -511,7 +514,37 @@ class DockerAgentRunner:
         )
         if image_id.returncode == 0 and image_id.stdout.strip():
             return image_id.stdout.strip()
+        listed_id = self._image_id_from_ls(image)
+        if listed_id:
+            return listed_id
         raise RuntimeError(f"image {image!r} has no inspectable digest or ID")
+
+    def _image_id_from_ls(self, image: str) -> str:
+        """Resolve a local image tag to an immutable ID via image ls.
+
+        Docker Desktop can briefly list a just-built tag while ``image inspect
+        <tag>`` still reports "No such image".  The publication runner only
+        needs a stable local image identity in that case, so fall back to the
+        full image ID reported by ``docker image ls --no-trunc``.
+        """
+        proc = self._run(
+            [
+                self.config.docker_bin,
+                "image",
+                "ls",
+                "--no-trunc",
+                "--format",
+                "{{.Repository}}:{{.Tag}} {{.ID}}",
+            ],
+            timeout=60,
+        )
+        if proc.returncode != 0:
+            return ""
+        for line in proc.stdout.splitlines():
+            ref, _, image_id = line.strip().partition(" ")
+            if ref == image and image_id:
+                return image_id.strip()
+        return ""
 
     def _require_docker(self) -> None:
         if shutil.which(self.config.docker_bin) is None:
