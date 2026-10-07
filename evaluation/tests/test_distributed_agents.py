@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from chaos_jungle.faults.base import VerificationResult
+from evaluation.distributed_faults import DistributedFaultPlan, apply_communication_fault
 from evaluation.distributed_entrypoint import run_role_request, run_score_request
 from evaluation.distributed_runner import DistributedReferenceRunner
 from evaluation.docker_runner import DockerExecution, DockerExecutionConfig, PreparedContainer, RunContext
@@ -65,6 +67,7 @@ class _FakeDockerRunner:
         self.tmp_path = tmp_path
         self.prepared: list[PreparedContainer] = []
         self.cleaned: list[str] = []
+        self.running: set[str] = set()
 
     def prepare(self, *, run_context: RunContext, **_kwargs):
         role = Path(run_context.output_root).name
@@ -86,6 +89,13 @@ class _FakeDockerRunner:
         )
         self.prepared.append(container)
         return container
+
+    def is_running(self, container):
+        return container.container_id in self.running
+
+    def start_container(self, container):
+        self.running.add(container.container_id)
+        return type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     def exec_agent(self, container, *, request_path=None, output_path="/cj/output/result.json"):
         request_file = Path(container.input_dir) / Path(request_path or "request.json").name
@@ -191,3 +201,164 @@ def test_distributed_runner_uses_one_container_per_role(tmp_path):
     assert result["scorer_status"] == "ok"
     assert result["success"] == 1.0
     assert sorted(fake.cleaned) == ["coder-container", "planner-container", "reviewer-container"]
+
+
+def test_communication_fault_drop_records_missing_handoff():
+    plan = DistributedFaultPlan.from_config({
+        "fault_type": "message_drop",
+        "from_role": "planner",
+        "to_role": "coder",
+        "severity": "medium",
+    })
+
+    deliveries, events = apply_communication_fault(
+        plan=plan,
+        content="plan",
+        from_role="planner",
+        to_role="coder",
+    )
+
+    assert deliveries == []
+    assert plan.applied is True
+    assert events[0]["event_type"] == "message_loss"
+    assert events[0]["payload"]["from_role"] == "planner"
+
+
+def test_communication_fault_corruption_mutates_only_matching_handoff():
+    plan = DistributedFaultPlan.from_config({
+        "fault_type": "message_corruption",
+        "from_role": "coder",
+        "to_role": "reviewer",
+        "replacement": "bad code",
+    })
+
+    first, first_events = apply_communication_fault(
+        plan=plan,
+        content="plan",
+        from_role="planner",
+        to_role="coder",
+    )
+    second, second_events = apply_communication_fault(
+        plan=plan,
+        content="good code",
+        from_role="coder",
+        to_role="reviewer",
+    )
+
+    assert first == [("coder", "plan")]
+    assert first_events == []
+    assert second == [("reviewer", "bad code")]
+    assert second_events[0]["event_type"] == "message_corruption"
+    assert second_events[0]["payload"]["original_length"] == len("good code")
+
+
+def test_distributed_runner_records_communication_fault_lifecycle(tmp_path):
+    runner = DistributedReferenceRunner(DockerExecutionConfig(image="cj:test"))
+    runner.docker_runner = _FakeDockerRunner(tmp_path)
+    context = RunContext(
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        run_id="run",
+        condition="cj_fault",
+        output_root=str(tmp_path / "distributed"),
+    )
+
+    result = runner.run(
+        topology="linear",
+        task=_simple_task(),
+        seed=1,
+        model_config={"name": "fake", "base_url": "http://example.test/v1"},
+        execution_config={
+            "dry_run": True,
+            "score_timeout_s": 5,
+            "distributed_fault": {
+                "fault_type": "message_drop",
+                "from_role": "planner",
+                "to_role": "coder",
+            },
+        },
+        run_context=context,
+    )
+
+    lifecycle = result["distributed_fault_lifecycle"]
+    assert result["executor_status"] == "error"
+    assert lifecycle["activated"] is True
+    assert lifecycle["triggered"] is True
+    assert lifecycle["manifested"] is True
+    assert lifecycle["verdict"] == "valid"
+    assert any(e["event_type"] == "message_loss" for e in result["distributed_trace"])
+    assert any(e["event_type"] == "handoff_failed" for e in result["distributed_trace"])
+
+
+def test_distributed_runner_records_role_container_fault(monkeypatch, tmp_path):
+    class FakeControllerTarget:
+        def __init__(self, container_id, **_kwargs):
+            self.container_id = container_id
+            self.connected = False
+
+        def connect(self):
+            self.connected = True
+
+        def disconnect(self):
+            self.connected = False
+
+        def run(self, _cmd):
+            return 0, "ok", ""
+
+    class FakeContainerKill:
+        def __init__(self, container_id, action="kill"):
+            self.container_id = container_id
+            self.action = action
+
+        def start(self, _target):
+            return None
+
+        def stop(self, _target):
+            return None
+
+        def verify_active(self, _target):
+            return VerificationResult(verified=True, reason="container exited", observed={"status": "exited"})
+
+        def verify_recovered(self, _target):
+            return VerificationResult(verified=True, reason="container running", observed={"status": "running"})
+
+    monkeypatch.setattr("evaluation.distributed_runner.DockerContainerControllerTarget", FakeControllerTarget)
+    monkeypatch.setattr("evaluation.distributed_runner.ContainerKill", FakeContainerKill)
+
+    runner = DistributedReferenceRunner(DockerExecutionConfig(image="cj:test"))
+    runner.docker_runner = _FakeDockerRunner(tmp_path)
+    context = RunContext(
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        run_id="run",
+        condition="cj_fault",
+        output_root=str(tmp_path / "distributed"),
+    )
+
+    result = runner.run(
+        topology="linear",
+        task=_simple_task(),
+        seed=1,
+        model_config={"name": "fake", "base_url": "http://example.test/v1"},
+        execution_config={
+            "dry_run": True,
+            "score_timeout_s": 5,
+            "distributed_fault": {
+                "fault_type": "role_container_kill",
+                "target_role": "coder",
+            },
+        },
+        run_context=context,
+    )
+
+    lifecycle = result["distributed_fault_lifecycle"]
+    assert result["executor_status"] == "error"
+    assert lifecycle["activated"] is True
+    assert lifecycle["triggered"] is True
+    assert lifecycle["manifested"] is True
+    assert lifecycle["reverted"] is True
+    assert lifecycle["recovered"] is True
+    assert lifecycle["verdict"] == "valid"
+    assert any(e["event_type"] == "fault_observed" and e["agent_role"] == "coder" for e in result["distributed_trace"])

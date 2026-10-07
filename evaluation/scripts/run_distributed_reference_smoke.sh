@@ -20,6 +20,13 @@ Options:
   --benchmark NAME      humanevalplus or mbppplus. Default: humanevalplus.
   --topology NAME       linear or closed_loop. Default: linear.
   --tasks N             Number of tasks. Default: 1.
+  --fault NAME          Distributed fault or suite. Default: none.
+  --fault-suite NAME    smoke, communication, role_local, or all.
+  --triplet             Run direct/control/fault records for the selected fault.
+  --fault-target-role R Target role for role-local or misrouting faults. Default: coder.
+  --fault-from-role R   Handoff source role for communication faults. Default: planner.
+  --fault-to-role R     Handoff destination role for communication faults. Default: coder.
+  --fault-severity S    low, medium, or high. Default: medium.
   --dry-run             Use deterministic no-model role responses.
   --results-run NAME    Result folder under results/.
   --help                Show this help.
@@ -46,6 +53,34 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tasks)
       export CJ_EVAL_TASKS="$2"
+      shift 2
+      ;;
+    --fault)
+      export CJ_EVAL_DISTRIBUTED_FAULT="$2"
+      shift 2
+      ;;
+    --fault-suite)
+      export CJ_EVAL_DISTRIBUTED_FAULT_SUITE="$2"
+      shift 2
+      ;;
+    --triplet)
+      export CJ_EVAL_DISTRIBUTED_TRIPLET=1
+      shift
+      ;;
+    --fault-target-role)
+      export CJ_EVAL_DISTRIBUTED_FAULT_TARGET_ROLE="$2"
+      shift 2
+      ;;
+    --fault-from-role)
+      export CJ_EVAL_DISTRIBUTED_FAULT_FROM_ROLE="$2"
+      shift 2
+      ;;
+    --fault-to-role)
+      export CJ_EVAL_DISTRIBUTED_FAULT_TO_ROLE="$2"
+      shift 2
+      ;;
+    --fault-severity)
+      export CJ_EVAL_DISTRIBUTED_FAULT_SEVERITY="$2"
       shift 2
       ;;
     --dry-run)
@@ -88,6 +123,13 @@ max_turns="${CJ_EVAL_MAX_TURNS:-8}"
 cpus="${CJ_EVAL_CPUS:-1}"
 memory="${CJ_EVAL_MEMORY:-2g}"
 dry_run="${CJ_EVAL_DISTRIBUTED_DRY_RUN:-0}"
+fault="${CJ_EVAL_DISTRIBUTED_FAULT:-none}"
+fault_suite="${CJ_EVAL_DISTRIBUTED_FAULT_SUITE:-}"
+triplet="${CJ_EVAL_DISTRIBUTED_TRIPLET:-0}"
+fault_target_role="${CJ_EVAL_DISTRIBUTED_FAULT_TARGET_ROLE:-coder}"
+fault_from_role="${CJ_EVAL_DISTRIBUTED_FAULT_FROM_ROLE:-planner}"
+fault_to_role="${CJ_EVAL_DISTRIBUTED_FAULT_TO_ROLE:-coder}"
+fault_severity="${CJ_EVAL_DISTRIBUTED_FAULT_SEVERITY:-medium}"
 name="${CJ_EVAL_RUN_NAME:-${topology}-${benchmark}-${CJ_EVAL_MODEL}}"
 run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
 cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
@@ -112,6 +154,25 @@ cmd=(
   --memory "${memory}"
 )
 
+if [[ -n "${fault_suite}" ]]; then
+  cmd+=(--fault-suite "${fault_suite}")
+elif [[ "${fault}" != "none" ]]; then
+  cmd+=(--fault "${fault}")
+else
+  cmd+=(--fault none)
+fi
+
+if [[ "${triplet}" == "1" ]]; then
+  cmd+=(--triplet)
+fi
+
+cmd+=(
+  --fault-target-role "${fault_target_role}"
+  --fault-from-role "${fault_from_role}"
+  --fault-to-role "${fault_to_role}"
+  --fault-severity "${fault_severity}"
+)
+
 if [[ "${dry_run}" == "1" ]]; then
   cmd+=(--dry-run)
 fi
@@ -125,6 +186,8 @@ cat <<EOF
 [cj-eval] benchmark: ${benchmark}
 [cj-eval] model    : ${CJ_EVAL_MODEL}
 [cj-eval] dry-run  : ${dry_run}
+[cj-eval] fault    : ${fault_suite:-${fault}}
+[cj-eval] triplet  : ${triplet}
 [cj-eval] image    : ${image}
 EOF
 cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"

@@ -917,11 +917,12 @@ def test_missing_paper_bundle_records_all_remaining_categories():
         "model-sensitivity",
         "cpu_pressure memory_pressure network_latency packet_loss disk_full",
         "run_process_container_fault_smoke.sh",
+        "run_durable_state_smoke.sh",
         "run_distributed_reference_smoke.sh",
+        "CJ_EVAL_DISTRIBUTED_FAULT_SUITE",
+        "role_container_kill",
+        "run_comparator_gate.sh",
         "native-multi-agent",
-        "distributed-faults",
-        "communication-faults",
-        "comparator",
     ):
         assert token in script
 

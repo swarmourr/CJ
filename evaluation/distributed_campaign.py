@@ -10,6 +10,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from evaluation.distributed_faults import (
+    COMMUNICATION_FAULTS,
+    ROLE_LOCAL_FAULTS,
+    DistributedFaultPlan,
+)
 from evaluation.distributed_runner import DistributedReferenceRunner, benchmark_task_to_dict
 from evaluation.docker_runner import DockerExecutionConfig, RunContext, redact_secrets
 from evaluation.experiments.protocol import _CJ_COMMIT, _CJ_SOURCE_PROVENANCE
@@ -41,7 +46,68 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--memory", default="2g")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--study-id")
+    p.add_argument("--triplet", action="store_true", help="Run direct/control/fault triplets")
+    p.add_argument(
+        "--fault",
+        default="none",
+        help="Distributed fault name, comma-list, or suite name",
+    )
+    p.add_argument(
+        "--fault-suite",
+        choices=["smoke", "communication", "role_local", "all"],
+        help="Named distributed fault suite",
+    )
+    p.add_argument("--fault-severity", default="medium", choices=["low", "medium", "high"])
+    p.add_argument("--fault-target-role", default="coder")
+    p.add_argument("--fault-from-role", default="planner")
+    p.add_argument("--fault-to-role", default="coder")
     return p
+
+
+DISTRIBUTED_FAULT_SUITES = {
+    "smoke": ["message_delay"],
+    "communication": sorted(COMMUNICATION_FAULTS),
+    "role_local": sorted(ROLE_LOCAL_FAULTS),
+    "all": sorted(COMMUNICATION_FAULTS | ROLE_LOCAL_FAULTS),
+}
+
+
+def _distributed_fault_names(args: argparse.Namespace) -> list[str]:
+    if args.fault_suite and args.fault not in ("", "none"):
+        raise SystemExit("Use either --fault or --fault-suite, not both")
+    if args.fault_suite:
+        return list(DISTRIBUTED_FAULT_SUITES[args.fault_suite])
+    raw = str(args.fault or "none").strip()
+    if raw in ("", "none"):
+        return ["none"]
+    if raw in DISTRIBUTED_FAULT_SUITES:
+        return list(DISTRIBUTED_FAULT_SUITES[raw])
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    supported = set().union(*DISTRIBUTED_FAULT_SUITES.values())
+    unsupported = [name for name in names if name not in supported]
+    if unsupported:
+        raise SystemExit(f"unsupported distributed fault(s): {', '.join(unsupported)}")
+    return names
+
+
+def _distributed_fault_config(args: argparse.Namespace, fault_name: str) -> dict[str, Any]:
+    if fault_name in ("", "none"):
+        return {}
+    config: dict[str, Any] = {
+        "fault_type": fault_name,
+        "severity": args.fault_severity,
+    }
+    if fault_name in COMMUNICATION_FAULTS:
+        config.update({
+            "from_role": args.fault_from_role,
+            "to_role": args.fault_to_role,
+        })
+        if fault_name == "message_misrouting":
+            config["target_role"] = args.fault_target_role
+            config.setdefault("misroute_to", args.fault_target_role)
+    if fault_name in ROLE_LOCAL_FAULTS:
+        config["target_role"] = args.fault_target_role
+    return config
 
 
 def _task_complexity_fields(task: Any) -> dict[str, Any]:
@@ -88,8 +154,22 @@ def _record_from_result(
     model: str,
     docker_image: str,
     topology: str,
+    condition: str,
+    fault_name: str,
+    fault_parameters: dict[str, Any],
 ) -> dict[str, Any]:
-    definition = default_experiment_definition("none")
+    definition = default_experiment_definition(fault_name)
+    lifecycle = (
+        result.get("distributed_fault_lifecycle")
+        if condition == "cj_fault"
+        else {"configured": False, "verdict": "valid"}
+    )
+    validity = (
+        str((lifecycle or {}).get("verdict") or "inconclusive").lower()
+        if condition == "cj_fault"
+        else "valid"
+    )
+    fault_plan = DistributedFaultPlan.from_config(fault_parameters)
     record = {
         **result,
         "output_schema_version": OUTPUT_SCHEMA_VERSION,
@@ -98,8 +178,8 @@ def _record_from_result(
         "campaign_id": campaign_id,
         "pair_id": pair_id,
         "run_id": run_id,
-        "condition": "direct_baseline",
-        "phase": "baseline",
+        "condition": condition,
+        "phase": "fault" if condition == "cj_fault" else "baseline",
         "agent_level": "multi_agent",
         "agent_system": "distributed-reference-multi-agent",
         "framework": "distributed-reference-multi-agent",
@@ -111,13 +191,21 @@ def _record_from_result(
         "task_id": task_data.get("task_id", ""),
         "seed": seed,
         "model": model,
-        "endpoint_type": "direct_model_endpoint",
-        "fault_type": "none",
-        "fault_parameters": {},
-        "fault_target_role": "",
+        "endpoint_type": (
+            "distributed_reference_direct"
+            if condition == "direct_baseline"
+            else "distributed_reference_control"
+            if condition == "cj_control"
+            else "distributed_reference_fault"
+        ),
+        "fault_type": fault_name,
+        "fault_layer": fault_plan.layer(),
+        "fault_parameters": fault_parameters,
+        "fault_target_role": fault_parameters.get("target_role", ""),
         "target": "container_per_role",
-        "validity": "valid",
-        "lifecycle": {"configured": False, "verdict": "valid"},
+        "validity": validity,
+        "lifecycle": lifecycle,
+        "distributed_fault_evidence": result.get("distributed_fault_evidence", []),
         "experiment_definition": definition.to_dict(),
         "cj_commit": _CJ_COMMIT,
         **_CJ_SOURCE_PROVENANCE,
@@ -162,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         preserve_io=True,
     )
     runner = DistributedReferenceRunner(docker_cfg)
-    execution_cfg = {
+    base_execution_cfg = {
         "dry_run": args.dry_run,
         "max_turns": args.max_turns,
         "score_timeout_s": args.score_timeout,
@@ -170,58 +258,80 @@ def main(argv: list[str] | None = None) -> int:
         "max_revisions": 2,
     }
 
+    fault_names = _distributed_fault_names(args)
+    if not args.triplet and fault_names != ["none"]:
+        args.triplet = True
+
     print("\n[cj-eval] === Distributed reference multi-agent smoke ===")
     print(f"  study_id  : {study_id}")
     print(f"  image     : {args.docker_image}")
     print(f"  topology  : {args.topology}")
     print(f"  benchmark : {args.benchmark} ({len(tasks)} tasks, subset={args.benchmark_subset})")
+    print(f"  faults    : {', '.join(fault_names)}")
+    print(f"  triplet   : {args.triplet}")
     print(f"  results   : {results_dir}")
 
     for idx, task in enumerate(tasks):
         task_data = benchmark_task_to_dict(task)
-        pair_id = make_pair_id(
-            study_id=study_id,
-            framework="distributed-reference-multi-agent",
-            topology=args.topology,
-            task_id=task.task_id,
-            seed=args.seed,
-            fault_name="none",
-            fault_parameters={},
-            repetition=0,
-        )
-        run_id = f"dist-{uuid.uuid4().hex[:16]}"
-        run_root = results_dir / f"{idx:03d}-{task.task_id.replace('/', '-')}-{run_id}"
-        context = RunContext(
-            study_id=study_id,
-            campaign_id=campaign_id,
-            pair_id=pair_id,
-            run_id=run_id,
-            condition="direct_baseline",
-            output_root=str(run_root),
-            environment={},
-        )
-        result = runner.run(
-            topology=args.topology,
-            task=task_data,
-            seed=args.seed,
-            model_config=model_cfg,
-            execution_config=execution_cfg,
-            run_context=context,
-        )
-        record = _record_from_result(
-            result=result,
-            task=task,
-            task_data=task_data,
-            study_id=study_id,
-            campaign_id=campaign_id,
-            pair_id=pair_id,
-            run_id=run_id,
-            seed=args.seed,
-            model=str(model_cfg.get("name", args.model)),
-            docker_image=args.docker_image,
-            topology=args.topology,
-        )
-        _append_jsonl(results_dir / "runs.jsonl", record)
+        for fault_name in fault_names:
+            fault_parameters = _distributed_fault_config(args, fault_name)
+            pair_id = make_pair_id(
+                study_id=study_id,
+                framework="distributed-reference-multi-agent",
+                topology=args.topology,
+                task_id=task.task_id,
+                seed=args.seed,
+                fault_name=fault_name,
+                fault_parameters=fault_parameters,
+                repetition=0,
+            )
+            conditions = (
+                ["direct_baseline", "cj_control", "cj_fault"]
+                if args.triplet and fault_name not in ("", "none")
+                else ["direct_baseline"]
+            )
+            for condition in conditions:
+                run_id = f"dist-{uuid.uuid4().hex[:16]}"
+                run_root = results_dir / (
+                    f"{idx:03d}-{task.task_id.replace('/', '-')}-{fault_name}-{condition}-{run_id}"
+                )
+                context = RunContext(
+                    study_id=study_id,
+                    campaign_id=campaign_id,
+                    pair_id=pair_id,
+                    run_id=run_id,
+                    condition=condition,
+                    output_root=str(run_root),
+                    environment={},
+                )
+                execution_cfg = dict(base_execution_cfg)
+                if condition == "cj_fault":
+                    execution_cfg["distributed_fault"] = fault_parameters
+                result = runner.run(
+                    topology=args.topology,
+                    task=task_data,
+                    seed=args.seed,
+                    model_config=model_cfg,
+                    execution_config=execution_cfg,
+                    run_context=context,
+                )
+                record = _record_from_result(
+                    result=result,
+                    task=task,
+                    task_data=task_data,
+                    study_id=study_id,
+                    campaign_id=campaign_id,
+                    pair_id=pair_id,
+                    run_id=run_id,
+                    seed=args.seed,
+                    model=str(model_cfg.get("name", args.model)),
+                    docker_image=args.docker_image,
+                    topology=args.topology,
+                    condition=condition,
+                    fault_name=fault_name,
+                    fault_parameters=fault_parameters,
+                )
+                _append_jsonl(results_dir / "runs.jsonl", record)
 
     generate_all_outputs(str(results_dir), study_id=study_id)
     print(f"[cj-eval] distributed smoke complete: {results_dir}")

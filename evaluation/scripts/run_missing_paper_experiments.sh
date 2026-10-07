@@ -27,6 +27,8 @@ Options:
   --skip-real-model     Skip real-model categories; write manifests only.
   --skip-infra          Skip DockerTarget infrastructure all-fault pass.
   --skip-process        Skip process/container diagnostic.
+  --skip-durable        Skip durable-state checkpoint corruption validation.
+  --skip-comparator     Skip external-comparator availability gate.
   --help                Show this help.
 
 Environment:
@@ -41,6 +43,8 @@ EOF
 run_real_model=1
 run_infra=1
 run_process=1
+run_durable=1
+run_comparator=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -76,6 +80,14 @@ while [[ $# -gt 0 ]]; do
       run_process=0
       shift
       ;;
+    --skip-durable)
+      run_durable=0
+      shift
+      ;;
+    --skip-comparator)
+      run_comparator=0
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -99,9 +111,7 @@ fi
 cj_eval_init_experiment_run
 
 image="$(cj_eval_default_image)"
-if [[ "${run_real_model}" -eq 1 || "${run_infra}" -eq 1 ]]; then
-  cj_eval_require_image "${image}"
-fi
+cj_eval_require_image "${image}"
 export CJ_EVAL_DOCKER_IMAGE="${image}"
 
 tasks="${CJ_EVAL_MISSING_TASKS:-${CJ_EVAL_TASKS:-1}}"
@@ -122,6 +132,8 @@ cat <<EOF
 [cj-eval] real model   : ${run_real_model}
 [cj-eval] infra        : ${run_infra}
 [cj-eval] process      : ${run_process}
+[cj-eval] durable      : ${run_durable}
+[cj-eval] comparator   : ${run_comparator}
 EOF
 
 if [[ "${run_real_model}" -eq 1 ]]; then
@@ -189,12 +201,25 @@ if [[ "${run_process}" -eq 1 ]]; then
   "${script_dir}/run_process_container_fault_smoke.sh"
 fi
 
+if [[ "${run_durable}" -eq 1 ]]; then
+  "${script_dir}/run_durable_state_smoke.sh"
+fi
+
 if [[ "${run_real_model}" -eq 1 ]]; then
   CJ_EVAL_BENCHMARK="${CJ_EVAL_DISTRIBUTED_BENCHMARK:-humanevalplus}" \
   CJ_EVAL_BENCHMARK_SUBSET="${CJ_EVAL_DISTRIBUTED_SUBSET:-smoke}" \
   CJ_EVAL_TOPOLOGY="${CJ_EVAL_DISTRIBUTED_TOPOLOGY:-linear}" \
   CJ_EVAL_TASKS="${CJ_EVAL_DISTRIBUTED_TASKS:-1}" \
   CJ_EVAL_RUN_NAME="container-per-role-${CJ_EVAL_MODEL}" \
+    "${script_dir}/run_distributed_reference_smoke.sh"
+
+  CJ_EVAL_BENCHMARK="${CJ_EVAL_DISTRIBUTED_BENCHMARK:-humanevalplus}" \
+  CJ_EVAL_BENCHMARK_SUBSET="${CJ_EVAL_DISTRIBUTED_SUBSET:-smoke}" \
+  CJ_EVAL_TOPOLOGY="${CJ_EVAL_DISTRIBUTED_TOPOLOGY:-linear}" \
+  CJ_EVAL_TASKS="${CJ_EVAL_DISTRIBUTED_TASKS:-1}" \
+  CJ_EVAL_DISTRIBUTED_FAULT_SUITE="${CJ_EVAL_DISTRIBUTED_COMM_SUITE:-communication}" \
+  CJ_EVAL_DISTRIBUTED_TRIPLET=1 \
+  CJ_EVAL_RUN_NAME="communication-faults-${CJ_EVAL_MODEL}" \
     "${script_dir}/run_distributed_reference_smoke.sh"
 else
   CJ_EVAL_DISTRIBUTED_DRY_RUN=1 \
@@ -204,6 +229,31 @@ else
   CJ_EVAL_TASKS="${CJ_EVAL_DISTRIBUTED_TASKS:-1}" \
   CJ_EVAL_RUN_NAME="container-per-role-dry-run" \
     "${script_dir}/run_distributed_reference_smoke.sh"
+
+  CJ_EVAL_DISTRIBUTED_DRY_RUN=1 \
+  CJ_EVAL_BENCHMARK="${CJ_EVAL_DISTRIBUTED_BENCHMARK:-humanevalplus}" \
+  CJ_EVAL_BENCHMARK_SUBSET="${CJ_EVAL_DISTRIBUTED_SUBSET:-smoke}" \
+  CJ_EVAL_TOPOLOGY="${CJ_EVAL_DISTRIBUTED_TOPOLOGY:-linear}" \
+  CJ_EVAL_TASKS="${CJ_EVAL_DISTRIBUTED_TASKS:-1}" \
+  CJ_EVAL_DISTRIBUTED_FAULT_SUITE="${CJ_EVAL_DISTRIBUTED_COMM_SUITE:-communication}" \
+  CJ_EVAL_DISTRIBUTED_TRIPLET=1 \
+  CJ_EVAL_RUN_NAME="communication-faults-dry-run" \
+    "${script_dir}/run_distributed_reference_smoke.sh"
+fi
+
+CJ_EVAL_DISTRIBUTED_DRY_RUN=1 \
+CJ_EVAL_BENCHMARK="${CJ_EVAL_DISTRIBUTED_BENCHMARK:-humanevalplus}" \
+CJ_EVAL_BENCHMARK_SUBSET="${CJ_EVAL_DISTRIBUTED_SUBSET:-smoke}" \
+CJ_EVAL_TOPOLOGY="${CJ_EVAL_DISTRIBUTED_TOPOLOGY:-linear}" \
+CJ_EVAL_TASKS="${CJ_EVAL_DISTRIBUTED_TASKS:-1}" \
+CJ_EVAL_DISTRIBUTED_FAULT="${CJ_EVAL_DISTRIBUTED_ROLE_FAULT:-role_container_kill}" \
+CJ_EVAL_DISTRIBUTED_FAULT_TARGET_ROLE="${CJ_EVAL_DISTRIBUTED_ROLE_TARGET:-coder}" \
+CJ_EVAL_DISTRIBUTED_TRIPLET=1 \
+CJ_EVAL_RUN_NAME="role-local-fault-${CJ_EVAL_DISTRIBUTED_ROLE_TARGET:-coder}" \
+  "${script_dir}/run_distributed_reference_smoke.sh"
+
+if [[ "${run_comparator}" -eq 1 ]]; then
+  "${script_dir}/run_comparator_gate.sh"
 fi
 
 "${script_dir}/write_unsupported_experiment.sh" \
@@ -213,29 +263,5 @@ fi
   "LangGraph native multi-agent graph" \
   "CrewAI native multi-role crew" \
   "framework_native=true records from real native adapters"
-
-"${script_dir}/write_unsupported_experiment.sh" \
-  "distributed-faults" "role-local-distributed-faults" \
-  "container-per-role execution is implemented, but role-local DockerTarget/process/container faults are not yet connected to the distributed runner" \
-  "role-local DockerTarget fault activation" \
-  "role-local process kill" \
-  "role-local container kill" \
-  "role-local DockerTarget/process/container faults"
-
-"${script_dir}/write_unsupported_experiment.sh" \
-  "communication-faults" "message-delay-drop-duplication-misrouting" \
-  "communication-fault injection between agent roles is not implemented yet" \
-  "message delay fault" \
-  "message drop fault" \
-  "message duplication fault" \
-  "message misrouting fault" \
-  "handoff-level manifestation evidence"
-
-"${script_dir}/write_unsupported_experiment.sh" \
-  "comparator" "cj-vs-toxiproxy" \
-  "external comparator adapter is not implemented yet" \
-  "Toxiproxy or equivalent injector adapter" \
-  "matched task/model/seed matrix" \
-  "equivalent latency/network fault parameters"
 
 echo "[cj-eval] missing paper experiment bundle complete under $(cj_eval_results_root)"

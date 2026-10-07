@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from evaluation.agents.base import extract_python_code
+from evaluation.distributed_faults import (
+    DistributedFaultPlan,
+    apply_communication_fault,
+    role_memory_bytes,
+    role_pressure_duration_s,
+)
 from evaluation.docker_runner import (
     DockerAgentRunner,
     DockerExecutionConfig,
@@ -25,9 +31,45 @@ from evaluation.docker_runner import (
     redact_secrets,
 )
 from evaluation.multi_agent import CLOSED_LOOP, LINEAR, MAX_REVISIONS, ROLE_PROMPTS, TraceEvent
+from chaos_jungle.faults.process import ContainerKill
+from chaos_jungle.targets import DockerContainerControllerTarget, DockerTarget
 
 
 ROLES = ("planner", "coder", "reviewer")
+
+
+class _RoleStressHandle:
+    """Small cleanup adapter for stress-ng role-local faults."""
+
+    def __init__(self, *, pid_file: str, fault_type: str) -> None:
+        self.pid_file = pid_file
+        self.fault_type = fault_type
+
+    def stop(self, target: DockerTarget) -> None:
+        target.run(
+            f"pid=$(cat {self.pid_file} 2>/dev/null || true); "
+            "if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true; fi"
+        )
+
+    def verify_recovered(self, target: DockerTarget):
+        from chaos_jungle.faults.base import VerificationResult
+
+        code, stdout, stderr = target.run(
+            f"pid=$(cat {self.pid_file} 2>/dev/null || true); "
+            "if [ -z \"$pid\" ]; then echo no-pid; exit 0; fi; "
+            "ps -p \"$pid\" -o comm= 2>/dev/null || true"
+        )
+        running = bool(stdout.strip() and "stress-ng" in stdout)
+        return VerificationResult(
+            verified=not running and code == 0,
+            reason=(
+                f"{self.fault_type} stress process removed"
+                if not running
+                else f"{self.fault_type} stress process still running"
+            ),
+            observed={"stdout": stdout.strip(), "stderr": stderr.strip()},
+            timestamp_s=time.time(),
+        )
 
 
 def benchmark_task_to_dict(task: Any) -> dict[str, Any]:
@@ -70,10 +112,25 @@ class DistributedReferenceRunner:
         max_revisions = int(execution_config.get("max_revisions", MAX_REVISIONS))
         if max_revisions != MAX_REVISIONS:
             raise ValueError("distributed publication smoke requires exactly two possible revisions")
+        fault_plan = DistributedFaultPlan.from_config(
+            execution_config.get("distributed_fault")
+        )
+        fault_lifecycle = {
+            "configured": fault_plan.is_active(),
+            "activated": False,
+            "triggered": False,
+            "manifested": False,
+            "reverted": False,
+            "recovered": False,
+            "verdict": "valid" if not fault_plan.is_active() else "pending",
+            "evidence_source": "distributed_reference_runner",
+            "details": "",
+        }
 
         containers: dict[str, PreparedContainer] = {}
         trace: list[dict[str, Any]] = []
         role_outputs: dict[str, list[dict[str, Any]]] = {role: [] for role in ROLES}
+        role_fault_cleanups: list[tuple[Any, Any, str]] = []
         reported_error = 0.0
         exception = ""
         termination_reason = "completed"
@@ -91,6 +148,17 @@ class DistributedReferenceRunner:
             )
 
             step = 0
+            self._maybe_apply_role_fault(
+                containers,
+                role="planner",
+                fault_plan=fault_plan,
+                lifecycle=fault_lifecycle,
+                trace=trace,
+                run_context=run_context,
+                step=step,
+                trace_id=trace_id,
+                cleanups=role_fault_cleanups,
+            )
             plan = self._run_role(
                 containers,
                 role="planner",
@@ -108,9 +176,33 @@ class DistributedReferenceRunner:
             )
             role_outputs["planner"].append(plan)
             trace.extend(self._events_with_container(plan, containers["planner"]))
-            trace.append(self._host_event(run_context, "planner", step, trace_id, "handoff", to_role="coder"))
+            plan_deliveries = self._handoff(
+                fault_plan=fault_plan,
+                lifecycle=fault_lifecycle,
+                trace=trace,
+                run_context=run_context,
+                from_role="planner",
+                to_role="coder",
+                step=step,
+                trace_id=trace_id,
+                content=str(plan.get("content", "")),
+            )
+            plan_for_coder = self._content_for_role(plan_deliveries, "coder")
+            if not plan_for_coder:
+                raise RuntimeError("planner-to-coder handoff did not deliver a message")
             step += 1
 
+            self._maybe_apply_role_fault(
+                containers,
+                role="coder",
+                fault_plan=fault_plan,
+                lifecycle=fault_lifecycle,
+                trace=trace,
+                run_context=run_context,
+                step=step,
+                trace_id=trace_id,
+                cleanups=role_fault_cleanups,
+            )
             code_result = self._run_role(
                 containers,
                 role="coder",
@@ -119,7 +211,7 @@ class DistributedReferenceRunner:
                     {"role": "system", "content": ROLE_PROMPTS["coder"]},
                     {
                         "role": "user",
-                        "content": f"Task:\n{self._task_prompt(task)}\n\nPlan:\n{plan.get('content', '')}",
+                        "content": f"Task:\n{self._task_prompt(task)}\n\nPlan:\n{plan_for_coder}",
                     },
                 ],
                 task=task,
@@ -132,16 +224,40 @@ class DistributedReferenceRunner:
             role_outputs["coder"].append(code_result)
             trace.extend(self._events_with_container(code_result, containers["coder"]))
             final_code = extract_python_code(str(code_result.get("generated_code") or code_result.get("content") or ""))
-            trace.append(self._host_event(run_context, "coder", step, trace_id, "handoff", to_role="reviewer"))
+            code_deliveries = self._handoff(
+                fault_plan=fault_plan,
+                lifecycle=fault_lifecycle,
+                trace=trace,
+                run_context=run_context,
+                from_role="coder",
+                to_role="reviewer",
+                step=step,
+                trace_id=trace_id,
+                content=final_code,
+            )
+            code_for_reviewer = self._content_for_role(code_deliveries, "reviewer")
+            if not code_for_reviewer:
+                raise RuntimeError("coder-to-reviewer handoff did not deliver a message")
             step += 1
 
+            self._maybe_apply_role_fault(
+                containers,
+                role="reviewer",
+                fault_plan=fault_plan,
+                lifecycle=fault_lifecycle,
+                trace=trace,
+                run_context=run_context,
+                step=step,
+                trace_id=trace_id,
+                cleanups=role_fault_cleanups,
+            )
             review = self._run_role(
                 containers,
                 role="reviewer",
                 step=step,
                 messages=[
                     {"role": "system", "content": ROLE_PROMPTS["reviewer"]},
-                    {"role": "user", "content": f"Task:\n{self._task_prompt(task)}\n\nSolution:\n{final_code}"},
+                    {"role": "user", "content": f"Task:\n{self._task_prompt(task)}\n\nSolution:\n{code_for_reviewer}"},
                 ],
                 task=task,
                 seed=seed,
@@ -177,6 +293,17 @@ class DistributedReferenceRunner:
                     )
                 )
                 step += 1
+                self._maybe_apply_role_fault(
+                    containers,
+                    role="coder",
+                    fault_plan=fault_plan,
+                    lifecycle=fault_lifecycle,
+                    trace=trace,
+                    run_context=run_context,
+                    step=step,
+                    trace_id=trace_id,
+                    cleanups=role_fault_cleanups,
+                )
                 code_result = self._run_role(
                     containers,
                     role="coder",
@@ -212,13 +339,38 @@ class DistributedReferenceRunner:
                     )
                 )
                 step += 1
+                review_deliveries = self._handoff(
+                    fault_plan=fault_plan,
+                    lifecycle=fault_lifecycle,
+                    trace=trace,
+                    run_context=run_context,
+                    from_role="coder",
+                    to_role="reviewer",
+                    step=step - 1,
+                    trace_id=trace_id,
+                    content=final_code,
+                )
+                review_code = self._content_for_role(review_deliveries, "reviewer")
+                if not review_code:
+                    raise RuntimeError("revision coder-to-reviewer handoff did not deliver a message")
+                self._maybe_apply_role_fault(
+                    containers,
+                    role="reviewer",
+                    fault_plan=fault_plan,
+                    lifecycle=fault_lifecycle,
+                    trace=trace,
+                    run_context=run_context,
+                    step=step,
+                    trace_id=trace_id,
+                    cleanups=role_fault_cleanups,
+                )
                 review = self._run_role(
                     containers,
                     role="reviewer",
                     step=step,
                     messages=[
                         {"role": "system", "content": ROLE_PROMPTS["reviewer"]},
-                        {"role": "user", "content": f"Task:\n{self._task_prompt(task)}\n\nSolution:\n{final_code}"},
+                        {"role": "user", "content": f"Task:\n{self._task_prompt(task)}\n\nSolution:\n{review_code}"},
                     ],
                     task=task,
                     seed=seed,
@@ -250,10 +402,24 @@ class DistributedReferenceRunner:
                 run_context=run_context,
                 trace_id=trace_id,
             )
+            if fault_plan.is_active() and fault_lifecycle["verdict"] == "pending":
+                if fault_lifecycle["manifested"]:
+                    fault_lifecycle["verdict"] = "valid"
+                elif fault_lifecycle["activated"] and not fault_lifecycle["triggered"]:
+                    fault_lifecycle["verdict"] = "untriggered"
+                else:
+                    fault_lifecycle["verdict"] = "invalid"
         except Exception as exc:  # noqa: BLE001
             reported_error = 1.0
             termination_reason = "agent_exception"
             exception = repr(exc)
+            if fault_plan.is_active() and fault_lifecycle["verdict"] == "pending":
+                if fault_lifecycle["manifested"]:
+                    fault_lifecycle["verdict"] = "valid"
+                elif fault_lifecycle["activated"] and not fault_lifecycle["triggered"]:
+                    fault_lifecycle["verdict"] = "untriggered"
+                else:
+                    fault_lifecycle["verdict"] = "invalid"
             trace.append(
                 self._host_event(
                     run_context,
@@ -265,12 +431,47 @@ class DistributedReferenceRunner:
                 )
             )
         finally:
+            for fault, target, role in role_fault_cleanups:
+                try:
+                    fault.stop(target)
+                    recovered = fault.verify_recovered(target)
+                    fault_lifecycle["reverted"] = True
+                    fault_lifecycle["recovered"] = recovered.verified
+                    trace.append(
+                        self._host_event(
+                            run_context,
+                            role,
+                            len(trace),
+                            trace_id,
+                            "fault_recovered",
+                            fault_type=fault_plan.fault_type,
+                            recovered=recovered.verified,
+                            reason=recovered.reason,
+                        )
+                    )
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    fault_lifecycle["reverted"] = False
+                    fault_lifecycle["recovered"] = False
+                    fault_lifecycle["details"] = f"role fault cleanup failed: {cleanup_exc!r}"
+                finally:
+                    try:
+                        target.disconnect()
+                    except Exception:
+                        pass
             for container in containers.values():
                 try:
                     self.docker_runner._sync_staged_io(container)  # noqa: SLF001
                 except Exception:
                     pass
                 self.docker_runner.cleanup(container)
+
+        if fault_plan.is_active() and fault_lifecycle["verdict"] == "pending":
+            if fault_lifecycle["manifested"]:
+                fault_lifecycle["verdict"] = "valid"
+            elif fault_lifecycle["activated"] and not fault_lifecycle["triggered"]:
+                fault_lifecycle["verdict"] = "untriggered"
+            else:
+                fault_lifecycle["verdict"] = "invalid"
 
         total_usage = self._usage(role_outputs)
         success = float(score_result.get("success", 0.0) or 0.0)
@@ -300,6 +501,8 @@ class DistributedReferenceRunner:
             "generated_code": final_code,
             "execution_trace": trace,
             "distributed_trace": trace,
+            "distributed_fault_lifecycle": fault_lifecycle,
+            "distributed_fault_evidence": fault_plan.evidence,
             "role_outputs": role_outputs,
             "role_container_ids": {role: c.container_id for role, c in containers.items()},
             "role_container_count": len({c.container_id for c in containers.values()}),
@@ -325,6 +528,167 @@ class DistributedReferenceRunner:
             "container_resource_limits": self.config.resource_limits(),
             "artifact_paths": self._artifact_paths(containers),
         })
+
+    def _handoff(
+        self,
+        *,
+        fault_plan: DistributedFaultPlan,
+        lifecycle: dict[str, Any],
+        trace: list[dict[str, Any]],
+        run_context: RunContext,
+        from_role: str,
+        to_role: str,
+        step: int,
+        trace_id: str,
+        content: str,
+    ) -> list[tuple[str, str]]:
+        trace.append(self._host_event(run_context, from_role, step, trace_id, "handoff", to_role=to_role))
+        deliveries, events = apply_communication_fault(
+            plan=fault_plan,
+            content=content,
+            from_role=from_role,
+            to_role=to_role,
+        )
+        for event in events:
+            wrapped = self._host_event(
+                run_context,
+                str(event.get("agent_role") or to_role),
+                step,
+                trace_id,
+                str(event.get("event_type")),
+                **dict(event.get("payload") or {}),
+            )
+            wrapped["timestamp"] = event.get("timestamp", wrapped["timestamp"])
+            trace.append(wrapped)
+        if events:
+            lifecycle["activated"] = True
+            lifecycle["triggered"] = True
+            lifecycle["manifested"] = True
+        if not any(role == to_role for role, _ in deliveries):
+            trace.append(
+                self._host_event(
+                    run_context,
+                    to_role,
+                    step,
+                    trace_id,
+                    "handoff_failed",
+                    from_role=from_role,
+                    fault_type=fault_plan.fault_type,
+                )
+            )
+        return deliveries
+
+    def _content_for_role(self, deliveries: list[tuple[str, str]], role: str) -> str:
+        return "\n\n".join(content for recipient, content in deliveries if recipient == role)
+
+    def _maybe_apply_role_fault(
+        self,
+        containers: dict[str, PreparedContainer],
+        *,
+        role: str,
+        fault_plan: DistributedFaultPlan,
+        lifecycle: dict[str, Any],
+        trace: list[dict[str, Any]],
+        run_context: RunContext,
+        step: int,
+        trace_id: str,
+        cleanups: list[tuple[Any, Any, str]],
+    ) -> None:
+        if not fault_plan.matches_role(role):
+            return
+        fault_plan.applied = True
+        lifecycle["activated"] = True
+        lifecycle["triggered"] = True
+        lifecycle["manifested"] = False
+        container = containers[role]
+        if not self.docker_runner.is_running(container):
+            start_proc = self.docker_runner.start_container(container)
+            if start_proc.returncode != 0:
+                lifecycle["details"] = start_proc.stderr or start_proc.stdout
+                raise RuntimeError(f"could not start {role} container for role-local fault")
+        if fault_plan.fault_type == "role_container_kill":
+            target = DockerContainerControllerTarget(
+                container.container_id,
+                docker_bin=self.config.docker_bin,
+            )
+            target.connect()
+            fault = ContainerKill(container.container_id, action=str(fault_plan.parameters.get("action", "kill")))
+            fault.start(target)
+            active = fault.verify_active(target)
+            lifecycle["manifested"] = active.verified
+            lifecycle["details"] = active.reason
+            cleanups.append((fault, target, role))
+            event = self._host_event(
+                run_context,
+                role,
+                step,
+                trace_id,
+                "fault_observed",
+                fault_type=fault_plan.fault_type,
+                target_role=role,
+                container_id=container.container_id,
+                verified=active.verified,
+                reason=active.reason,
+            )
+            event["container_id"] = container.container_id
+            trace.append(event)
+            fault_plan.record_evidence(event)
+            raise RuntimeError(f"{role} container killed by role-local fault")
+
+        target = DockerTarget(container.container_id, docker_bin=self.config.docker_bin)
+        target.connect()
+        duration_s = role_pressure_duration_s(fault_plan.severity, fault_plan.parameters)
+        if fault_plan.fault_type == "role_cpu_pressure":
+            pid_file = f"/tmp/cj_role_cpu_{role}.pid"
+            code, stdout, stderr = target.run(
+                f"cd /tmp && stress-ng --cpu 1 --timeout {duration_s}s "
+                f">/tmp/cj_role_cpu_{role}.log 2>&1 & "
+                f"echo $! > {pid_file}; sleep 0.2; "
+                f"pid=$(cat {pid_file}); "
+                f"if kill -0 $pid 2>/dev/null; then echo running:$pid; "
+                f"else cat /tmp/cj_role_cpu_{role}.log 2>/dev/null; exit 1; fi"
+            )
+        elif fault_plan.fault_type == "role_memory_pressure":
+            pid_file = f"/tmp/cj_role_mem_{role}.pid"
+            mem = role_memory_bytes(fault_plan.severity, fault_plan.parameters)
+            code, stdout, stderr = target.run(
+                f"cd /tmp && stress-ng --vm 1 --vm-bytes {mem} --timeout {duration_s}s "
+                f">/tmp/cj_role_mem_{role}.log 2>&1 & "
+                f"echo $! > {pid_file}; sleep 0.2; "
+                f"pid=$(cat {pid_file}); "
+                f"if kill -0 $pid 2>/dev/null; then echo running:$pid; "
+                f"else cat /tmp/cj_role_mem_{role}.log 2>/dev/null; exit 1; fi"
+            )
+        else:
+            target.disconnect()
+            raise ValueError(f"unsupported role-local fault: {fault_plan.fault_type}")
+        manifested = code == 0 and "running:" in stdout
+        lifecycle["manifested"] = manifested
+        lifecycle["reverted"] = False
+        lifecycle["recovered"] = False
+        lifecycle["details"] = "stress-ng process observed" if manifested else (stderr or stdout)
+        event = self._host_event(
+            run_context,
+            role,
+            step,
+            trace_id,
+            "fault_observed",
+            fault_type=fault_plan.fault_type,
+            target_role=role,
+            container_id=container.container_id,
+            verified=manifested,
+            stdout=stdout.strip()[:500],
+            stderr=stderr.strip()[:500],
+            duration_s=duration_s,
+        )
+        event["container_id"] = container.container_id
+        trace.append(event)
+        fault_plan.record_evidence(event)
+        cleanups.append((
+            _RoleStressHandle(pid_file=pid_file, fault_type=fault_plan.fault_type),
+            target,
+            role,
+        ))
 
     def _prepare_role_containers(
         self,

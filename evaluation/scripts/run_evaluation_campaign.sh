@@ -190,8 +190,10 @@ Preconfigured evaluation scenarios:
     Mode: missing
     Defaults: strict EvalPlus gate, tool-required pass, semantic static vs
               generated pass, all infrastructure faults, process/container
-              diagnostic, model sensitivity, and unsupported manifests for
-              native/distributed/communication/comparator categories.
+              diagnostic, durable-state validation, distributed reference
+              communication/role-local faults, model sensitivity, comparator
+              readiness gate, and unsupported manifests for native framework
+              multi-agent categories.
     Purpose: record every remaining paper category in one run.
 
 All scenario defaults can be overridden with ordinary flags after the scenario
