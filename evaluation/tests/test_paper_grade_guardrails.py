@@ -921,8 +921,10 @@ def test_missing_paper_bundle_records_all_remaining_categories():
         "run_distributed_reference_smoke.sh",
         "CJ_EVAL_DISTRIBUTED_FAULT_SUITE",
         "role_container_kill",
+        "run_native_multi_agent_pilot.sh",
+        "CJ_EVAL_NATIVE_MULTI_SYSTEMS",
+        "native-multi-agent-${CJ_EVAL_MODEL}",
         "run_comparator_gate.sh",
-        "native-multi-agent",
     ):
         assert token in script
 

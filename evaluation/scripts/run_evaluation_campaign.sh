@@ -19,7 +19,7 @@ Modes:
   injector     Run the CJ injector-validation campaign.
   overhead     Run the direct-vs-CJ-control overhead study.
   individual   Run the individual-agent resilience pilot.
-  multi         Run the reference multi-agent pilot.
+  multi         Run the native framework multi-agent pilot.
   infra         Run one container-scoped infrastructure fault smoke.
   smoke        Run the full smoke bundle: verify, injector, overhead, individual, multi, infra.
   pilot        Run the broader pilot bundle from run_all_paper_scenarios.sh.
@@ -37,7 +37,8 @@ Preconfigured scenarios:
   real-minimax-all-faults     .env cloud model, one task, all proxy faults.
   individual-mini             One AutoGen individual-agent latency smoke.
   individual-framework-smoke  Three individual frameworks, one latency task.
-  multi-reference-mini        Reference multi-agent, both topologies, one task.
+  multi-native-mini           Native framework multi-agent, both topologies, one task.
+  multi-reference-mini        Backward-compatible alias for multi-native-mini.
   infra-cpu-smoke             Container-scoped CPU pressure smoke, dry-run task.
   infra-network-smoke         Container-scoped network-latency smoke, dry-run task.
   paper-smoke                 Small bundle across implemented paper categories.
@@ -157,11 +158,18 @@ Preconfigured evaluation scenarios:
               fault-suite=smoke, tasks=1.
     Purpose: compare individual framework wiring cheaply.
 
+  multi-native-mini
+    Mode: multi
+    Defaults: native AutoGen/LangGraph/CrewAI workflows, humanevalplus,
+              linear + closed_loop, fault-suite=multi_agent, tasks=1.
+    Purpose: smallest native multi-agent propagation check.
+
   multi-reference-mini
     Mode: multi
-    Defaults: reference workflow, humanevalplus, linear + closed_loop,
+    Defaults: native AutoGen/LangGraph/CrewAI workflows, humanevalplus,
+              linear + closed_loop,
               fault-suite=multi_agent, tasks=1.
-    Purpose: smallest reference multi-agent propagation check.
+    Purpose: backward-compatible alias for multi-native-mini.
 
   infra-cpu-smoke
     Mode: infra
@@ -191,9 +199,8 @@ Preconfigured evaluation scenarios:
     Defaults: strict EvalPlus gate, tool-required pass, semantic static vs
               generated pass, all infrastructure faults, process/container
               diagnostic, durable-state validation, distributed reference
-              communication/role-local faults, model sensitivity, comparator
-              readiness gate, and unsupported manifests for native framework
-              multi-agent categories.
+              communication/role-local faults, native framework multi-agent,
+              model sensitivity, and comparator readiness gate.
     Purpose: record every remaining paper category in one run.
 
 All scenario defaults can be overridden with ordinary flags after the scenario
@@ -272,14 +279,14 @@ apply_scenario() {
       export CJ_EVAL_RUN_NAME="individual-framework-smoke"
       echo "individual"
       ;;
-    multi-reference-mini)
-      export CJ_EVAL_SYSTEMS="autogen-real"
+    multi-native-mini|multi-reference-mini)
+      export CJ_EVAL_SYSTEMS="${CJ_EVAL_SYSTEMS:-autogen-real langgraph-real crewai-real}"
       export CJ_EVAL_TOPOLOGIES="linear closed_loop"
       export CJ_EVAL_BENCHMARKS="humanevalplus"
       export CJ_EVAL_FAULT_SUITE="multi_agent"
       export CJ_EVAL_TASKS="1"
       export CJ_EVAL_REPEATS="1"
-      export CJ_EVAL_RUN_NAME="multi-reference-mini"
+      export CJ_EVAL_RUN_NAME="multi-native-mini"
       echo "multi"
       ;;
     infra-cpu-smoke)
@@ -555,7 +562,7 @@ case "${mode}" in
     ;;
   multi)
     ensure_image
-    "${script_dir}/run_multi_agent_reference_pilot.sh"
+    "${script_dir}/run_native_multi_agent_pilot.sh"
     ;;
   infra)
     ensure_image

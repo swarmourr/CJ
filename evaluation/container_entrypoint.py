@@ -21,6 +21,11 @@ from evaluation.benchmarks.base import BenchmarkTask
 from evaluation.benchmarks.executor import _configure_evalplus_cache_dir, score_task
 from evaluation.model_config import load_model_config
 from evaluation.multi_agent import MultiAgentWorkflow
+from evaluation.native_multi_agent import (
+    NATIVE_MULTI_AGENT_SYSTEMS,
+    native_multi_agent_impl_name,
+    run_native_multi_agent,
+)
 
 
 _VERSION_PACKAGES = {
@@ -321,16 +326,37 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
         }
 
     t0 = time.time()
+    framework_native = agent_level != "multi_agent"
+    multi_agent_impl = ""
     if agent_level == "multi_agent":
-        workflow = MultiAgentWorkflow(
-            ModelClient(dry_run=dry_run),
-            topology=str(req.get("topology") or "linear"),
-            dry_run=dry_run,
-            study_id=str(run_context.get("study_id", "")),
-            pair_id=str(run_context.get("pair_id", "")),
-            run_id=str(run_context.get("run_id", "")),
-        )
-        result = workflow.run(prompt, seed=seed)
+        name = str(req["agent_system"])
+        if name in NATIVE_MULTI_AGENT_SYSTEMS:
+            result = run_native_multi_agent(
+                system_name=name,
+                model_config=model_config,
+                topology=str(req.get("topology") or "linear"),
+                task=prompt,
+                seed=seed,
+                max_turns=max_turns,
+                dry_run=dry_run,
+                study_id=str(run_context.get("study_id", "")),
+                pair_id=str(run_context.get("pair_id", "")),
+                run_id=str(run_context.get("run_id", "")),
+            )
+            framework_native = True
+            multi_agent_impl = native_multi_agent_impl_name(name)
+        else:
+            workflow = MultiAgentWorkflow(
+                ModelClient(dry_run=dry_run),
+                topology=str(req.get("topology") or "linear"),
+                dry_run=dry_run,
+                study_id=str(run_context.get("study_id", "")),
+                pair_id=str(run_context.get("pair_id", "")),
+                run_id=str(run_context.get("run_id", "")),
+            )
+            result = workflow.run(prompt, seed=seed)
+            framework_native = False
+            multi_agent_impl = "reference-multi-agent"
     else:
         name = str(req["agent_system"])
         if name not in REGISTRY:
@@ -360,8 +386,8 @@ def _run_request(req: dict[str, Any]) -> dict[str, Any]:
         "run_id": run_context.get("run_id", ""),
         "condition": run_context.get("condition", ""),
         "requested_framework": req["agent_system"],
-        "framework_native": agent_level != "multi_agent",
-        "multi_agent_impl": "reference-multi-agent" if agent_level == "multi_agent" else "",
+        "framework_native": framework_native,
+        "multi_agent_impl": multi_agent_impl,
     })
     return payload
 

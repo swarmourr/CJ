@@ -952,6 +952,41 @@ def test_container_entrypoint_dry_run_individual(tmp_path, monkeypatch):
     assert (tmp_path / "execution_trace.json").exists()
 
 
+def test_container_entrypoint_dry_run_native_multi_agent(tmp_path, monkeypatch):
+    monkeypatch.delenv("CJ_EVAL_BASE_URL", raising=False)
+    req = {
+        "agent_system": "autogen-real",
+        "topology": "closed_loop",
+        "task": {
+            "task_id": "toy/0",
+            "benchmark": "toy",
+            "prompt": "Write a function named solution returning None.",
+            "entry_point": "solution",
+            "test_code": "assert solution() is None\n",
+            "metadata": {"source": "bundled"},
+        },
+        "seed": 0,
+        "model_config": {"name": "fake", "base_url": "http://example.invalid/v1"},
+        "execution_config": {"dry_run": True, "agent_level": "multi_agent", "score_timeout_s": 2},
+        "run_context": {"study_id": "s", "pair_id": "p", "run_id": "r"},
+    }
+    request_path = tmp_path / "request.json"
+    output_path = tmp_path / "result.json"
+    request_path.write_text(json.dumps(req), encoding="utf-8")
+    code = container_main(["--request", str(request_path), "--output", str(output_path)])
+    assert code == 0
+    result = json.loads(output_path.read_text())
+    assert result["executor_status"] == "ok"
+    assert result["agent_level"] == "multi_agent"
+    assert result["framework_native"] is True
+    assert result["multi_agent_impl"] == "native-autogen-real-multi-agent"
+    assert result["scorer_status"] == "ok"
+    assert result["success"] == 1.0
+    assert result["tests_total"] == 1
+    roles = {event["agent_role"] for event in result["execution_trace"]}
+    assert {"planner", "coder", "reviewer"} <= roles
+
+
 def test_container_entrypoint_preflight_failure_records_diagnostics(tmp_path, monkeypatch):
     import evaluation.container_entrypoint as entrypoint
 
@@ -1224,7 +1259,7 @@ def test_publication_condition_fails_closed_without_container_scoring(tmp_path):
     assert record["silent_failure"] is True
 
 
-def test_failed_multi_agent_fault_record_uses_reference_labels(tmp_path):
+def test_failed_native_multi_agent_fault_record_keeps_framework_labels(tmp_path):
     class FakeRunner:
         config = DockerExecutionConfig(image="cj:test")
 
@@ -1261,9 +1296,54 @@ def test_failed_multi_agent_fault_record_uses_reference_labels(tmp_path):
         error="activation failed",
     )
 
+    assert record["agent_system"] == "autogen-real"
+    assert record["framework"] == "autogen-real"
+    assert record["requested_framework"] == "autogen-real"
+    assert record["framework_native"] is True
+    assert record["multi_agent_impl"] == "native-autogen-real-multi-agent"
+    assert record["validity"] == "invalid"
+
+
+def test_failed_reference_multi_agent_fault_record_uses_reference_labels(tmp_path):
+    class FakeRunner:
+        config = DockerExecutionConfig(image="cj:test")
+
+    task = BenchmarkTask(
+        task_id="toy/0",
+        benchmark="toy",
+        prompt="Write solution.",
+        entry_point="solution",
+        test_code="assert solution() is None\n",
+        metadata={"source": "bundled"},
+    )
+    orch = PublicationStudyOrchestrator(FakeRunner(), study_id="study-x", results_dir=str(tmp_path))
+    record = orch._failed_fault_record(
+        condition="cj_fault",
+        agent_system="reference-multi-agent",
+        topology="linear",
+        task={
+            "task_id": task.task_id,
+            "benchmark": task.benchmark,
+            "prompt": task.prompt,
+            "entry_point": task.entry_point,
+            "test_code": task.test_code,
+            "metadata": task.metadata,
+        },
+        seed=0,
+        agent_level="multi_agent",
+        model_config={"name": "fake", "base_url": "http://fake/v1"},
+        campaign_id="campaign-x",
+        pair_id="pair-x",
+        fault_name="planner_llm_unavailable",
+        fault_parameters={"selector": {"agent_role": "planner"}},
+        lifecycle={"verdict": "invalid"},
+        definition=default_experiment_definition("planner_llm_unavailable"),
+        error="activation failed",
+    )
+
     assert record["agent_system"] == "reference-multi-agent"
     assert record["framework"] == "reference-multi-agent"
-    assert record["requested_framework"] == "autogen-real"
+    assert record["requested_framework"] == "reference-multi-agent"
     assert record["framework_native"] is False
     assert record["multi_agent_impl"] == "reference-multi-agent"
     assert record["validity"] == "invalid"

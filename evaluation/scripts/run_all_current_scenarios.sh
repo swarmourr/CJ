@@ -80,13 +80,13 @@ CJ_EVAL_REPEATS="${repeats}" \
   "${script_dir}/run_individual_resilience_pilot.sh"
 
 for suite in ${multi_suites}; do
-  CJ_EVAL_SYSTEMS="${CJ_EVAL_MULTI_SYSTEMS:-autogen-real}" \
+  CJ_EVAL_SYSTEMS="${CJ_EVAL_MULTI_SYSTEMS:-${systems}}" \
   CJ_EVAL_BENCHMARKS="${benchmarks}" \
   CJ_EVAL_TOPOLOGIES="${topologies}" \
   CJ_EVAL_FAULT_SUITE="${suite}" \
   CJ_EVAL_TASKS="${tasks}" \
   CJ_EVAL_REPEATS="${repeats}" \
-    "${script_dir}/run_multi_agent_reference_pilot.sh"
+    "${script_dir}/run_native_multi_agent_pilot.sh"
 done
 
 for fault in ${infra_faults}; do

@@ -62,7 +62,7 @@ case "${profile}" in
     CJ_EVAL_SYSTEMS="${CJ_EVAL_SYSTEMS:-autogen-real}" \
     CJ_EVAL_BENCHMARKS="${CJ_EVAL_BENCHMARKS:-humanevalplus}" \
     CJ_EVAL_TOPOLOGIES="${CJ_EVAL_TOPOLOGIES:-linear}" \
-      "${script_dir}/run_multi_agent_reference_pilot.sh"
+      "${script_dir}/run_native_multi_agent_pilot.sh"
 
     if [[ "${CJ_EVAL_RUN_INFRA:-1}" == "1" ]]; then
       CJ_EVAL_INFRA_FAULT="${CJ_EVAL_INFRA_FAULT:-cpu_pressure}" \
@@ -76,7 +76,7 @@ case "${profile}" in
     "${script_dir}/run_injector_validation.sh"
     "${script_dir}/run_cj_overhead_study.sh"
     "${script_dir}/run_individual_resilience_pilot.sh"
-    "${script_dir}/run_multi_agent_reference_pilot.sh"
+    "${script_dir}/run_native_multi_agent_pilot.sh"
     if [[ "${CJ_EVAL_RUN_INFRA:-1}" == "1" ]]; then
       "${script_dir}/run_infrastructure_fault_smoke.sh"
     fi

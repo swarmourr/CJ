@@ -15,8 +15,8 @@ unsupported artifacts where they do not.
 
 This script is additive: it does not replace the existing injector,
 individual-agent, multi-agent-reference, overhead, or infrastructure scripts.
-It now runs a distributed reference smoke where Planner, Coder, and Reviewer
-execute in separate Docker containers.
+It runs native framework multi-agent pilots, plus a distributed reference smoke
+where Planner, Coder, and Reviewer execute in separate Docker containers.
 
 Options:
   --env-file PATH       Load model config/secrets from PATH. Default: .env.
@@ -37,6 +37,9 @@ Environment:
   CJ_EVAL_MISSING_TASKS       Overrides --tasks.
   CJ_EVAL_MISSING_SYSTEMS     Default: autogen-real langgraph-real crewai-real.
   CJ_EVAL_MISSING_BENCHMARKS  Default: humanevalplus mbppplus.
+  CJ_EVAL_NATIVE_MULTI_SYSTEMS
+                              Native multi-agent systems. Default: same as
+                              CJ_EVAL_MISSING_SYSTEMS.
 EOF
 }
 
@@ -252,16 +255,18 @@ CJ_EVAL_DISTRIBUTED_TRIPLET=1 \
 CJ_EVAL_RUN_NAME="role-local-fault-${CJ_EVAL_DISTRIBUTED_ROLE_TARGET:-coder}" \
   "${script_dir}/run_distributed_reference_smoke.sh"
 
+CJ_EVAL_SYSTEMS="${CJ_EVAL_NATIVE_MULTI_SYSTEMS:-${systems}}" \
+CJ_EVAL_BENCHMARKS="${CJ_EVAL_NATIVE_MULTI_BENCHMARKS:-${benchmarks}}" \
+CJ_EVAL_BENCHMARK_SUBSET="${CJ_EVAL_NATIVE_MULTI_SUBSET:-${CJ_EVAL_BENCHMARK_SUBSET:-smoke}}" \
+CJ_EVAL_TOPOLOGIES="${CJ_EVAL_NATIVE_MULTI_TOPOLOGIES:-linear closed_loop}" \
+CJ_EVAL_FAULT_SUITE="${CJ_EVAL_NATIVE_MULTI_FAULT_SUITE:-multi_agent}" \
+CJ_EVAL_TASKS="${CJ_EVAL_NATIVE_MULTI_TASKS:-${tasks}}" \
+CJ_EVAL_REPEATS="${repeats}" \
+CJ_EVAL_RUN_NAME="native-multi-agent-${CJ_EVAL_MODEL}" \
+  "${script_dir}/run_native_multi_agent_pilot.sh"
+
 if [[ "${run_comparator}" -eq 1 ]]; then
   "${script_dir}/run_comparator_gate.sh"
 fi
-
-"${script_dir}/write_unsupported_experiment.sh" \
-  "native-multi-agent" "native-autogen-langgraph-crewai" \
-  "native framework multi-agent planner/coder/reviewer workflows are not implemented yet" \
-  "AutoGen native multi-agent workflow" \
-  "LangGraph native multi-agent graph" \
-  "CrewAI native multi-role crew" \
-  "framework_native=true records from real native adapters"
 
 echo "[cj-eval] missing paper experiment bundle complete under $(cj_eval_results_root)"

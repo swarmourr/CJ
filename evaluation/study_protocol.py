@@ -572,9 +572,19 @@ class PublicationStudyOrchestrator:
         model_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
-        is_reference_multi_agent = agent_level == "multi_agent"
+        is_reference_multi_agent = (
+            agent_level == "multi_agent"
+            and not _is_native_multi_agent_system(agent_system)
+        )
         effective_agent_system = (
             "reference-multi-agent" if is_reference_multi_agent else agent_system
+        )
+        multi_agent_impl = (
+            "reference-multi-agent"
+            if is_reference_multi_agent
+            else _native_multi_agent_impl(agent_system)
+            if agent_level == "multi_agent"
+            else ""
         )
         record = {
             "study_id": self.study_id,
@@ -592,7 +602,7 @@ class PublicationStudyOrchestrator:
             "framework": effective_agent_system,
             "requested_framework": agent_system,
             "framework_native": not is_reference_multi_agent,
-            "multi_agent_impl": "reference-multi-agent" if is_reference_multi_agent else "",
+            "multi_agent_impl": multi_agent_impl,
             "topology": topology,
             "benchmark": task.get("benchmark", ""),
             "task_id": task.get("task_id", ""),
@@ -1048,6 +1058,18 @@ def _effective_agent_system(*, requested: str, agent_level: str, record: dict[st
     if agent_level == "multi_agent" and record.get("framework_native") is False:
         return str(record.get("multi_agent_impl") or "reference-multi-agent")
     return requested
+
+
+def _is_native_multi_agent_system(system_name: str) -> bool:
+    return system_name in {"autogen-real", "langgraph-real", "crewai-real"}
+
+
+def _native_multi_agent_impl(system_name: str) -> str:
+    return (
+        f"native-{system_name}-multi-agent"
+        if _is_native_multi_agent_system(system_name)
+        else ""
+    )
 
 
 def _no_fault_lifecycle(condition: str) -> dict[str, Any]:

@@ -45,6 +45,7 @@ The lower-level category scripts still support the legacy layout
 | `evaluation/scripts/run_cj_overhead_study.sh` | `cj-overhead` | Direct baseline vs CJ-control overhead analysis |
 | `evaluation/scripts/run_individual_resilience_pilot.sh` | `individual-resilience-pilot` | AutoGen/LangGraph/CrewAI individual-agent pilot |
 | `evaluation/scripts/run_multi_agent_reference_pilot.sh` | `multi-agent-reference-pilot` | Framework-neutral three-role multi-agent pilot |
+| `evaluation/scripts/run_native_multi_agent_pilot.sh` | `native-multi-agent-pilot` | Native AutoGen/LangGraph/CrewAI planner-coder-reviewer pilot |
 | `evaluation/scripts/run_infrastructure_fault_smoke.sh` | `infrastructure-validation` | Container-scoped infrastructure fault smoke |
 | `evaluation/scripts/run_all_current_scenarios.sh` | multiple categories | Explicit all-current scenario runner, including all infra faults |
 | `evaluation/scripts/run_all_paper_scenarios.sh` | multiple categories | Smoke or pilot wrapper |
@@ -66,7 +67,7 @@ Scenario defaults can still be overridden with flags:
 
 ```bash
 scripts/run_evaluation_campaign.sh scenario real-minimax-one-fault --tasks 2
-scripts/run_evaluation_campaign.sh scenario multi-reference-mini --topologies linear
+scripts/run_evaluation_campaign.sh scenario multi-native-mini --topologies linear
 ```
 
 Run every current scenario category explicitly, including all current
@@ -95,7 +96,8 @@ directly and loops over every current infrastructure fault.
 | `real-minimax-all-faults` | `real-smoke` | One-task paid all-proxy-fault smoke using ignored `.env` |
 | `individual-mini` | `individual` | Smallest individual-agent resilience smoke |
 | `individual-framework-smoke` | `individual` | AutoGen, LangGraph, and CrewAI individual wiring smoke |
-| `multi-reference-mini` | `multi` | Reference multi-agent propagation smoke across both topologies |
+| `multi-native-mini` | `multi` | Native framework multi-agent propagation smoke across both topologies |
+| `multi-reference-mini` | `multi` | Backward-compatible alias for `multi-native-mini` |
 | `infra-cpu-smoke` | `infra` | Dry-run toy task under container-scoped CPU pressure |
 | `infra-network-smoke` | `infra` | Dry-run toy task under container-scoped network latency |
 | `all-current` | `all-scenarios` | All current scenario categories without using the legacy smoke wrapper |
@@ -283,7 +285,75 @@ Primary resilience effects must be computed only from valid fault pairs whose
 direct baseline succeeded. If baselines fail, the run remains useful as injector
 validation but not as resilience evidence.
 
-## E. Multi-Agent Reference Pilot
+## E. Native Multi-Agent Pilot
+
+Goal: study process-level propagation and repair in native AutoGen, LangGraph,
+and CrewAI three-role workflows, without mixing them with the framework-neutral
+reference workflow.
+
+```bash
+evaluation/scripts/run_native_multi_agent_pilot.sh
+```
+
+Default native systems:
+
+```text
+autogen-real
+langgraph-real
+crewai-real
+```
+
+Default topology values:
+
+```text
+linear
+closed_loop
+```
+
+Default role-scoped fault suite:
+
+```text
+planner_llm_unavailable
+reviewer_response_corrupt
+coder_tool_fault
+```
+
+Architecture:
+
+```mermaid
+flowchart TB
+  Host[Host orchestrator] --> Pair[Exact pair_id triplet]
+  Pair --> Container[Fresh experiment container]
+  Container --> Native[Native framework runtime]
+  Native --> Planner[Planner role]
+  Native --> Coder[Coder role]
+  Native --> Reviewer[Reviewer role]
+  Planner --> Coder
+  Coder --> Reviewer
+  Reviewer -. closed_loop revision .-> Coder
+  Reviewer --> Final[Final answer]
+
+  Planner --> Headers1[X-CJ-Agent-Role: planner]
+  Coder --> Headers2[X-CJ-Agent-Role: coder]
+  Reviewer --> Headers3[X-CJ-Agent-Role: reviewer]
+  Headers1 --> CJProxy[CJ role-scoped proxy selector]
+  Headers2 --> CJProxy
+  Headers3 --> CJProxy
+  CJProxy --> Model[Model endpoint]
+
+  Planner --> Events[Trace events]
+  Coder --> Events
+  Reviewer --> Events
+  Events --> Process[multi_agent_process_summary.csv]
+  CJProxy --> Evidence[cj_evidence.csv]
+```
+
+Native outputs use `framework_native=true` and
+`multi_agent_impl=native-<system>-multi-agent`. These workflows are still
+single experiment containers; container-per-role distribution remains the
+separate distributed reference experiment below.
+
+## E1. Multi-Agent Reference Pilot
 
 Goal: study process-level propagation and repair in the current three-role
 reference multi-agent workflow.
@@ -353,9 +423,9 @@ flowchart TB
   CJProxy --> Evidence[cj_evidence.csv]
 ```
 
-Important limitation: this is currently reported as `reference-multi-agent`.
-It must not be described as native AutoGen, LangGraph, or CrewAI multi-agent
-coordination until those framework-native workflows are implemented.
+Important limitation: this is reported as `reference-multi-agent` and
+`framework_native=false`. Use it for framework-neutral ablations and diagnostic
+propagation checks, not as native AutoGen, LangGraph, or CrewAI evidence.
 
 ## E2. Distributed Reference Multi-Agent Smoke
 
