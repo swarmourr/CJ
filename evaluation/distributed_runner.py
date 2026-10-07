@@ -1,10 +1,9 @@
-"""Host-side distributed reference multi-agent runner.
+"""Host-side distributed multi-agent runners.
 
 This runner is intentionally separate from the ordinary publication runner.  It
 implements a real process/container distribution pattern: Planner, Coder, and
 Reviewer each run in a fresh Docker container and communicate only through the
-host coordinator's serialized messages.  It is a reference distributed
-architecture, not a native AutoGen/LangGraph/CrewAI multi-agent implementation.
+host coordinator's serialized messages.
 """
 
 from __future__ import annotations
@@ -31,11 +30,35 @@ from evaluation.docker_runner import (
     redact_secrets,
 )
 from evaluation.multi_agent import CLOSED_LOOP, LINEAR, MAX_REVISIONS, ROLE_PROMPTS, TraceEvent
+from evaluation.native_multi_agent import NATIVE_MULTI_AGENT_SYSTEMS
 from chaos_jungle.faults.process import ContainerKill
 from chaos_jungle.targets import DockerContainerControllerTarget, DockerTarget
 
 
 ROLES = ("planner", "coder", "reviewer")
+REFERENCE_DISTRIBUTED_SYSTEM = "distributed-reference-multi-agent"
+
+
+def distributed_agent_labels(agent_system: str) -> dict[str, Any]:
+    """Return paper-facing labels for distributed reference/native systems."""
+    if agent_system in NATIVE_MULTI_AGENT_SYSTEMS:
+        impl = f"distributed-native-{agent_system}-multi-agent"
+        return {
+            "agent_system": impl,
+            "framework": agent_system,
+            "requested_framework": agent_system,
+            "framework_native": True,
+            "multi_agent_impl": impl,
+        }
+    if agent_system in {"", REFERENCE_DISTRIBUTED_SYSTEM, "reference-multi-agent"}:
+        return {
+            "agent_system": REFERENCE_DISTRIBUTED_SYSTEM,
+            "framework": REFERENCE_DISTRIBUTED_SYSTEM,
+            "requested_framework": REFERENCE_DISTRIBUTED_SYSTEM,
+            "framework_native": False,
+            "multi_agent_impl": REFERENCE_DISTRIBUTED_SYSTEM,
+        }
+    raise ValueError(f"unsupported distributed agent system: {agent_system!r}")
 
 
 class _RoleStressHandle:
@@ -109,6 +132,16 @@ class DistributedReferenceRunner:
 
         t0 = time.time()
         execution_config = dict(execution_config or {})
+        distributed_agent_system = str(
+            execution_config.get("distributed_agent_system")
+            or REFERENCE_DISTRIBUTED_SYSTEM
+        )
+        labels = distributed_agent_labels(distributed_agent_system)
+        execution_config["distributed_agent_system"] = (
+            distributed_agent_system
+            if distributed_agent_system in NATIVE_MULTI_AGENT_SYSTEMS
+            else REFERENCE_DISTRIBUTED_SYSTEM
+        )
         max_revisions = int(execution_config.get("max_revisions", MAX_REVISIONS))
         if max_revisions != MAX_REVISIONS:
             raise ValueError("distributed publication smoke requires exactly two possible revisions")
@@ -480,10 +513,7 @@ class DistributedReferenceRunner:
         return redact_secrets({
             "executor_status": "ok" if reported_error == 0.0 else "error",
             "deployment_mode": "distributed",
-            "agent_system": "distributed-reference-multi-agent",
-            "framework": "distributed-reference-multi-agent",
-            "framework_native": False,
-            "multi_agent_impl": "distributed-reference-multi-agent",
+            **labels,
             "agent_level": "multi_agent",
             "topology": topology,
             "success": success,
@@ -712,7 +742,7 @@ class DistributedReferenceRunner:
                 environment=run_context.environment,
             )
             containers[role] = self.docker_runner.prepare(
-                agent_system="distributed-reference-multi-agent",
+                agent_system=str(execution_config.get("distributed_agent_system") or REFERENCE_DISTRIBUTED_SYSTEM),
                 topology="distributed",
                 task=task,
                 seed=seed,
@@ -738,6 +768,7 @@ class DistributedReferenceRunner:
     ) -> dict[str, Any]:
         req = {
             "mode": "role",
+            "agent_system": str(execution_config.get("distributed_agent_system") or REFERENCE_DISTRIBUTED_SYSTEM),
             "role": role,
             "step_index": step,
             "trace_id": trace_id,
@@ -899,3 +930,34 @@ class DistributedReferenceRunner:
             artifacts[f"{role}_input_dir"] = container.artifact_input_dir or container.input_dir
             artifacts[f"{role}_output_dir"] = container.artifact_output_dir or container.output_dir
         return artifacts
+
+
+class DistributedNativeRunner(DistributedReferenceRunner):
+    """Run native framework roles in separate Docker containers."""
+
+    def __init__(self, config: DockerExecutionConfig, *, native_system: str) -> None:
+        if native_system not in NATIVE_MULTI_AGENT_SYSTEMS:
+            raise ValueError(f"unsupported distributed native system: {native_system!r}")
+        super().__init__(config)
+        self.native_system = native_system
+
+    def run(
+        self,
+        *,
+        topology: str,
+        task: dict[str, Any],
+        seed: int,
+        model_config: dict[str, Any],
+        execution_config: dict[str, Any] | None,
+        run_context: RunContext,
+    ) -> dict[str, Any]:
+        cfg = dict(execution_config or {})
+        cfg["distributed_agent_system"] = self.native_system
+        return super().run(
+            topology=topology,
+            task=task,
+            seed=seed,
+            model_config=model_config,
+            execution_config=cfg,
+            run_context=run_context,
+        )

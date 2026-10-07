@@ -8,7 +8,7 @@ from pathlib import Path
 from chaos_jungle.faults.base import VerificationResult
 from evaluation.distributed_faults import DistributedFaultPlan, apply_communication_fault
 from evaluation.distributed_entrypoint import run_role_request, run_score_request
-from evaluation.distributed_runner import DistributedReferenceRunner
+from evaluation.distributed_runner import DistributedNativeRunner, DistributedReferenceRunner
 from evaluation.docker_runner import DockerExecution, DockerExecutionConfig, PreparedContainer, RunContext
 
 
@@ -48,6 +48,32 @@ def test_distributed_role_entrypoint_emits_role_identity_in_dry_run(monkeypatch)
     assert result["execution_trace"][0]["step_index"] == 0
 
 
+def test_distributed_native_role_entrypoint_uses_native_labels_in_dry_run(monkeypatch):
+    monkeypatch.setenv("CJ_EVAL_BASE_URL", "http://example.test/v1")
+    req = {
+        "mode": "role",
+        "agent_system": "autogen-real",
+        "role": "coder",
+        "step_index": 1,
+        "trace_id": "trace",
+        "messages": [{"role": "user", "content": "Write add(a, b)."}],
+        "seed": 1,
+        "model_config": {"name": "fake", "base_url": "http://example.test/v1"},
+        "execution_config": {"dry_run": True, "distributed_agent_system": "autogen-real"},
+        "run_context": {"study_id": "study", "pair_id": "pair", "run_id": "run"},
+    }
+
+    result = run_role_request(req)
+
+    assert result["executor_status"] == "ok"
+    assert result["framework"] == "autogen-real"
+    assert result["framework_native"] is True
+    assert result["deployment_mode"] == "distributed"
+    assert result["multi_agent_impl"] == "distributed-native-autogen-real-multi-agent"
+    assert result["role"] == "coder"
+    assert result["generated_code"]
+
+
 def test_distributed_score_entrypoint_scores_inside_container_path():
     result = run_score_request({
         "mode": "score",
@@ -68,6 +94,7 @@ class _FakeDockerRunner:
         self.prepared: list[PreparedContainer] = []
         self.cleaned: list[str] = []
         self.running: set[str] = set()
+        self.requests: list[dict] = []
 
     def prepare(self, *, run_context: RunContext, **_kwargs):
         role = Path(run_context.output_root).name
@@ -101,6 +128,7 @@ class _FakeDockerRunner:
         request_file = Path(container.input_dir) / Path(request_path or "request.json").name
         output_file = Path(container.output_dir) / Path(output_path).name
         req = json.loads(request_file.read_text(encoding="utf-8"))
+        self.requests.append(req)
         mode = req.get("mode")
         if mode == "score":
             payload = {
@@ -201,6 +229,42 @@ def test_distributed_runner_uses_one_container_per_role(tmp_path):
     assert result["scorer_status"] == "ok"
     assert result["success"] == 1.0
     assert sorted(fake.cleaned) == ["coder-container", "planner-container", "reviewer-container"]
+
+
+def test_distributed_native_runner_uses_one_container_per_native_role(tmp_path):
+    runner = DistributedNativeRunner(DockerExecutionConfig(image="cj:test"), native_system="autogen-real")
+    fake = _FakeDockerRunner(tmp_path)
+    runner.docker_runner = fake
+    context = RunContext(
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        run_id="run",
+        condition="direct_baseline",
+        output_root=str(tmp_path / "distributed-native"),
+    )
+
+    result = runner.run(
+        topology="linear",
+        task=_simple_task(),
+        seed=1,
+        model_config={"name": "fake", "base_url": "http://example.test/v1"},
+        execution_config={"dry_run": True, "score_timeout_s": 5},
+        run_context=context,
+    )
+
+    assert result["deployment_mode"] == "distributed"
+    assert result["agent_system"] == "distributed-native-autogen-real-multi-agent"
+    assert result["framework"] == "autogen-real"
+    assert result["requested_framework"] == "autogen-real"
+    assert result["framework_native"] is True
+    assert result["multi_agent_impl"] == "distributed-native-autogen-real-multi-agent"
+    assert result["role_container_count"] == 3
+    assert set(result["role_container_ids"]) == {"planner", "coder", "reviewer"}
+    role_requests = [req for req in fake.requests if req.get("mode") == "role"]
+    assert role_requests
+    assert {req["agent_system"] for req in role_requests} == {"autogen-real"}
+    assert {req["execution_config"]["distributed_agent_system"] for req in role_requests} == {"autogen-real"}
 
 
 def test_communication_fault_drop_records_missing_handoff():

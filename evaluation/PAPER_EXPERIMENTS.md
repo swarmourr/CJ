@@ -46,6 +46,7 @@ The lower-level category scripts still support the legacy layout
 | `evaluation/scripts/run_individual_resilience_pilot.sh` | `individual-resilience-pilot` | AutoGen/LangGraph/CrewAI individual-agent pilot |
 | `evaluation/scripts/run_multi_agent_reference_pilot.sh` | `multi-agent-reference-pilot` | Framework-neutral three-role multi-agent pilot |
 | `evaluation/scripts/run_native_multi_agent_pilot.sh` | `native-multi-agent-pilot` | Native AutoGen/LangGraph/CrewAI planner-coder-reviewer pilot |
+| `evaluation/scripts/run_distributed_native_multi_agent_smoke.sh` | `distributed-native-multi-agent-smoke` | Native framework roles with one Docker container per role |
 | `evaluation/scripts/run_infrastructure_fault_smoke.sh` | `infrastructure-validation` | Container-scoped infrastructure fault smoke |
 | `evaluation/scripts/run_all_current_scenarios.sh` | multiple categories | Explicit all-current scenario runner, including all infra faults |
 | `evaluation/scripts/run_all_paper_scenarios.sh` | multiple categories | Smoke or pilot wrapper |
@@ -98,6 +99,7 @@ directly and loops over every current infrastructure fault.
 | `individual-framework-smoke` | `individual` | AutoGen, LangGraph, and CrewAI individual wiring smoke |
 | `multi-native-mini` | `multi` | Native framework multi-agent propagation smoke across both topologies |
 | `multi-reference-mini` | `multi` | Backward-compatible alias for `multi-native-mini` |
+| `distributed-native-mini` | `distributed-native` | Native framework roles in separate containers |
 | `infra-cpu-smoke` | `infra` | Dry-run toy task under container-scoped CPU pressure |
 | `infra-network-smoke` | `infra` | Dry-run toy task under container-scoped network latency |
 | `all-current` | `all-scenarios` | All current scenario categories without using the legacy smoke wrapper |
@@ -462,9 +464,62 @@ flowchart TB
 This experiment records `deployment_mode=distributed`,
 `agent_system=distributed-reference-multi-agent`, and
 `framework_native=false`. It validates distribution and traceability, but it
-does not yet validate role-local DockerTarget/process/container fault
-injection; that remains explicitly recorded as `distributed-faults`
-unsupported evidence.
+is still a framework-neutral workflow. Role-local distributed faults are
+validated by the distributed fault suites and must be reported separately from
+native framework evidence.
+
+## E3. Distributed Native Multi-Agent Smoke
+
+Goal: combine the two previously separate axes: native framework role execution
+and one-container-per-role deployment. Planner, Coder, and Reviewer execute in
+separate Docker containers; each role container invokes the selected native
+framework adapter for exactly one role action.
+
+```bash
+evaluation/scripts/run_distributed_native_multi_agent_smoke.sh \
+  --env-file .env \
+  --model minimax-m2 \
+  --systems "autogen-real langgraph-real crewai-real" \
+  --benchmarks "humanevalplus mbppplus" \
+  --topologies "linear closed_loop" \
+  --tasks 1
+```
+
+Architecture:
+
+```mermaid
+flowchart TB
+  Host[Host distributed coordinator] --> PlannerC[Planner Docker container]
+  Host --> CoderC[Coder Docker container]
+  Host --> ReviewerC[Reviewer Docker container]
+
+  PlannerC --> PlannerNative[Native framework role call]
+  CoderC --> CoderNative[Native framework role call]
+  ReviewerC --> ReviewerNative[Native framework role call]
+
+  PlannerNative --> ModelA[Model endpoint or CJ proxy]
+  CoderNative --> ModelB[Model endpoint or CJ proxy]
+  ReviewerNative --> ModelC[Model endpoint or CJ proxy]
+
+  PlannerC --> Plan[Plan message]
+  Plan --> Host
+  Host --> CoderC
+  CoderC --> Code[Candidate code]
+  Code --> Host
+  Host --> ReviewerC
+  ReviewerC --> Review[ACCEPT or REVISION_REQUEST]
+  Review --> Host
+  Host -. closed_loop, max 2 revisions .-> CoderC
+
+  CoderC --> Score[EvalPlus/local scoring inside coder container]
+  Host --> Trace[distributed_trace with role, step, container_id]
+  Trace --> Summary[distributed_process_summary.csv]
+```
+
+This experiment records `deployment_mode=distributed`,
+`agent_system=distributed-native-<framework>-multi-agent`,
+`framework=<framework>`, `framework_native=true`, and
+`multi_agent_impl=distributed-native-<framework>-multi-agent`.
 
 ## F. Docker Infrastructure Validation
 

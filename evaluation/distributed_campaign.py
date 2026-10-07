@@ -1,4 +1,4 @@
-"""CLI for the distributed reference multi-agent smoke experiment."""
+"""CLI for distributed reference and native multi-agent smoke experiments."""
 
 from __future__ import annotations
 
@@ -15,7 +15,13 @@ from evaluation.distributed_faults import (
     ROLE_LOCAL_FAULTS,
     DistributedFaultPlan,
 )
-from evaluation.distributed_runner import DistributedReferenceRunner, benchmark_task_to_dict
+from evaluation.distributed_runner import (
+    REFERENCE_DISTRIBUTED_SYSTEM,
+    DistributedNativeRunner,
+    DistributedReferenceRunner,
+    benchmark_task_to_dict,
+    distributed_agent_labels,
+)
 from evaluation.docker_runner import DockerExecutionConfig, RunContext, redact_secrets
 from evaluation.experiments.protocol import _CJ_COMMIT, _CJ_SOURCE_PROVENANCE
 from evaluation.output import generate_all_outputs
@@ -26,9 +32,15 @@ from evaluation.task_complexity import classify_task_complexity
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Run a container-per-role distributed reference smoke")
+    p = argparse.ArgumentParser(description="Run a container-per-role distributed multi-agent smoke")
     p.add_argument("--docker-image", required=True)
     p.add_argument("--results-dir", required=True)
+    p.add_argument(
+        "--agent-system",
+        choices=[REFERENCE_DISTRIBUTED_SYSTEM, "autogen-real", "langgraph-real", "crewai-real"],
+        default=REFERENCE_DISTRIBUTED_SYSTEM,
+        help="Reference workflow or native framework role implementation",
+    )
     p.add_argument("--benchmark", choices=["humanevalplus", "mbppplus"], default="humanevalplus")
     p.add_argument("--benchmark-subset", choices=["auto", "smoke", "development", "full"], default="smoke")
     p.add_argument("--tasks", type=int, default=1)
@@ -157,6 +169,7 @@ def _record_from_result(
     condition: str,
     fault_name: str,
     fault_parameters: dict[str, Any],
+    agent_system: str,
 ) -> dict[str, Any]:
     definition = default_experiment_definition(fault_name)
     lifecycle = (
@@ -170,6 +183,7 @@ def _record_from_result(
         else "valid"
     )
     fault_plan = DistributedFaultPlan.from_config(fault_parameters)
+    labels = distributed_agent_labels(agent_system)
     record = {
         **result,
         "output_schema_version": OUTPUT_SCHEMA_VERSION,
@@ -181,10 +195,7 @@ def _record_from_result(
         "condition": condition,
         "phase": "fault" if condition == "cj_fault" else "baseline",
         "agent_level": "multi_agent",
-        "agent_system": "distributed-reference-multi-agent",
-        "framework": "distributed-reference-multi-agent",
-        "framework_native": False,
-        "multi_agent_impl": "distributed-reference-multi-agent",
+        **labels,
         "deployment_mode": "distributed",
         "topology": topology,
         "benchmark": task_data.get("benchmark", ""),
@@ -193,10 +204,16 @@ def _record_from_result(
         "model": model,
         "endpoint_type": (
             "distributed_reference_direct"
-            if condition == "direct_baseline"
+            if agent_system == REFERENCE_DISTRIBUTED_SYSTEM and condition == "direct_baseline"
             else "distributed_reference_control"
-            if condition == "cj_control"
+            if agent_system == REFERENCE_DISTRIBUTED_SYSTEM and condition == "cj_control"
             else "distributed_reference_fault"
+            if agent_system == REFERENCE_DISTRIBUTED_SYSTEM
+            else "distributed_native_direct"
+            if condition == "direct_baseline"
+            else "distributed_native_control"
+            if condition == "cj_control"
+            else "distributed_native_fault"
         ),
         "fault_type": fault_name,
         "fault_layer": fault_plan.layer(),
@@ -249,22 +266,28 @@ def main(argv: list[str] | None = None) -> int:
         env_file=os.path.abspath(args.env_file) if args.env_file else None,
         preserve_io=True,
     )
-    runner = DistributedReferenceRunner(docker_cfg)
+    runner = (
+        DistributedReferenceRunner(docker_cfg)
+        if args.agent_system == REFERENCE_DISTRIBUTED_SYSTEM
+        else DistributedNativeRunner(docker_cfg, native_system=args.agent_system)
+    )
     base_execution_cfg = {
         "dry_run": args.dry_run,
         "max_turns": args.max_turns,
         "score_timeout_s": args.score_timeout,
         "agent_level": "multi_agent",
         "max_revisions": 2,
+        "distributed_agent_system": args.agent_system,
     }
 
     fault_names = _distributed_fault_names(args)
     if not args.triplet and fault_names != ["none"]:
         args.triplet = True
 
-    print("\n[cj-eval] === Distributed reference multi-agent smoke ===")
+    print("\n[cj-eval] === Distributed multi-agent smoke ===")
     print(f"  study_id  : {study_id}")
     print(f"  image     : {args.docker_image}")
+    print(f"  system    : {args.agent_system}")
     print(f"  topology  : {args.topology}")
     print(f"  benchmark : {args.benchmark} ({len(tasks)} tasks, subset={args.benchmark_subset})")
     print(f"  faults    : {', '.join(fault_names)}")
@@ -277,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             fault_parameters = _distributed_fault_config(args, fault_name)
             pair_id = make_pair_id(
                 study_id=study_id,
-                framework="distributed-reference-multi-agent",
+                framework=distributed_agent_labels(args.agent_system)["agent_system"],
                 topology=args.topology,
                 task_id=task.task_id,
                 seed=args.seed,
@@ -330,6 +353,7 @@ def main(argv: list[str] | None = None) -> int:
                     condition=condition,
                     fault_name=fault_name,
                     fault_parameters=fault_parameters,
+                    agent_system=args.agent_system,
                 )
                 _append_jsonl(results_dir / "runs.jsonl", record)
 

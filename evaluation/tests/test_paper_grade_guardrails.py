@@ -921,6 +921,8 @@ def test_missing_paper_bundle_records_all_remaining_categories():
         "run_distributed_reference_smoke.sh",
         "CJ_EVAL_DISTRIBUTED_FAULT_SUITE",
         "role_container_kill",
+        "run_distributed_native_multi_agent_smoke.sh",
+        "CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS",
         "run_native_multi_agent_pilot.sh",
         "CJ_EVAL_NATIVE_MULTI_SYSTEMS",
         "native-multi-agent-${CJ_EVAL_MODEL}",

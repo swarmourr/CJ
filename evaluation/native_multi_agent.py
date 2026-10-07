@@ -97,11 +97,18 @@ def run_native_multi_agent(
 
 
 class _NativeTrace:
-    def __init__(self, *, study_id: str, pair_id: str, run_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        study_id: str,
+        pair_id: str,
+        run_id: str,
+        trace_id: str | None = None,
+    ) -> None:
         self.study_id = study_id
         self.pair_id = pair_id
         self.run_id = run_id
-        self.trace_id = uuid.uuid4().hex
+        self.trace_id = trace_id or uuid.uuid4().hex
         self.events: list[dict[str, Any]] = []
 
     def emit(self, role: str, step: int, event_type: str, **payload: Any) -> None:
@@ -145,6 +152,133 @@ def _trace_headers(run_id: str, role: str, step: int) -> dict[str, str]:
 def _role_env(run_id: str, role: str, step: int):
     with role_metadata(run_id, role, step):
         yield
+
+
+def run_native_role_once(
+    *,
+    system_name: str,
+    role: str,
+    messages: list[dict[str, str]],
+    model_config: ModelConfig,
+    seed: int,
+    max_turns: int,
+    dry_run: bool,
+    study_id: str,
+    pair_id: str,
+    run_id: str,
+    step_index: int,
+    trace_id: str,
+) -> dict[str, Any]:
+    """Run one native framework role action for distributed-native mode."""
+    if system_name not in NATIVE_MULTI_AGENT_SYSTEMS:
+        raise ValueError(f"unsupported native role system: {system_name!r}")
+    if role not in ROLE_PROMPTS:
+        raise ValueError(f"unsupported native role: {role!r}")
+
+    trace = _NativeTrace(study_id=study_id, pair_id=pair_id, run_id=run_id, trace_id=trace_id)
+    user_content = _role_user_content(messages)
+    t0 = time.time()
+    usage = _usage_dict()
+    exception = ""
+    reported_error = 0.0
+    termination_reason = "completed"
+    content = ""
+
+    try:
+        if dry_run:
+            trace.emit(role, step_index, "agent_activation", framework=system_name, dry_run=True)
+            trace.emit(role, step_index, "llm_invocation", framework=system_name, dry_run=True)
+            content = _dry_role_response(role, user_content)
+            trace.emit(role, step_index, "sent_message", content_preview=content[:500])
+        elif system_name == "autogen-real":
+            content, usage = _run_async_role_call(
+                _autogen_call_role(
+                    role,
+                    step_index,
+                    user_content,
+                    model_config,
+                    seed,
+                    max_turns,
+                    False,
+                    trace,
+                    run_id,
+                ),
+                timeout_s=model_config.request_timeout_s * 2 + 30,
+            )
+        elif system_name == "langgraph-real":
+            content, usage = _langgraph_call_role(
+                role=role,
+                step=step_index,
+                user_content=user_content,
+                model_config=model_config,
+                seed=seed,
+                trace=trace,
+                run_id=run_id,
+            )
+        elif system_name == "crewai-real":
+            content, usage = _crewai_call_role(
+                role=role,
+                step=step_index,
+                user_content=user_content,
+                model_config=model_config,
+                seed=seed,
+                max_turns=max_turns,
+                trace=trace,
+                run_id=run_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        reported_error = 1.0
+        exception = repr(exc)
+        termination_reason = "agent_exception"
+        trace.emit(role, step_index, "error_detection", exception=exception)
+
+    event_type = "review_decision" if role == "reviewer" else "sent_message"
+    if role == "coder":
+        event_type = "final_answer"
+    if not any(e.get("event_type") in {event_type, "final_answer", "review_decision"} for e in trace.events):
+        trace.emit(role, step_index, event_type, content_preview=content[:500])
+
+    return {
+        "executor_status": "ok" if reported_error == 0.0 else "error",
+        "mode": "role",
+        "role": role,
+        "step_index": step_index,
+        "trace_id": trace.trace_id,
+        "content": content,
+        "generated_code": extract_python_code(content) if role == "coder" else "",
+        "duration_s": time.time() - t0,
+        "llm_calls": 1,
+        "tool_calls": 0,
+        "turns": 1,
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
+        "total_tokens": usage.get("total_tokens", 0),
+        "reported_error": reported_error,
+        "termination_reason": termination_reason,
+        "exception": exception,
+        "execution_trace": trace.events,
+        "framework": system_name,
+        "framework_native": True,
+        "multi_agent_impl": f"distributed-native-{system_name}-multi-agent",
+    }
+
+
+def _role_user_content(messages: list[dict[str, str]]) -> str:
+    parts = [
+        str(msg.get("content", ""))
+        for msg in messages
+        if str(msg.get("role", "")).lower() != "system"
+    ]
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _run_async_role_call(coro: Any, *, timeout_s: float) -> tuple[str, dict[str, int]]:
+    try:
+        asyncio.get_running_loop()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result(timeout=timeout_s)
+    except RuntimeError:
+        return asyncio.run(coro)
 
 
 def _usage_dict(prompt_tokens: int = 0, completion_tokens: int = 0) -> dict[str, int]:
@@ -415,6 +549,112 @@ async def _autogen_call_role(
             pass
 
 
+def _langgraph_call_role(
+    *,
+    role: str,
+    step: int,
+    user_content: str,
+    model_config: ModelConfig,
+    seed: int,
+    trace: _NativeTrace,
+    run_id: str,
+) -> tuple[str, dict[str, int]]:
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from langchain_openai import ChatOpenAI
+        from langgraph.graph import END, START, StateGraph
+    except ImportError as exc:
+        raise ImportError("LangGraph native role calls require langgraph and langchain-openai") from exc
+
+    class _RoleState(TypedDict, total=False):
+        content: str
+        response: str
+        usage: dict[str, int]
+
+    def node(state: _RoleState) -> _RoleState:
+        trace.emit(role, step, "agent_activation", framework="langgraph")
+        trace.emit(role, step, "llm_invocation", framework="langgraph")
+        llm = ChatOpenAI(
+            model=model_config.name,
+            base_url=model_config.current_base_url,
+            api_key=model_config.resolved_api_key(),
+            temperature=model_config.temperature,
+            max_completion_tokens=model_config.max_tokens,
+            timeout=model_config.request_timeout_s,
+            max_retries=model_config.transport_retries,
+            seed=seed,
+            default_headers=_trace_headers(run_id, role, step),
+        )
+        with _role_env(run_id, role, step):
+            msg = llm.invoke([SystemMessage(content=ROLE_PROMPTS[role]), HumanMessage(content=state["content"])])
+        text = _message_content(msg)
+        meta = getattr(msg, "usage_metadata", None) or {}
+        usage = _usage_dict(meta.get("input_tokens", 0), meta.get("output_tokens", 0))
+        trace.emit(role, step, "sent_message", content_preview=text[:500])
+        return {"response": text, "usage": usage}
+
+    graph = StateGraph(_RoleState)
+    graph.add_node(role, node)
+    graph.add_edge(START, role)
+    graph.add_edge(role, END)
+    final = graph.compile().invoke({"content": user_content})
+    return str(final.get("response", "")), final.get("usage", _usage_dict())
+
+
+def _crewai_call_role(
+    *,
+    role: str,
+    step: int,
+    user_content: str,
+    model_config: ModelConfig,
+    seed: int,
+    max_turns: int,
+    trace: _NativeTrace,
+    run_id: str,
+) -> tuple[str, dict[str, int]]:
+    try:
+        from crewai import Agent, Crew, Process, Task, LLM
+    except ImportError as exc:
+        raise ImportError("CrewAI native role calls require crewai") from exc
+
+    trace.emit(role, step, "agent_activation", framework="crewai")
+    trace.emit(role, step, "llm_invocation", framework="crewai")
+    kwargs = _crewai_llm_kwargs(LLM, model_config, api_key=model_config.resolved_api_key(), seed=seed)
+    if "additional_params" in inspect.signature(LLM).parameters:
+        kwargs["additional_params"] = {
+            **dict(kwargs.get("additional_params") or {}),
+            "extra_headers": _trace_headers(run_id, role, step),
+        }
+    llm = LLM(**kwargs)
+    agent = Agent(
+        role=role.title(),
+        goal=ROLE_PROMPTS[role],
+        backstory=f"You are the {role} in a distributed three-role software engineering crew.",
+        llm=llm,
+        max_iter=max_turns,
+        verbose=False,
+        allow_delegation=False,
+    )
+    task_obj = Task(
+        description=user_content,
+        expected_output=(
+            "A concise planning response."
+            if role == "planner"
+            else "A Python solution in a ```python ... ``` code block."
+            if role == "coder"
+            else "ACCEPT or REVISION_REQUEST with a short reason."
+        ),
+        agent=agent,
+    )
+    crew = Crew(agents=[agent], tasks=[task_obj], process=Process.sequential, verbose=False)
+    with _role_env(run_id, role, step):
+        crew_result = crew.kickoff()
+    text = str(getattr(crew_result, "raw", None) or crew_result)
+    usage = _crew_usage(getattr(crew_result, "token_usage", None) or getattr(crew_result, "usage_metrics", None))
+    trace.emit(role, step, "sent_message", content_preview=text[:500])
+    return text, usage
+
+
 def _run_langgraph_native(
     *,
     model_config: ModelConfig,
@@ -451,26 +691,15 @@ def _run_langgraph_native(
         llm_calls: int
 
     def call(role: str, step: int, content: str) -> tuple[str, dict[str, int]]:
-        trace.emit(role, step, "agent_activation", framework="langgraph")
-        trace.emit(role, step, "llm_invocation", framework="langgraph")
-        llm = ChatOpenAI(
-            model=model_config.name,
-            base_url=model_config.current_base_url,
-            api_key=model_config.resolved_api_key(),
-            temperature=model_config.temperature,
-            max_completion_tokens=model_config.max_tokens,
-            timeout=model_config.request_timeout_s,
-            max_retries=model_config.transport_retries,
+        return _langgraph_call_role(
+            role=role,
+            step=step,
+            user_content=content,
+            model_config=model_config,
             seed=seed,
-            default_headers=_trace_headers(run_id, role, step),
+            trace=trace,
+            run_id=run_id,
         )
-        with _role_env(run_id, role, step):
-            msg = llm.invoke([SystemMessage(content=ROLE_PROMPTS[role]), HumanMessage(content=content)])
-        text = _message_content(msg)
-        meta = getattr(msg, "usage_metadata", None) or {}
-        usage = _usage_dict(meta.get("input_tokens", 0), meta.get("output_tokens", 0))
-        trace.emit(role, step, "sent_message", content_preview=text[:500])
-        return text, usage
 
     def add_usage(state: _State, usage: dict[str, int]) -> None:
         state["usage"] = _add_usage(state.get("usage", _usage_dict()), usage)

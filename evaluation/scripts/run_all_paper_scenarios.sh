@@ -64,6 +64,12 @@ case "${profile}" in
     CJ_EVAL_TOPOLOGIES="${CJ_EVAL_TOPOLOGIES:-linear}" \
       "${script_dir}/run_native_multi_agent_pilot.sh"
 
+    CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS="${CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS:-autogen-real}" \
+    CJ_EVAL_DISTRIBUTED_NATIVE_BENCHMARKS="${CJ_EVAL_BENCHMARKS:-humanevalplus}" \
+    CJ_EVAL_DISTRIBUTED_NATIVE_TOPOLOGIES="${CJ_EVAL_TOPOLOGIES:-linear}" \
+    CJ_EVAL_DISTRIBUTED_NATIVE_TASKS="${CJ_EVAL_TASKS:-1}" \
+      "${script_dir}/run_distributed_native_multi_agent_smoke.sh"
+
     if [[ "${CJ_EVAL_RUN_INFRA:-1}" == "1" ]]; then
       CJ_EVAL_INFRA_FAULT="${CJ_EVAL_INFRA_FAULT:-cpu_pressure}" \
       CJ_EVAL_BENCHMARK="${CJ_EVAL_INFRA_BENCHMARK:-toy}" \
@@ -77,6 +83,7 @@ case "${profile}" in
     "${script_dir}/run_cj_overhead_study.sh"
     "${script_dir}/run_individual_resilience_pilot.sh"
     "${script_dir}/run_native_multi_agent_pilot.sh"
+    "${script_dir}/run_distributed_native_multi_agent_smoke.sh"
     if [[ "${CJ_EVAL_RUN_INFRA:-1}" == "1" ]]; then
       "${script_dir}/run_infrastructure_fault_smoke.sh"
     fi

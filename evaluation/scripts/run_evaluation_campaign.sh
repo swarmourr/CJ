@@ -20,6 +20,8 @@ Modes:
   overhead     Run the direct-vs-CJ-control overhead study.
   individual   Run the individual-agent resilience pilot.
   multi         Run the native framework multi-agent pilot.
+  distributed-native
+                Run native framework roles in separate containers.
   infra         Run one container-scoped infrastructure fault smoke.
   smoke        Run the full smoke bundle: verify, injector, overhead, individual, multi, infra.
   pilot        Run the broader pilot bundle from run_all_paper_scenarios.sh.
@@ -39,6 +41,7 @@ Preconfigured scenarios:
   individual-framework-smoke  Three individual frameworks, one latency task.
   multi-native-mini           Native framework multi-agent, both topologies, one task.
   multi-reference-mini        Backward-compatible alias for multi-native-mini.
+  distributed-native-mini     Native framework roles in separate containers, one task.
   infra-cpu-smoke             Container-scoped CPU pressure smoke, dry-run task.
   infra-network-smoke         Container-scoped network-latency smoke, dry-run task.
   paper-smoke                 Small bundle across implemented paper categories.
@@ -171,6 +174,12 @@ Preconfigured evaluation scenarios:
               fault-suite=multi_agent, tasks=1.
     Purpose: backward-compatible alias for multi-native-mini.
 
+  distributed-native-mini
+    Mode: distributed-native
+    Defaults: native AutoGen/LangGraph/CrewAI roles, humanevalplus,
+              linear topology, one task, dry-run off.
+    Purpose: smallest container-per-role native-framework check.
+
   infra-cpu-smoke
     Mode: infra
     Defaults: toy dry-run task, fault=cpu_pressure, tasks=1.
@@ -199,8 +208,9 @@ Preconfigured evaluation scenarios:
     Defaults: strict EvalPlus gate, tool-required pass, semantic static vs
               generated pass, all infrastructure faults, process/container
               diagnostic, durable-state validation, distributed reference
-              communication/role-local faults, native framework multi-agent,
-              model sensitivity, and comparator readiness gate.
+              communication/role-local faults, distributed-native
+              multi-agent, native framework multi-agent, model sensitivity,
+              and comparator readiness gate.
     Purpose: record every remaining paper category in one run.
 
 All scenario defaults can be overridden with ordinary flags after the scenario
@@ -288,6 +298,15 @@ apply_scenario() {
       export CJ_EVAL_REPEATS="1"
       export CJ_EVAL_RUN_NAME="multi-native-mini"
       echo "multi"
+      ;;
+    distributed-native-mini)
+      export CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS="${CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS:-autogen-real langgraph-real crewai-real}"
+      export CJ_EVAL_DISTRIBUTED_NATIVE_TOPOLOGIES="${CJ_EVAL_DISTRIBUTED_NATIVE_TOPOLOGIES:-linear}"
+      export CJ_EVAL_DISTRIBUTED_NATIVE_BENCHMARKS="${CJ_EVAL_DISTRIBUTED_NATIVE_BENCHMARKS:-humanevalplus}"
+      export CJ_EVAL_DISTRIBUTED_NATIVE_FAULT="${CJ_EVAL_DISTRIBUTED_NATIVE_FAULT:-none}"
+      export CJ_EVAL_DISTRIBUTED_NATIVE_TASKS="${CJ_EVAL_DISTRIBUTED_NATIVE_TASKS:-1}"
+      export CJ_EVAL_RUN_NAME="distributed-native-mini"
+      echo "distributed-native"
       ;;
     infra-cpu-smoke)
       export CJ_EVAL_INFRA_FAULT="cpu_pressure"
@@ -563,6 +582,10 @@ case "${mode}" in
   multi)
     ensure_image
     "${script_dir}/run_native_multi_agent_pilot.sh"
+    ;;
+  distributed-native)
+    ensure_image
+    "${script_dir}/run_distributed_native_multi_agent_smoke.sh"
     ;;
   infra)
     ensure_image

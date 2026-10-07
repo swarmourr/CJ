@@ -28,8 +28,9 @@ from evaluation.container_entrypoint import (
     _task_from_request,
     _write_artifacts,
 )
-from evaluation.model_config import load_model_config
+from evaluation.model_config import ModelConfig, load_model_config
 from evaluation.multi_agent import ROLE_PROMPTS, TraceEvent, role_metadata, validate_event_schema
+from evaluation.native_multi_agent import NATIVE_MULTI_AGENT_SYSTEMS, run_native_role_once
 
 
 def _content_from_response(response: dict[str, Any]) -> str:
@@ -39,7 +40,7 @@ def _content_from_response(response: dict[str, Any]) -> str:
         return ""
 
 
-def _apply_model_env(req: dict[str, Any]) -> None:
+def _apply_model_env(req: dict[str, Any]) -> ModelConfig:
     """Apply non-secret model settings from the request to process env."""
     _load_dotenv()
     model_cfg_raw = dict(req.get("model_config") or {})
@@ -49,6 +50,7 @@ def _apply_model_env(req: dict[str, Any]) -> None:
     model_config = load_model_config(model_cfg_raw)
     os.environ["CJ_EVAL_MODEL"] = model_config.name
     os.environ["CJ_EVAL_TEMPERATURE"] = str(model_config.temperature)
+    return model_config
 
 
 def _base_event(
@@ -95,7 +97,7 @@ def _dry_role_content(role: str, messages: list[dict[str, str]]) -> str:
 
 def run_role_request(req: dict[str, Any]) -> dict[str, Any]:
     """Execute one LLM role call inside the current container."""
-    _apply_model_env(req)
+    model_config = _apply_model_env(req)
     execution_config = dict(req.get("execution_config") or {})
     run_context = dict(req.get("run_context") or {})
     role = str(req.get("role", ""))
@@ -108,6 +110,34 @@ def run_role_request(req: dict[str, Any]) -> dict[str, Any]:
     messages = list(req.get("messages") or [])
     if not messages:
         raise ValueError("distributed role request requires non-empty messages")
+    native_system = str(
+        execution_config.get("distributed_agent_system")
+        or execution_config.get("native_agent_system")
+        or req.get("agent_system")
+        or ""
+    )
+    if native_system in NATIVE_MULTI_AGENT_SYSTEMS:
+        payload = run_native_role_once(
+            system_name=native_system,
+            role=role,
+            messages=messages,
+            model_config=model_config,
+            seed=seed,
+            max_turns=int(execution_config.get("max_turns", 8)),
+            dry_run=dry_run,
+            study_id=str(run_context.get("study_id", "")),
+            pair_id=str(run_context.get("pair_id", "")),
+            run_id=str(run_context.get("run_id", "")),
+            step_index=step_index,
+            trace_id=trace_id,
+        )
+        payload.update({
+            "agent_system": native_system,
+            "framework": native_system,
+            "framework_native": True,
+            "deployment_mode": "distributed",
+        })
+        return payload
 
     events = [
         _base_event(

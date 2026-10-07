@@ -15,8 +15,9 @@ unsupported artifacts where they do not.
 
 This script is additive: it does not replace the existing injector,
 individual-agent, multi-agent-reference, overhead, or infrastructure scripts.
-It runs native framework multi-agent pilots, plus a distributed reference smoke
-where Planner, Coder, and Reviewer execute in separate Docker containers.
+It runs native framework multi-agent pilots, distributed reference smoke, and
+distributed-native smoke where Planner, Coder, and Reviewer execute in separate
+Docker containers.
 
 Options:
   --env-file PATH       Load model config/secrets from PATH. Default: .env.
@@ -39,6 +40,9 @@ Environment:
   CJ_EVAL_MISSING_BENCHMARKS  Default: humanevalplus mbppplus.
   CJ_EVAL_NATIVE_MULTI_SYSTEMS
                               Native multi-agent systems. Default: same as
+                              CJ_EVAL_MISSING_SYSTEMS.
+  CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS
+                              Distributed-native systems. Default: same as
                               CJ_EVAL_MISSING_SYSTEMS.
 EOF
 }
@@ -254,6 +258,16 @@ CJ_EVAL_DISTRIBUTED_FAULT_TARGET_ROLE="${CJ_EVAL_DISTRIBUTED_ROLE_TARGET:-coder}
 CJ_EVAL_DISTRIBUTED_TRIPLET=1 \
 CJ_EVAL_RUN_NAME="role-local-fault-${CJ_EVAL_DISTRIBUTED_ROLE_TARGET:-coder}" \
   "${script_dir}/run_distributed_reference_smoke.sh"
+
+CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS="${CJ_EVAL_DISTRIBUTED_NATIVE_SYSTEMS:-${systems}}" \
+CJ_EVAL_DISTRIBUTED_NATIVE_BENCHMARKS="${CJ_EVAL_DISTRIBUTED_NATIVE_BENCHMARKS:-${benchmarks}}" \
+CJ_EVAL_DISTRIBUTED_NATIVE_SUBSET="${CJ_EVAL_DISTRIBUTED_NATIVE_SUBSET:-${CJ_EVAL_BENCHMARK_SUBSET:-smoke}}" \
+CJ_EVAL_DISTRIBUTED_NATIVE_TOPOLOGIES="${CJ_EVAL_DISTRIBUTED_NATIVE_TOPOLOGIES:-linear closed_loop}" \
+CJ_EVAL_DISTRIBUTED_NATIVE_FAULT_SUITE="${CJ_EVAL_DISTRIBUTED_NATIVE_FAULT_SUITE:-smoke}" \
+CJ_EVAL_DISTRIBUTED_NATIVE_TRIPLET=1 \
+CJ_EVAL_DISTRIBUTED_NATIVE_TASKS="${CJ_EVAL_DISTRIBUTED_NATIVE_TASKS:-${tasks}}" \
+CJ_EVAL_RUN_NAME="distributed-native-${CJ_EVAL_MODEL}" \
+  "${script_dir}/run_distributed_native_multi_agent_smoke.sh"
 
 CJ_EVAL_SYSTEMS="${CJ_EVAL_NATIVE_MULTI_SYSTEMS:-${systems}}" \
 CJ_EVAL_BENCHMARKS="${CJ_EVAL_NATIVE_MULTI_BENCHMARKS:-${benchmarks}}" \

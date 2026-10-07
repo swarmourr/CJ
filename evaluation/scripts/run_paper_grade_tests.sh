@@ -31,10 +31,11 @@ Options:
                         through run_all_current_scenarios.sh.
   --with-missing        Run the missing paper experiment bundle once. This runs
                         implemented missing categories, including distributed
-                        communication/role-local faults, durable-state
-                        validation, native framework multi-agent pilots,
-                        comparator gating, and explicit unsupported artifacts
-                        only for categories still not implemented.
+                        communication/role-local faults, distributed-native
+                        multi-agent smoke, durable-state validation, native
+                        framework multi-agent pilots, comparator gating, and
+                        explicit unsupported artifacts only for categories
+                        still not implemented.
   --paper-all           Build image, debug image, run validation, gateway, and
                         all current + missing scenario categories in one result
                         folder.
