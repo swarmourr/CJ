@@ -128,8 +128,13 @@ introspection_cmd=(
   docker run --rm
   --network none
   --read-only
+  -e HOME=/tmp/cj-home
+  -e XDG_CACHE_HOME=/tmp/cj-cache
+  -e XDG_CONFIG_HOME=/tmp/cj-config
+  -e XDG_DATA_HOME=/tmp/cj-data
+  -e CREWAI_STORAGE_DIR=/tmp/cj-crewai
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m
-  --tmpfs /cj/output:rw,nosuid,nodev,size=256m
+  --tmpfs /cj/output:rw,nosuid,nodev,size=256m,uid=1000,gid=1000
   --entrypoint /bin/sh
   "${image}"
   -lc
