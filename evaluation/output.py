@@ -129,13 +129,33 @@ def _fault_records(records: list[dict]) -> list[dict]:
     ]
 
 
+def _infrastructure_fault_records(records: list[dict]) -> list[dict]:
+    infra: list[dict] = []
+    for record in _fault_records(records):
+        lifecycle = _lifecycle(record)
+        if (
+            record.get("fault_layer") == "infrastructure"
+            or record.get("experiment_layer") == "infrastructure"
+            or lifecycle.get("evidence_source") == "docker_target"
+        ):
+            infra.append(record)
+    return infra
+
+
 def _severity_label(record: dict) -> str:
     params = record.get("fault_parameters") if isinstance(record.get("fault_parameters"), dict) else {}
     for key in ("severity", "delay_s", "timeout_s", "max_tokens", "mode", "n"):
         if key in params:
             return f"{key}={params[key]}"
     if params:
-        return json.dumps(params, sort_keys=True)
+        transient_keys = {"port", "upstream", "base_url_env", "selector", "fault"}
+        stable_params = {
+            key: value
+            for key, value in params.items()
+            if key not in transient_keys and value not in ("", None)
+        }
+        if stable_params:
+            return json.dumps(stable_params, sort_keys=True)
     return ""
 
 
@@ -1059,6 +1079,11 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
         control_eligible = [(b, c, f) for b, c, f in valid_scored if _as_bool_success(c)]
         conditional_success = [f for _b, _c, f in baseline_eligible if _as_bool_success(f)]
         unique_tasks = len({(f.get("task_id") or "") for _b, _c, f in complete})
+        seed_count = len({
+            f.get("seed")
+            for _b, _c, f in complete
+            if f.get("seed") not in (None, "")
+        })
         inference_status = _inference_status(
             unique_tasks=unique_tasks,
             valid_pairs=len(valid_scored),
@@ -1096,6 +1121,8 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
             "benchmark": benchmark,
             "tasks": unique_tasks,
             "unique_tasks": unique_tasks,
+            "independent_task_count": unique_tasks,
+            "seed_count": seed_count,
             "complete_triplets": len(complete),
             "missing_pair_count": len(triplet_like) - len(complete),
             "valid_pairs": len(valid),
@@ -1153,7 +1180,7 @@ def write_scientific_summary_csv(records: list[dict], path: str) -> None:
 
     fields = list(rows[0].keys()) if rows else [
         "agent_level", "output_schema_version", "system", "model", "fault", "severity", "topology",
-        "benchmark", "tasks", "unique_tasks", "complete_triplets",
+        "benchmark", "tasks", "unique_tasks", "independent_task_count", "seed_count", "complete_triplets",
         "missing_pair_count", "valid_pairs", "scored_triplets",
         "baseline_eligible_pairs", "control_eligible_pairs", "inference_status", "evaluation_scope",
         "baseline_pass_at_1", "control_pass_at_1", "fault_pass_at_1",
@@ -1179,6 +1206,551 @@ def _first_nonempty(values: list[Any]) -> Any:
         if value not in (None, "", {}, []):
             return value
     return ""
+
+
+def _trace_events(record: dict) -> list[dict[str, Any]]:
+    trace = record.get("execution_trace")
+    if not isinstance(trace, list):
+        result = record.get("result")
+        if isinstance(result, dict):
+            trace = result.get("execution_trace")
+    return [e for e in (trace or []) if isinstance(e, dict)]
+
+
+def _paper_group_key(record: dict) -> tuple:
+    return (
+        record.get("agent_level", ""),
+        record.get("framework") or record.get("agent_system", ""),
+        record.get("topology", ""),
+        record.get("benchmark", ""),
+        record.get("model", ""),
+        record.get("fault_type", ""),
+        _severity_label(record),
+    )
+
+
+def _paper_group_base(key: tuple) -> dict[str, Any]:
+    level, system, topology, benchmark, model, fault, severity = key
+    return {
+        "agent_level": level,
+        "system": system,
+        "topology": topology,
+        "benchmark": benchmark,
+        "model": model,
+        "fault": fault,
+        "severity": severity,
+    }
+
+
+def _triplet_quality(records: list[dict]) -> dict[str, Any]:
+    by_pair = _condition_index(records)
+    fault_records = _fault_records(records)
+    complete = []
+    valid = []
+    scored = []
+    baseline_eligible = []
+    control_eligible = []
+    for fault in fault_records:
+        pair = by_pair.get(str(fault.get("pair_id")), {})
+        base = pair.get("direct_baseline")
+        ctrl = pair.get("cj_control")
+        if not base or not ctrl:
+            continue
+        complete.append((base, ctrl, fault))
+        if fault.get("validity") == "valid":
+            valid.append((base, ctrl, fault))
+            if _is_scored_triplet(base, ctrl, fault):
+                scored.append((base, ctrl, fault))
+                if _as_bool_success(base):
+                    baseline_eligible.append((base, ctrl, fault))
+                if _as_bool_success(ctrl):
+                    control_eligible.append((base, ctrl, fault))
+    conditional_success = [f for _b, _c, f in baseline_eligible if _as_bool_success(f)]
+    return {
+        "fault_records": len(fault_records),
+        "complete_triplets": len(complete),
+        "valid_fault_runs": len(valid),
+        "scored_triplets": len(scored),
+        "baseline_eligible_pairs": len(baseline_eligible),
+        "control_eligible_pairs": len(control_eligible),
+        "conditional_robustness": _ratio(len(conditional_success), len(baseline_eligible)),
+        "fault_specific_degradation": _mean([
+            _as_float(c.get("success")) - _as_float(f.get("success"))
+            for _b, c, f in control_eligible
+        ]),
+    }
+
+
+def write_trigger_coverage_summary_csv(records: list[dict], path: str) -> None:
+    """Summarize trigger coverage and untriggered cases.
+
+    This is the AgentChaos/SequenceFI-facing table: a fault that is configured
+    and activated but never reached is not an agent failure, but it is an
+    important injection-coverage result.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    grouped: dict[tuple, list[dict]] = {}
+    for fault in _fault_records(records):
+        grouped.setdefault(_paper_group_key(fault), []).append(fault)
+
+    rows: list[dict[str, Any]] = []
+    for key, faults in sorted(grouped.items()):
+        counts = _validity_counts(faults)
+        configured = counts["configured_count"] or len(faults)
+        triggered = counts["triggered_count"]
+        reached = sum(1 for r in faults if _target_reached(r))
+        untriggered = sum(1 for r in faults if r.get("validity") == "untriggered")
+        valid = sum(1 for r in faults if r.get("validity") == "valid")
+        valid_manifested = sum(
+            1 for r in faults
+            if r.get("validity") == "valid" and _lifecycle(r).get("manifested") is True
+        )
+        affected = sum(_affected_call_count(r) for r in faults)
+        intercepted = sum(int(_lifecycle(r).get("proxy_call_count") or 0) for r in faults)
+        untriggered_reason_counts = _untriggered_reason_counts(faults)
+        untriggered_detail_counts = _untriggered_detail_counts(faults)
+        rows.append({
+            **_paper_group_base(key),
+            "paper_reference": "AgentChaos;SequenceFI",
+            "configured_runs": configured,
+            "activated_runs": counts["activated_count"],
+            "target_reached_runs": reached,
+            "target_reachability": _ratio(reached, configured),
+            "triggered_runs": triggered,
+            "manifested_runs": counts["manifested_count"],
+            "valid_fault_runs": valid,
+            "conditional_fidelity": _ratio(valid_manifested, reached),
+            "untriggered_runs": untriggered,
+            "invalid_runs": sum(1 for r in faults if r.get("validity") == "invalid"),
+            "inconclusive_runs": sum(1 for r in faults if r.get("validity") == "inconclusive"),
+            "trigger_rate": counts["trigger_rate"],
+            "manifestation_rate": counts["manifestation_rate"],
+            "untriggered_rate": _ratio(untriggered, configured),
+            "proxy_intercepted_calls": intercepted,
+            "proxy_affected_calls": affected,
+            "affected_call_fraction": _ratio(affected, intercepted),
+            "temporal_targeting_status": (
+                "not_reached" if triggered == 0 and configured
+                else "partial_coverage" if untriggered
+                else "reached"
+            ),
+            "untriggered_reason_counts_json": _json_cell(untriggered_reason_counts),
+            "dominant_untriggered_reason": _dominant_reason(untriggered_reason_counts),
+            "untriggered_detail_counts_json": _json_cell(untriggered_detail_counts),
+            "dominant_untriggered_detail": _dominant_reason(untriggered_detail_counts),
+            "interpretation": (
+                "exclude_untriggered_from_effect_estimates_report_as_coverage"
+                if untriggered else "eligible_for_validity_filtered_effects"
+            ),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "topology", "benchmark", "model", "fault",
+        "severity", "paper_reference", "configured_runs", "activated_runs",
+        "target_reached_runs", "target_reachability",
+        "triggered_runs", "manifested_runs", "valid_fault_runs",
+        "conditional_fidelity",
+        "untriggered_runs", "invalid_runs", "inconclusive_runs",
+        "trigger_rate", "manifestation_rate", "untriggered_rate",
+        "proxy_intercepted_calls", "proxy_affected_calls",
+        "affected_call_fraction", "temporal_targeting_status",
+        "untriggered_reason_counts_json", "dominant_untriggered_reason",
+        "untriggered_detail_counts_json", "dominant_untriggered_detail",
+        "interpretation",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _untriggered_reason_counts(records: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        if record.get("validity") != "untriggered":
+            continue
+        reason = _untriggered_reason(record)
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _untriggered_detail_counts(records: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        if record.get("validity") != "untriggered":
+            continue
+        detail = _untriggered_detail(record)
+        counts[detail] = counts.get(detail, 0) + 1
+    return counts
+
+
+def _dominant_reason(counts: dict[str, int]) -> str:
+    if not counts:
+        return ""
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _target_reached(record: dict) -> bool:
+    if _lifecycle(record).get("triggered") is True:
+        return True
+    if any(entry.get("target_matched") is True for entry in _evidence_entries(record)):
+        return True
+    target_role = str(record.get("fault_target_role") or "").lower()
+    if target_role:
+        return target_role in {
+            str(event.get("agent_role", "")).lower()
+            for event in _trace_events(record)
+            if isinstance(event, dict) and event.get("agent_role")
+        }
+    if "tool" in str(record.get("fault_type", "")).lower():
+        return _tool_stage_reached_count(record) > 0
+    return False
+
+
+def _untriggered_reason(record: dict) -> str:
+    if _matching_target_without_injection(record):
+        return "interception_failure"
+    if _selector_mismatch(record):
+        return "selector_mismatch"
+    if _workflow_terminated_before_target(record):
+        return "workflow_terminated_early"
+    return "target_not_reached"
+
+
+def _untriggered_detail(record: dict) -> str:
+    fault = str(record.get("fault_type", "")).lower()
+    target_role = str(record.get("fault_target_role") or "").lower()
+    trace = _trace_events(record)
+    roles_seen = {
+        str(event.get("agent_role", "")).lower()
+        for event in trace
+        if isinstance(event, dict) and event.get("agent_role")
+    }
+    event_types = {
+        str(event.get("event_type", "")).lower()
+        for event in trace
+        if isinstance(event, dict) and event.get("event_type")
+    }
+    coder_error = any(
+        isinstance(event, dict)
+        and str(event.get("agent_role", "")).lower() in {"coder", "coordinator"}
+        and str(event.get("event_type", "")).lower() in {"error_detection", "error"}
+        and "reviewer" not in roles_seen
+        for event in trace
+    )
+    if (
+        ("reviewer" in fault or target_role == "reviewer")
+        and "reviewer" not in roles_seen
+        and coder_error
+    ):
+        return "coder_failed_before_reviewer_invocation"
+    if ("reviewer" in fault or target_role == "reviewer") and "reviewer" not in roles_seen:
+        return "reviewer_invocation_not_reached"
+    if "tool" in fault and _tool_stage_reached_count(record) == 0:
+        return "tool_invocation_not_reached"
+    if "handoff" not in event_types and record.get("agent_level") == "multi_agent":
+        return "handoff_not_reached"
+    return "target_operation_not_reached"
+
+
+def _workflow_terminated_before_target(record: dict) -> bool:
+    return _untriggered_detail(record) in {
+        "coder_failed_before_reviewer_invocation",
+        "handoff_not_reached",
+    }
+
+
+def _selector_mismatch(record: dict) -> bool:
+    entries = _evidence_entries(record)
+    return bool(entries) and any(entry.get("target_matched") is False for entry in entries)
+
+
+def _matching_target_without_injection(record: dict) -> bool:
+    return any(
+        entry.get("target_matched") is True
+        and entry.get("triggered") is not True
+        and entry.get("applied") is not True
+        for entry in _evidence_entries(record)
+    )
+
+
+def _is_tool_related_fault(record: dict) -> bool:
+    fault = str(record.get("fault_type", "")).lower()
+    if "tool" in fault:
+        return True
+    params = record.get("fault_parameters")
+    return isinstance(params, dict) and any("tool" in str(k).lower() for k in params)
+
+
+def _proxy_tool_call_count(record: dict) -> int:
+    count = 0
+    for call in _proxy_calls(record):
+        role = str(call.get("agent_role", "")).lower()
+        if role == "tool":
+            count += 1
+            continue
+        if _as_float(call.get("tool_count"), 0.0) > 0 or _as_float(call.get("response_tool_calls"), 0.0) > 0:
+            count += 1
+    return count
+
+
+def _tool_stage_reached_count(record: dict) -> int:
+    """Count observed tool-stage reachability from all available evidence.
+
+    Some controlled workloads send an OpenAI-compatible request containing a
+    ``role="tool"`` message, but the proxy's compact per-row preview may not
+    preserve ``tool_count``.  The raw agent result still records ``tool_calls``
+    and CJ fault evidence records the matched tool target.  ToolRobustBench
+    summaries should use all objective sources instead of undercounting these
+    reached tool stages.
+    """
+    proxy_count = _proxy_tool_call_count(record)
+    agent_count = int(_as_float(record.get("tool_calls"), 0.0))
+    evidence_count = 0
+    for entry in _evidence_entries(record):
+        target = entry.get("target") if isinstance(entry.get("target"), dict) else {}
+        evidence = entry.get("evidence") if isinstance(entry.get("evidence"), dict) else {}
+        target_text = " ".join(
+            str(value).lower()
+            for value in (
+                target.get("operation"),
+                target.get("tool_name"),
+                evidence.get("tool_name"),
+                evidence.get("observed"),
+            )
+            if value not in (None, "")
+        )
+        if (
+            "tool" in target_text
+            or "python" in target_text
+            or entry.get("target_matched") is True
+        ):
+            evidence_count += 1
+    return max(proxy_count, agent_count, evidence_count)
+
+
+def write_tool_stage_summary_csv(records: list[dict], path: str) -> None:
+    """Summarize tool-fault reachability using ToolRobustBench-style stages."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    grouped: dict[tuple, list[dict]] = {}
+    for fault in _fault_records(records):
+        if _is_tool_related_fault(fault):
+            grouped.setdefault(_paper_group_key(fault), []).append(fault)
+
+    rows: list[dict[str, Any]] = []
+    for key, faults in sorted(grouped.items()):
+        configured = len(faults)
+        tool_reached = sum(_tool_stage_reached_count(r) for r in faults)
+        affected = sum(_affected_call_count(r) for r in faults)
+        valid = sum(1 for r in faults if r.get("validity") == "valid")
+        untriggered = sum(1 for r in faults if r.get("validity") == "untriggered")
+        no_tool = sum(1 for r in faults if _tool_stage_reached_count(r) == 0)
+        manifested = sum(1 for r in faults if _lifecycle(r).get("manifested") is True)
+        rows.append({
+            **_paper_group_base(key),
+            "paper_reference": "ToolRobustBench",
+            "tool_fault_runs": configured,
+            "valid_fault_runs": valid,
+            "untriggered_runs": untriggered,
+            "tool_stage_tool_invocation_reached": tool_reached,
+            "tool_stage_affected_calls": affected,
+            "tool_stage_manifested_runs": manifested,
+            "tool_stage_no_tool_invocation_runs": no_tool,
+            "tool_stage_reachability_rate": _ratio(configured - no_tool, configured),
+            "tool_stage_effect_rate": _ratio(affected, tool_reached),
+            "dominant_failure_stage": (
+                "tool_not_invoked" if no_tool >= max(valid, 1)
+                else "tool_observation_or_runtime_fault" if affected
+                else "tool_fault_configured_without_effect"
+            ),
+            "interpretation": (
+                "untriggered_tool_faults_are_tool_coverage_limits_not_resilience_failures"
+                if untriggered else "tool_faults_reached_tool_stage"
+            ),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "topology", "benchmark", "model", "fault",
+        "severity", "paper_reference", "tool_fault_runs", "valid_fault_runs",
+        "untriggered_runs", "tool_stage_tool_invocation_reached",
+        "tool_stage_affected_calls", "tool_stage_manifested_runs",
+        "tool_stage_no_tool_invocation_runs", "tool_stage_reachability_rate",
+        "tool_stage_effect_rate", "dominant_failure_stage", "interpretation",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_observability_alignment_summary_csv(records: list[dict], path: str) -> None:
+    """Summarize trace-aligned observability fields for llmmas-otel comparisons."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    grouped: dict[tuple, list[dict]] = {}
+    for record in records:
+        if record.get("agent_level") == "multi_agent" or _trace_events(record):
+            grouped.setdefault((
+                record.get("agent_level", ""),
+                record.get("framework") or record.get("agent_system", ""),
+                record.get("topology", ""),
+                record.get("benchmark", ""),
+                record.get("model", ""),
+            ), []).append(record)
+
+    rows: list[dict[str, Any]] = []
+    for key, group in sorted(grouped.items()):
+        level, system, topology, benchmark, model = key
+        events = [event for record in group for event in _trace_events(record)]
+        proxy_calls = [call for record in group for call in _proxy_calls(record)]
+        rows.append({
+            "paper_reference": "llmmas-otel",
+            "agent_level": level,
+            "system": system,
+            "topology": topology,
+            "benchmark": benchmark,
+            "model": model,
+            "records": len(group),
+            "trace_event_count": len(events),
+            "records_with_trace_events": sum(1 for r in group if _trace_events(r)),
+            "trace_id_coverage": _ratio(sum(1 for e in events if e.get("trace_id")), len(events)),
+            "span_id_coverage": _ratio(sum(1 for e in events if e.get("span_id")), len(events)),
+            "role_coverage": _ratio(sum(1 for e in events if e.get("agent_role")), len(events)),
+            "run_id_coverage": _ratio(sum(1 for e in events if e.get("run_id")), len(events)),
+            "step_index_coverage": _ratio(sum(1 for e in events if e.get("step_index") not in (None, "")), len(events)),
+            "proxy_call_count": len(proxy_calls),
+            "proxy_role_metadata_coverage": _ratio(sum(1 for c in proxy_calls if c.get("agent_role")), len(proxy_calls)),
+            "proxy_run_id_coverage": _ratio(sum(1 for c in proxy_calls if c.get("run_id")), len(proxy_calls)),
+            "proxy_step_coverage": _ratio(sum(1 for c in proxy_calls if c.get("step") not in (None, "")), len(proxy_calls)),
+            "observability_status": (
+                "trace_aligned"
+                if events and all(_ratio(sum(1 for e in events if e.get(k)), len(events)) for k in ("trace_id", "span_id", "agent_role", "run_id"))
+                else "partial_trace_alignment"
+                if events else "missing_trace_events"
+            ),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "paper_reference", "agent_level", "system", "topology", "benchmark",
+        "model", "records", "trace_event_count", "records_with_trace_events",
+        "trace_id_coverage", "span_id_coverage", "role_coverage",
+        "run_id_coverage", "step_index_coverage", "proxy_call_count",
+        "proxy_role_metadata_coverage", "proxy_run_id_coverage",
+        "proxy_step_coverage", "observability_status",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def write_paper_alignment_summary_csv(records: list[dict], path: str) -> None:
+    """Write a compact related-work-to-CJ traceability summary."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    faults = _fault_records(records)
+    quality = _triplet_quality(records)
+    validity = _validity_counts(faults)
+    multi = [r for r in records if r.get("agent_level") == "multi_agent"]
+    traces = [event for r in records for event in _trace_events(r)]
+    tool_faults = [r for r in faults if _is_tool_related_fault(r)]
+    infra_faults = _infrastructure_fault_records(records)
+    rows = [
+        {
+            "priority": 1,
+            "paper": "AgentChaos",
+            "cj_alignment": "LLM/API fault triggering, verified manifestation, pass@1 degradation, silent-failure separation",
+            "primary_output_files": "scientific_summary.csv;trigger_coverage_summary.csv;fault_fidelity_summary.csv;agent_resilience_summary.csv",
+            "records": len(records),
+            "fault_records": len(faults),
+            "valid_fault_runs": quality["valid_fault_runs"],
+            "untriggered_runs": sum(1 for r in faults if r.get("validity") == "untriggered"),
+            "scored_triplets": quality["scored_triplets"],
+            "coverage_status": "implemented",
+            "remaining_gap": "increase eligible tasks/repetitions for final inference",
+        },
+        {
+            "priority": 2,
+            "paper": "MAS-FIRE",
+            "cj_alignment": "role-scoped multi-agent faults, topology split, local repair versus final success",
+            "primary_output_files": "multi_agent_process_summary.csv;observability_alignment_summary.csv;scientific_summary.csv",
+            "records": len(multi),
+            "fault_records": len([r for r in multi if r in faults]),
+            "valid_fault_runs": sum(1 for r in multi if r.get("condition") == "cj_fault" and r.get("validity") == "valid"),
+            "untriggered_runs": sum(1 for r in multi if r.get("condition") == "cj_fault" and r.get("validity") == "untriggered"),
+            "scored_triplets": "",
+            "coverage_status": "implemented_pilot",
+            "remaining_gap": "reduce untriggered role/tool faults and improve native multi-agent scoring stability",
+        },
+        {
+            "priority": 3,
+            "paper": "llmmas-otel",
+            "cj_alignment": "trace/span/run/role/step evidence tied to proxy fault calls",
+            "primary_output_files": "observability_alignment_summary.csv;cj_evidence.csv;multi_agent_process_summary.csv",
+            "records": len(records),
+            "fault_records": len(faults),
+            "valid_fault_runs": "",
+            "untriggered_runs": "",
+            "scored_triplets": "",
+            "coverage_status": "implemented" if traces else "partial",
+            "remaining_gap": "raise proxy metadata coverage for every native framework request",
+        },
+        {
+            "priority": 4,
+            "paper": "SequenceFI",
+            "cj_alignment": "trigger verification, untriggered exclusion, injection-point precision",
+            "primary_output_files": "trigger_coverage_summary.csv;cj_evidence.csv",
+            "records": len(records),
+            "fault_records": len(faults),
+            "valid_fault_runs": validity["manifested_count"],
+            "untriggered_runs": sum(1 for r in faults if r.get("validity") == "untriggered"),
+            "scored_triplets": "",
+            "coverage_status": "implemented",
+            "remaining_gap": "add explicit temporal schedules such as nth-call and role-step targeting where needed",
+        },
+        {
+            "priority": 5,
+            "paper": "ChaosEater",
+            "cj_alignment": "chaos-engineering lifecycle fields, automated run scripts, recovery verification, container-scoped infrastructure evidence",
+            "primary_output_files": "validity_summary.csv;infrastructure_paper_summary.csv;paper_alignment_summary.csv;study_manifest.json",
+            "records": len(records),
+            "fault_records": len(faults),
+            "valid_fault_runs": quality["valid_fault_runs"],
+            "untriggered_runs": sum(1 for r in faults if r.get("validity") == "untriggered"),
+            "scored_triplets": quality["scored_triplets"],
+            "coverage_status": "implemented",
+            "remaining_gap": "freeze clean provenance and deduplicate resumed scenario folders",
+        },
+        {
+            "priority": 6,
+            "paper": "ToolRobustBench",
+            "cj_alignment": "tool-fault reachability and stage-wise tool invocation/observation diagnosis",
+            "primary_output_files": "tool_stage_summary.csv;trigger_coverage_summary.csv;cj_evidence.csv",
+            "records": len(records),
+            "fault_records": len(tool_faults),
+            "valid_fault_runs": sum(1 for r in tool_faults if r.get("validity") == "valid"),
+            "untriggered_runs": sum(1 for r in tool_faults if r.get("validity") == "untriggered"),
+            "scored_triplets": "",
+            "coverage_status": "implemented_diagnostic",
+            "remaining_gap": "add tool-required tasks to increase tool-stage coverage",
+        },
+        {
+            "priority": 7,
+            "paper": "Infrastructure chaos layer",
+            "cj_alignment": "DockerTarget-scoped CPU, memory, network, packet-loss, and disk-fault validation with host-safe blast radius",
+            "primary_output_files": "infrastructure_summary.csv;infrastructure_paper_summary.csv",
+            "records": len(infra_faults),
+            "fault_records": len(infra_faults),
+            "valid_fault_runs": sum(1 for r in infra_faults if r.get("validity") == "valid"),
+            "untriggered_runs": sum(1 for r in infra_faults if r.get("validity") == "untriggered"),
+            "scored_triplets": "",
+            "coverage_status": "implemented_validation_layer" if infra_faults else "not_run",
+            "remaining_gap": "repeat with severity levels and connect only valid infrastructure faults to scored agent outcomes",
+        },
+    ]
+    fields = list(rows[0].keys())
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
 
 
 def write_fault_fidelity_summary_csv(records: list[dict], path: str) -> None:
@@ -1611,6 +2183,26 @@ def write_agent_resilience_summary_csv(records: list[dict], path: str) -> None:
             "extra_tokens": _mean(_paired_numeric_diffs(
                 triplets, "total_tokens", left_index=1, right_index=2,
             )),
+            "duration_amplification_s": _mean([
+                _as_float(f.get("duration_s")) - _as_float(c.get("duration_s"))
+                for _b, c, f in triplets
+            ]),
+            "duration_amplification_ratio": _mean([
+                (_as_float(f.get("duration_s")) - _as_float(c.get("duration_s"))) / _as_float(c.get("duration_s"))
+                for _b, c, f in triplets
+                if _as_float(c.get("duration_s")) > 0
+            ]),
+            "llm_call_amplification": _mean([
+                _as_float(f.get("llm_calls")) - _as_float(c.get("llm_calls"))
+                for _b, c, f in triplets
+            ]),
+            "tool_call_amplification": _mean([
+                _as_float(f.get("tool_calls")) - _as_float(c.get("tool_calls"))
+                for _b, c, f in triplets
+            ]),
+            "token_amplification": _mean(_paired_numeric_diffs(
+                triplets, "total_tokens", left_index=1, right_index=2,
+            )),
         })
 
     fields = list(rows[0].keys()) if rows else [
@@ -1619,7 +2211,9 @@ def write_agent_resilience_summary_csv(records: list[dict], path: str) -> None:
         "fault_detection_rate", "continued_operation_rate", "retry_repair_rate",
         "successful_repair_rate", "graceful_failure_rate", "silent_failure_rate",
         "recovery_latency_s", "extra_llm_calls", "extra_tool_calls",
-        "extra_turns", "extra_tokens",
+        "extra_turns", "extra_tokens", "duration_amplification_s",
+        "duration_amplification_ratio", "llm_call_amplification",
+        "tool_call_amplification", "token_amplification",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -2213,6 +2807,173 @@ def write_infrastructure_summary_csv(records: list[dict], path: str) -> None:
         w.writerows(rows)
 
 
+def _infra_observed(record: dict) -> dict[str, Any]:
+    activation = record.get("activation_evidence")
+    if not isinstance(activation, dict):
+        return {}
+    observed = activation.get("observed")
+    return observed if isinstance(observed, dict) else {}
+
+
+def _infra_recovery_observed(record: dict) -> dict[str, Any]:
+    recovery = record.get("recovery_evidence")
+    if not isinstance(recovery, dict):
+        return {}
+    observed = recovery.get("observed")
+    return observed if isinstance(observed, dict) else {}
+
+
+def _present_measurement_fields(observed: dict[str, Any]) -> list[str]:
+    fields: list[str] = []
+    candidates = (
+        "cpu_percent",
+        "memory_bytes",
+        "peak_memory_bytes",
+        "qdisc",
+        "packet_loss_rate",
+        "latency_ms",
+        "rtt_avg_ms",
+        "disk_used_bytes",
+        "disk_available_bytes",
+        "disk_enospc_verified",
+        "post_recovery_qdisc",
+    )
+    for key in candidates:
+        value = observed.get(key)
+        if value not in ("", None, [], {}):
+            fields.append(key)
+    return fields
+
+
+def _max_numeric(values: list[Any]) -> Any:
+    nums = [_as_float(value, None) for value in values]
+    nums = [value for value in nums if value is not None]
+    return max(nums) if nums else ""
+
+
+def _any_true(values: list[Any]) -> Any:
+    if not values:
+        return ""
+    return any(str(value).lower() in {"1", "true", "yes"} for value in values)
+
+
+def write_infrastructure_paper_summary_csv(records: list[dict], path: str) -> None:
+    """Write paper-facing infrastructure validation rows.
+
+    The table is intentionally layer-specific.  It reports whether CJ produced
+    objective container-scoped evidence for resource/network/disk faults, but it
+    does not re-label those diagnostics as agent-resilience effects.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    grouped: dict[tuple, list[dict]] = {}
+    for record in _infrastructure_fault_records(records):
+        grouped.setdefault(_paper_group_key(record), []).append(record)
+
+    rows: list[dict[str, Any]] = []
+    for key, faults in sorted(grouped.items()):
+        counts = _validity_counts(faults)
+        configured = counts["configured_count"] or len(faults)
+        valid = sum(1 for record in faults if record.get("validity") == "valid")
+        invalid = sum(1 for record in faults if record.get("validity") == "invalid")
+        untriggered = sum(1 for record in faults if record.get("validity") == "untriggered")
+        observed = [_infra_observed(record) for record in faults]
+        recovery_observed = [_infra_recovery_observed(record) for record in faults]
+        all_observed_fields = sorted({
+            field
+            for item in observed + recovery_observed
+            for field in _present_measurement_fields(item)
+        })
+        lifecycle_details = [
+            str(_lifecycle(record).get("details", ""))
+            for record in faults
+            if _lifecycle(record).get("details")
+        ]
+        qdisc_observed = any("netem" in str(item.get("qdisc", "")).lower() for item in observed)
+        limits = _first_nonempty([
+            record.get("container_resource_limits")
+            for record in faults
+            if isinstance(record.get("container_resource_limits"), dict)
+        ])
+        limits = limits if isinstance(limits, dict) else {}
+        rows.append({
+            **_paper_group_base(key),
+            "paper_reference": "ChaosEater;AgentChaos",
+            "configured_runs": configured,
+            "valid_fault_runs": valid,
+            "invalid_runs": invalid,
+            "untriggered_runs": untriggered,
+            "activation_rate": counts["activation_rate"],
+            "trigger_rate": counts["trigger_rate"],
+            "manifestation_rate": counts["manifestation_rate"],
+            "reversion_rate": counts["reversion_rate"],
+            "verified_recovery_rate": counts["verified_recovery_rate"],
+            "docker_target_evidence_rate": _ratio(
+                sum(1 for record in faults if _lifecycle(record).get("evidence_source") == "docker_target"),
+                configured,
+            ),
+            "objective_measurement_fields_json": _json_cell(all_observed_fields),
+            "observed_cpu_percent_max": _max_numeric([item.get("cpu_percent") for item in observed]),
+            "observed_memory_bytes_max": _max_numeric([
+                item.get("peak_memory_bytes", item.get("memory_bytes"))
+                for item in observed
+            ]),
+            "observed_latency_ms_max": _max_numeric([
+                item.get("latency_ms", item.get("rtt_avg_ms"))
+                for item in observed
+            ]),
+            "observed_packet_loss_rate_max": _max_numeric([
+                item.get("packet_loss_rate")
+                for item in observed
+            ]),
+            "disk_enospc_verified": _any_true([
+                item.get("disk_enospc_verified")
+                for item in observed
+            ]),
+            "netem_qdisc_observed": qdisc_observed,
+            "cpu_limit": limits.get("cpus", ""),
+            "memory_limit": limits.get("memory", ""),
+            "capabilities_json": _json_cell(limits.get("capabilities", [])),
+            "read_only_root": limits.get("read_only_root", ""),
+            "inclusion_status": (
+                "paper_validated_infrastructure_fault"
+                if valid and counts["manifested_count"]
+                else "diagnostic_not_validated"
+            ),
+            "effect_estimate_status": (
+                "injector_validation_only"
+                if not any(_as_float(record.get("tests_total"), 0.0) > 0 for record in faults)
+                else "eligible_only_if_scored_and_valid"
+            ),
+            "dominant_invalid_reason": _dominant_reason({
+                detail: lifecycle_details.count(detail)
+                for detail in set(lifecycle_details)
+            }),
+            "interpretation": (
+                "container_scoped_fault_validated_keep_separate_from_llm_resilience"
+                if valid
+                else "do_not_use_for_resilience_effect_until_manifestation_is_verified"
+            ),
+        })
+
+    fields = list(rows[0].keys()) if rows else [
+        "agent_level", "system", "topology", "benchmark", "model", "fault",
+        "severity", "paper_reference", "configured_runs", "valid_fault_runs",
+        "invalid_runs", "untriggered_runs", "activation_rate", "trigger_rate",
+        "manifestation_rate", "reversion_rate", "verified_recovery_rate",
+        "docker_target_evidence_rate", "objective_measurement_fields_json",
+        "observed_cpu_percent_max", "observed_memory_bytes_max",
+        "observed_latency_ms_max", "observed_packet_loss_rate_max",
+        "disk_enospc_verified", "netem_qdisc_observed", "cpu_limit",
+        "memory_limit", "capabilities_json", "read_only_root",
+        "inclusion_status", "effect_estimate_status",
+        "dominant_invalid_reason", "interpretation",
+    ]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
 def write_distributed_process_summary_csv(records: list[dict], path: str) -> None:
     """Summarize genuinely distributed multi-agent executions only."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -2372,6 +3133,11 @@ def write_study_manifest(records: list[dict], path: str, study_id: str | None) -
         "task_ids": sorted({r.get("task_id", "") for r in records if r.get("task_id")}),
         "models": sorted({r.get("model", "") for r in records if r.get("model")}),
         "seeds": sorted({r.get("seed") for r in records if r.get("seed") is not None}),
+        "task_selection_seeds": sorted({
+            r.get("task_selection_seed")
+            for r in records
+            if r.get("task_selection_seed") is not None
+        }),
         "faults": sorted({r.get("fault_type", "") for r in records if r.get("fault_type")}),
         "cj_commits": sorted({r.get("cj_commit", "") for r in records if r.get("cj_commit")}),
         "cj_source_versions": sorted({
@@ -2475,28 +3241,86 @@ def write_group_summary_csv(records: list[dict], path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     group_recs = [
         r for r in records
-        if isinstance(r.get("lifecycle"), dict)
-        and r["lifecycle"].get("group_verdict") is not None
+        if (
+            isinstance(r.get("distributed_group_evidence"), dict)
+            or isinstance(r.get("group_evidence"), dict)
+            or (
+                isinstance(r.get("lifecycle"), dict)
+                and r["lifecycle"].get("group_verdict") is not None
+            )
+        )
     ]
     if not group_recs:
         with open(path, "w", encoding="utf-8") as f:
             f.write("# No group injection records in this campaign\n")
         return
     # Summarize group evidence fields
-    cols = ["run_id", "task_id", "fault_type", "group_verdict",
-            "activation_skew_ms", "synchronization_valid"]
+    cols = [
+        "study_id", "pair_id", "run_id", "condition", "task_id", "fault_type",
+        "group_verdict", "group_valid", "member_count", "target_roles",
+        "partial_activation", "rollback_success", "verified_recovery",
+        "activation_skew_ms", "maximum_allowed_skew_ms", "synchronization_valid",
+        "summary_consistent",
+    ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for r in group_recs:
             lc = r.get("lifecycle", {})
+            evidence = (
+                r.get("distributed_group_evidence")
+                if isinstance(r.get("distributed_group_evidence"), dict)
+                else r.get("group_evidence")
+                if isinstance(r.get("group_evidence"), dict)
+                else {}
+            )
+            members = [
+                member for member in evidence.get("members", [])
+                if isinstance(member, dict)
+            ]
+            target_roles = sorted({
+                str(member.get("target_role"))
+                for member in members
+                if member.get("target_role")
+            })
+            evidence_verdict = evidence.get("verdict") or lc.get("group_verdict", "")
+            group_valid = (
+                r.get("group_valid") is True
+                if r.get("group_valid") is not None
+                else evidence_verdict == "valid"
+            )
+            synchronization_valid = evidence.get(
+                "synchronization_valid",
+                lc.get("synchronization_valid", ""),
+            )
+            derived_valid = bool(members) and all(
+                member.get("active_at")
+                and member.get("manifested") is True
+                and member.get("reverted_at")
+                and not member.get("error")
+                for member in members
+            ) and synchronization_valid is True and evidence_verdict == "valid"
             w.writerow({
+                "study_id":              r.get("study_id", ""),
+                "pair_id":               r.get("pair_id", ""),
                 "run_id":               r.get("run_id",""),
+                "condition":            r.get("condition", ""),
                 "task_id":              r.get("task_id",""),
                 "fault_type":           r.get("fault_type",""),
-                "group_verdict":        lc.get("group_verdict",""),
-                "activation_skew_ms":   lc.get("activation_skew_ms",""),
-                "synchronization_valid":lc.get("synchronization_valid",""),
+                "group_verdict":        evidence_verdict,
+                "group_valid":          group_valid,
+                "member_count":         len(members),
+                "target_roles":         json.dumps(target_roles),
+                "partial_activation":   r.get("partial_activation", ""),
+                "rollback_success":     r.get("rollback_success", ""),
+                "verified_recovery":    r.get("verified_recovery", ""),
+                "activation_skew_ms":   evidence.get(
+                    "activation_skew_ms",
+                    lc.get("activation_skew_ms", ""),
+                ),
+                "maximum_allowed_skew_ms": evidence.get("maximum_allowed_skew_ms", ""),
+                "synchronization_valid": synchronization_valid,
+                "summary_consistent":   group_valid == derived_valid,
             })
 
 
@@ -2884,6 +3708,10 @@ def generate_all_outputs(
 
     write_task_results_csv(records, os.path.join(results_dir, "task_results.csv"))
     write_cj_evidence_csv(records, os.path.join(results_dir, "cj_evidence.csv"))
+    write_paper_alignment_summary_csv(records, os.path.join(results_dir, "paper_alignment_summary.csv"))
+    write_trigger_coverage_summary_csv(records, os.path.join(results_dir, "trigger_coverage_summary.csv"))
+    write_tool_stage_summary_csv(records, os.path.join(results_dir, "tool_stage_summary.csv"))
+    write_observability_alignment_summary_csv(records, os.path.join(results_dir, "observability_alignment_summary.csv"))
     write_condition_summary_csv(records, os.path.join(results_dir, "condition_summary.csv"))
     write_scientific_summary_csv(records, os.path.join(results_dir, "scientific_summary.csv"))
     write_validity_summary_csv(records, os.path.join(results_dir, "validity_summary.csv"))
@@ -2896,6 +3724,7 @@ def generate_all_outputs(
     write_task_complexity_summary_csv(records, os.path.join(results_dir, "task_complexity_summary.csv"))
     write_multi_agent_process_summary_csv(records, os.path.join(results_dir, "multi_agent_process_summary.csv"))
     write_infrastructure_summary_csv(records, os.path.join(results_dir, "infrastructure_summary.csv"))
+    write_infrastructure_paper_summary_csv(records, os.path.join(results_dir, "infrastructure_paper_summary.csv"))
     write_distributed_process_summary_csv(records, os.path.join(results_dir, "distributed_process_summary.csv"))
     write_stats_summary_csv(records, os.path.join(results_dir, "stats_summary.csv"))
     write_inferential_summary_csv(records, os.path.join(results_dir, "inferential_summary.csv"))

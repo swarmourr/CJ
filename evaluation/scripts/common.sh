@@ -119,8 +119,125 @@ cj_eval_write_command() {
 cj_eval_run_logged() {
   local log_path="$1"
   shift
+  local attempts="${CJ_EVAL_COMMAND_ATTEMPTS:-1}"
+  local delay_s="${CJ_EVAL_RETRY_DELAY_S:-30}"
+  local attempt=1
+  local status=0
+  if ! [[ "${attempts}" =~ ^[0-9]+$ ]] || [[ "${attempts}" -lt 1 ]]; then
+    attempts=1
+  fi
+  if ! [[ "${delay_s}" =~ ^[0-9]+$ ]]; then
+    delay_s=30
+  fi
+  mkdir -p "$(dirname "${log_path}")"
+  : > "${log_path}"
   echo "[cj-eval] command: $(cj_eval_print_command "$@")"
-  "$@" 2>&1 | tee "${log_path}"
+  while [[ "${attempt}" -le "${attempts}" ]]; do
+    {
+      echo "[cj-eval] attempt ${attempt}/${attempts}"
+      echo "[cj-eval] command: $(cj_eval_print_command "$@")"
+    } | tee -a "${log_path}"
+    set +e
+    "$@" 2>&1 | tee -a "${log_path}"
+    status="${PIPESTATUS[0]}"
+    set -e
+    if [[ "${status}" -eq 0 ]]; then
+      return 0
+    fi
+    echo "[cj-eval] command failed with exit ${status} on attempt ${attempt}/${attempts}" | tee -a "${log_path}"
+    if [[ "${attempt}" -lt "${attempts}" ]]; then
+      echo "[cj-eval] retrying in ${delay_s}s" | tee -a "${log_path}"
+      sleep "${delay_s}"
+    fi
+    attempt=$((attempt + 1))
+  done
+  return "${status}"
+}
+
+cj_eval_checkpoint_dir() {
+  echo "$(cj_eval_results_root)/.checkpoints"
+}
+
+cj_eval_checkpoint_path() {
+  local key="$1"
+  echo "$(cj_eval_checkpoint_dir)/$(cj_eval_slug "${key}").done.json"
+}
+
+cj_eval_checkpoint_done() {
+  local key="$1"
+  [[ "${CJ_EVAL_RESUME:-1}" == "1" && -f "$(cj_eval_checkpoint_path "${key}")" ]]
+}
+
+cj_eval_mark_checkpoint_done() {
+  local key="$1"
+  local title="$2"
+  local path
+  path="$(cj_eval_checkpoint_path "${key}")"
+  mkdir -p "$(dirname "${path}")"
+  cat > "${path}.tmp" <<EOF
+{
+  "checkpoint_key": $(cj_eval_json_string "${key}"),
+  "title": $(cj_eval_json_string "${title}"),
+  "completed_at_utc": $(cj_eval_json_string "$(cj_eval_timestamp)"),
+  "repo_commit": $(cj_eval_json_string "$(cj_eval_commit)"),
+  "docker_image": $(cj_eval_json_string "${CJ_EVAL_DOCKER_IMAGE:-}"),
+  "results_run": $(cj_eval_json_string "${CJ_EVAL_EXPERIMENT_RUN:-}")
+}
+EOF
+  mv "${path}.tmp" "${path}"
+}
+
+cj_eval_skip_checkpoint_message() {
+  local key="$1"
+  local title="$2"
+  echo "[cj-eval] checkpoint exists; skipping ${title}: ${key}"
+  echo "[cj-eval] checkpoint: $(cj_eval_checkpoint_path "${key}")"
+}
+
+cj_eval_find_completed_run_dir() {
+  local category="$1"
+  local name="$2"
+  local required_file="$3"
+  local root
+  local category_slug
+  local name_slug
+  local base
+  local candidate
+  root="$(cj_eval_results_root)"
+  category_slug="$(cj_eval_slug "${category}")"
+  name_slug="$(cj_eval_slug "${name}")"
+  base="${root}/${category_slug}/${name_slug}"
+  for candidate in "${base}" "${base}"-*; do
+    [[ -d "${candidate}" ]] || continue
+    [[ -s "${candidate}/${required_file}" ]] || continue
+    if [[ -f "${candidate}/logs/run.log" ]] && grep -q "\[cj-eval\] command failed with exit" "${candidate}/logs/run.log"; then
+      echo "[cj-eval] found partial failed result; not backfilling checkpoint: ${candidate}" >&2
+      continue
+    fi
+    echo "${candidate}"
+    return 0
+  done
+  return 1
+}
+
+cj_eval_backfill_checkpoint_from_run_dir() {
+  local key="$1"
+  local title="$2"
+  local category="$3"
+  local name="$4"
+  local required_file="${5:-runs.jsonl}"
+  local existing_dir
+  # A forced rerun must bypass both explicit checkpoints and automatic
+  # checkpoint backfilling from an earlier result directory.
+  if [[ "${CJ_EVAL_RESUME:-1}" != "1" ]]; then
+    return 1
+  fi
+  if existing_dir="$(cj_eval_find_completed_run_dir "${category}" "${name}" "${required_file}")"; then
+    echo "[cj-eval] found completed result; backfilling checkpoint for ${title}: ${existing_dir}"
+    cj_eval_mark_checkpoint_done "${key}" "${title}"
+    return 0
+  fi
+  return 1
 }
 
 cj_eval_load_dotenv() {

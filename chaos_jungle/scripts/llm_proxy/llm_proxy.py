@@ -87,7 +87,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 
 # ---------------------------------------------------------------------------
@@ -1753,8 +1753,10 @@ def _mutate_response(cfg: dict, resp_body: bytes, req_body: "dict | None",
 # ---------------------------------------------------------------------------
 
 
-class _ReusableHTTPServer(HTTPServer):
+class _ReusableHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
+    request_queue_size = 128
 
 
 class _ProxyHandler(BaseHTTPRequestHandler):

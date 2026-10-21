@@ -236,11 +236,10 @@ A **Target** abstracts over a machine. The runner and faults call
 ║                     ChaosRunner                         ║
 ╚══════════════╤═══════════════╤══════════════════╤════════╝
                │               │                  │
-     ┌─────────▼──────┐ ┌──────▼───────┐ ┌───────▼──────────┐
-     │  LocalTarget   │ │  SSHTarget   │ │  HTTPTarget      │
-     │                │ │              │ │                  │
-     │ subprocess.run │ │ Paramiko SSH │ │ HTTP POST /exec  │
-     └────────┬───────┘ └──────┬───────┘ └───────┬──────────┘
+     ┌─────────▼──────┐ ┌──────▼───────┐ ┌───────▼──────────┐ ┌──────▼───────┐
+     │  LocalTarget   │ │ DockerTarget │ │  SSHTarget       │ │ HTTPTarget   │
+     │ subprocess.run │ │ docker exec  │ │ Paramiko SSH     │ │ POST /exec  │
+     └────────┬───────┘ └──────┬───────┘ └───────┬──────────┘ └──────┬───────┘
               │                │                 │
               ▼                ▼                 ▼
        same  machine     remote  Linux      cj-daemon :8642
@@ -249,11 +248,17 @@ A **Target** abstracts over a machine. The runner and faults call
 | Target | Use case |
 |--------|----------|
 | `LocalTarget` | LLM / AI faults on macOS or any OS — no sudo |
+| `DockerTarget` | Faults confined to one validated experiment container |
 | `SSHTarget` | Infrastructure faults on remote Linux servers |
 | `HTTPTarget` | Machines behind a firewall or inside CI runners |
 
 `cj-daemon` is a lightweight REST agent deployed on the target machine that
 accepts `POST /exec` commands from `HTTPTarget`.
+
+`DockerTarget` is fail-closed: it does not execute on the host if the container
+is missing or stopped. A separate `DockerContainerControllerTarget` can stop or
+kill only the exact container named at construction time. The Docker socket is
+not mounted inside agent containers.
 
 ---
 
@@ -442,6 +447,7 @@ chaos_jungle/
 ├── targets/               ── machine abstraction
 │   ├── base.py            ── Target ABC
 │   ├── local.py           ── LocalTarget (subprocess)
+│   ├── docker.py          ── DockerTarget · DockerContainerControllerTarget
 │   ├── ssh.py             ── SSHTarget (Paramiko)
 │   └── http.py            ── HTTPTarget (cj-daemon REST client)
 │

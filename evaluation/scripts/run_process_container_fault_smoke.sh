@@ -59,9 +59,33 @@ if [[ -z "${CJ_EVAL_EXPERIMENT_RUN:-}" ]]; then
 fi
 cj_eval_init_experiment_run
 
+checkpoint_key="process-container-validation:${run_name}:base=${base_image}:cpus=${CJ_EVAL_CPUS:-0.5}:memory=${CJ_EVAL_MEMORY:-256m}"
+checkpoint_title="process/container diagnostic ${run_name}"
+if cj_eval_checkpoint_done "${checkpoint_key}"; then
+  cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+  exit 0
+fi
+if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "process-container-validation" "${run_name}" "process_container_summary.json"; then
+  exit 0
+fi
+
 dir="$(cj_eval_make_run_dir "process-container-validation" "${run_name}")"
 cj_eval_metadata "${dir}/metadata.json" "process-container-validation" "${run_name}" "$(cj_eval_default_image)"
 container_name="cj-process-smoke-$(cj_eval_slug "${CJ_EVAL_RUN_STAMP}")"
+sleep_process_tools='find_sleep_pids() {
+  for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    comm="$(cat "$p/comm" 2>/dev/null || true)"
+    case "$comm" in
+      python*) ;;
+      *) continue ;;
+    esac
+    cmd="$(tr "\000" " " < "$p/cmdline" 2>/dev/null || true)"
+    case "$cmd" in
+      *"time.sleep(300)"*) basename "$p" ;;
+    esac
+  done
+}'
 
 cat <<EOF
 [cj-eval] process/container diagnostic
@@ -90,18 +114,18 @@ trap cleanup EXIT
     --cpus "${CJ_EVAL_CPUS:-0.5}" \
     --memory "${CJ_EVAL_MEMORY:-256m}" \
     "${base_image}" \
-    /bin/sh -lc "python -c 'import time; time.sleep(300)'")"
+    /bin/sh -lc "python -c 'import time; time.sleep(300)' & while true; do sleep 30; done")"
   echo "[cj-eval] container id: ${cid}"
 
   echo "[cj-eval] verifying process exists"
-  before="$(docker exec "${cid}" /bin/sh -lc "pgrep -f 'time.sleep\\(300\\)' || true")"
+  before="$(docker exec "${cid}" /bin/sh -lc "${sleep_process_tools}; find_sleep_pids || true")"
   echo "[cj-eval] matching pids before kill: ${before}"
   test -n "${before}"
 
   echo "[cj-eval] injecting process kill inside container"
-  docker exec "${cid}" /bin/sh -lc "pkill -KILL -f 'time.sleep\\(300\\)' || true"
+  docker exec "${cid}" /bin/sh -lc "${sleep_process_tools}; find_sleep_pids | while IFS= read -r pid; do kill -KILL \"\${pid}\" 2>/dev/null || true; done"
   sleep 1
-  after="$(docker exec "${cid}" /bin/sh -lc "pgrep -f 'time.sleep\\(300\\)' || true" 2>/dev/null || true)"
+  after="$(docker exec "${cid}" /bin/sh -lc "${sleep_process_tools}; find_sleep_pids || true" 2>/dev/null || true)"
   echo "[cj-eval] matching pids after kill: ${after}"
   test -z "${after}"
 
@@ -130,7 +154,7 @@ cat > "${dir}/process_container_summary.json" <<EOF
     "activated": true,
     "triggered": true,
     "manifested": true,
-    "evidence": "pgrep matched before kill and no longer matched after pkill inside container"
+    "evidence": "procfs matched the target Python process before kill and no longer matched after SIGKILL inside the container"
   },
   "container_fault": {
     "configured": true,
@@ -142,5 +166,6 @@ cat > "${dir}/process_container_summary.json" <<EOF
   "paper_limitation": "This smoke validates lifecycle confinement. Publication task-resilience records require deterministic trigger integration with DockerAgentRunner."
 }
 EOF
+cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
 
 echo "[cj-eval] process/container diagnostic complete: ${dir}"

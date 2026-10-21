@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chaos Jungle Injection"
+  short_description: "Design and verify safe CJ fault injections"
+  default_prompt: "Use Chaos Jungle to design and execute this fault-injection experiment safely, with the correct target and lifecycle evidence."

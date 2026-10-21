@@ -2,6 +2,7 @@ from evaluation.agents.base import AgentSystem, AgentRunResult
 from evaluation.agents.autogen_style import AutoGenStyleAgent
 from evaluation.agents.mad_style import MADStyleAgent
 from evaluation.agents.mapcoder_style import MapCoderStyleAgent
+from evaluation.agents.tool_triggered import ToolTriggeredControlledAgent
 
 __all__ = [
     "AgentSystem",
@@ -9,6 +10,7 @@ __all__ = [
     "AutoGenStyleAgent",
     "MADStyleAgent",
     "MapCoderStyleAgent",
+    "ToolTriggeredControlledAgent",
 ]
 
 # ── Style-agent registry (always available, no optional deps) ──────────────
@@ -16,6 +18,7 @@ REGISTRY: dict[str, type[AgentSystem]] = {
     "autogen":   AutoGenStyleAgent,
     "mad":       MADStyleAgent,
     "mapcoder":  MapCoderStyleAgent,
+    "tool-triggered-controlled": ToolTriggeredControlledAgent,
 }
 
 # ── Real-framework adapters (optional; require pip install chaos-jungle[evaluation]) ──

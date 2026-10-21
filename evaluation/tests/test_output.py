@@ -23,7 +23,12 @@ from evaluation.output import (
     write_task_complexity_catalog_csv,
     write_task_complexity_summary_csv,
     write_infrastructure_summary_csv,
+    write_infrastructure_paper_summary_csv,
     write_distributed_process_summary_csv,
+    write_observability_alignment_summary_csv,
+    write_paper_alignment_summary_csv,
+    write_tool_stage_summary_csv,
+    write_trigger_coverage_summary_csv,
     write_inferential_summary_csv,
 )
 from evaluation.analysis.plots import plot_degradation
@@ -915,6 +920,71 @@ class TestCSVOutput:
         assert rows[0]["observed_latency_ms"] == "101.5"
         assert rows[0]["disk_enospc_verified"] == "True"
 
+    def test_infrastructure_paper_summary_reports_validation_layer(self, tmp_path):
+        records = _make_exact_triplet_records()
+        cpu = copy.deepcopy(records[2])
+        cpu.update({
+            "fault_layer": "infrastructure",
+            "fault_type": "cpu_pressure",
+            "validity": "valid",
+            "tests_total": 0,
+            "container_resource_limits": {
+                "cpus": 1.0,
+                "memory": "2g",
+                "capabilities": [],
+                "read_only_root": True,
+            },
+            "lifecycle": {
+                "configured": True,
+                "activated": True,
+                "triggered": True,
+                "manifested": True,
+                "reverted": True,
+                "recovered": True,
+                "verdict": "valid",
+                "evidence_source": "docker_target",
+            },
+            "activation_evidence": {
+                "verified": True,
+                "observed": {"cpu_percent": 88.5},
+            },
+            "recovery_evidence": {
+                "verified": True,
+                "observed": {"cpu_percent": 2.0},
+            },
+        })
+        disk = copy.deepcopy(cpu)
+        disk.update({
+            "fault_type": "disk_full",
+            "validity": "invalid",
+        })
+        disk["lifecycle"] = {
+            **disk["lifecycle"],
+            "manifested": False,
+            "verdict": "invalid",
+            "details": "disk write probe did not observe ENOSPC",
+        }
+        disk["activation_evidence"] = {
+            "verified": True,
+            "observed": {
+                "disk_available_bytes": 4096,
+                "disk_enospc_verified": False,
+            },
+        }
+
+        path = str(tmp_path / "infrastructure_paper_summary.csv")
+        write_infrastructure_paper_summary_csv(records + [cpu, disk], path)
+        rows = list(csv.DictReader(open(path)))
+        by_fault = {row["fault"]: row for row in rows}
+
+        assert by_fault["cpu_pressure"]["inclusion_status"] == "paper_validated_infrastructure_fault"
+        assert by_fault["cpu_pressure"]["effect_estimate_status"] == "injector_validation_only"
+        assert by_fault["cpu_pressure"]["docker_target_evidence_rate"] == "1.0"
+        assert by_fault["cpu_pressure"]["observed_cpu_percent_max"] == "88.5"
+        assert by_fault["disk_full"]["inclusion_status"] == "diagnostic_not_validated"
+        assert by_fault["disk_full"]["disk_enospc_verified"] == "False"
+        assert by_fault["disk_full"]["dominant_invalid_reason"] == "disk write probe did not observe ENOSPC"
+
     def test_distributed_summary_excludes_reference_workflow_by_default(self, tmp_path):
         records = _make_exact_triplet_records()
         records[2]["agent_level"] = "multi_agent"
@@ -961,6 +1031,289 @@ class TestCSVOutput:
         assert row["propagation_depth"] == "1"
         assert row["time_to_propagation_s"] == "2.5"
         assert row["containment_rate"] == "0.0"
+
+
+def test_group_summary_uses_distributed_group_evidence(tmp_path):
+    record = {
+        "study_id": "study",
+        "pair_id": "pair",
+        "run_id": "run",
+        "condition": "cj_fault",
+        "task_id": "HumanEval/0",
+        "fault_type": "group_cpu_pressure",
+        "group_valid": True,
+        "partial_activation": False,
+        "rollback_success": True,
+        "verified_recovery": True,
+        "lifecycle": {"verdict": "valid"},
+        "distributed_group_evidence": {
+            "verdict": "valid",
+            "activation_skew_ms": 2.5,
+            "maximum_allowed_skew_ms": 100.0,
+            "synchronization_valid": True,
+            "members": [
+                {
+                    "target_role": role,
+                    "active_at": "2026-01-01T00:00:00Z",
+                    "manifested": True,
+                    "reverted_at": "2026-01-01T00:00:01Z",
+                    "error": None,
+                }
+                for role in ("planner", "coder", "reviewer")
+            ],
+        },
+    }
+    path = tmp_path / "group_summary.csv"
+
+    write_group_summary_csv([record], str(path))
+
+    rows = list(csv.DictReader(path.open()))
+    assert len(rows) == 1
+    assert rows[0]["member_count"] == "3"
+    assert json.loads(rows[0]["target_roles"]) == ["coder", "planner", "reviewer"]
+    assert rows[0]["group_valid"] == "True"
+    assert rows[0]["summary_consistent"] == "True"
+
+
+def test_trigger_coverage_summary_reports_untriggered_as_coverage_limit(tmp_path):
+    records = _make_exact_triplet_records()
+    tool_fault = copy.deepcopy(records[2])
+    tool_fault.update({
+        "pair_id": "pair-tool",
+        "run_id": "tool-f",
+        "fault_type": "tool_failure",
+        "validity": "untriggered",
+        "success": 1.0,
+    })
+    tool_fault["lifecycle"] = {
+        "configured": True,
+        "activated": True,
+        "triggered": False,
+        "manifested": False,
+        "reverted": True,
+        "recovered": True,
+        "verdict": "untriggered",
+        "proxy_call_count": 2,
+        "evidence": {
+            "proxy_call_totals": {"intercepted_calls": 2, "affected_calls": 0},
+            "proxy_calls": [
+                {"fault_name": "tool_fault", "fault_triggered": 0, "tool_count": 0},
+                {"fault_name": "tool_fault", "fault_triggered": 0, "tool_count": 0},
+            ],
+        },
+    }
+    path = str(tmp_path / "trigger_coverage_summary.csv")
+    write_trigger_coverage_summary_csv(records + [tool_fault], path)
+    rows = list(csv.DictReader(open(path)))
+    tool_rows = [r for r in rows if r["fault"] == "tool_failure"]
+    assert tool_rows
+    assert tool_rows[0]["untriggered_runs"] == "1"
+    assert tool_rows[0]["temporal_targeting_status"] == "not_reached"
+    assert "exclude_untriggered" in tool_rows[0]["interpretation"]
+
+
+def test_trigger_coverage_summary_explains_coder_failure_before_reviewer(tmp_path):
+    reviewer_fault = copy.deepcopy(_make_exact_triplet_records()[2])
+    reviewer_fault.update({
+        "fault_type": "reviewer_response_corrupt",
+        "fault_target_role": "reviewer",
+        "validity": "untriggered",
+        "execution_trace": [
+            {"event_type": "agent_activation", "agent_role": "planner"},
+            {"event_type": "agent_activation", "agent_role": "coder"},
+            {
+                "event_type": "error_detection",
+                "agent_role": "coder",
+                "payload": {"exception": "coder failed before reviewer"},
+            },
+        ],
+    })
+    reviewer_fault["lifecycle"] = {
+        "configured": True,
+        "activated": True,
+        "triggered": False,
+        "manifested": False,
+        "reverted": True,
+        "recovered": True,
+        "verdict": "untriggered",
+        "proxy_call_count": 2,
+        "evidence": {
+            "proxy_call_totals": {"intercepted_calls": 2, "affected_calls": 0},
+            "proxy_calls": [
+                {"agent_role": "planner", "fault_triggered": 0},
+                {"agent_role": "coder", "fault_triggered": 0},
+            ],
+        },
+    }
+
+    path = str(tmp_path / "trigger_coverage_summary.csv")
+    write_trigger_coverage_summary_csv([reviewer_fault], path)
+    rows = list(csv.DictReader(open(path)))
+
+    assert len(rows) == 1
+    assert rows[0]["target_reached_runs"] == "0"
+    assert rows[0]["target_reachability"] == "0.0"
+    assert rows[0]["conditional_fidelity"] == ""
+    assert rows[0]["dominant_untriggered_reason"] == "workflow_terminated_early"
+    assert rows[0]["dominant_untriggered_detail"] == "coder_failed_before_reviewer_invocation"
+    assert json.loads(rows[0]["untriggered_reason_counts_json"]) == {
+        "workflow_terminated_early": 1
+    }
+
+
+def test_trigger_coverage_summary_reports_conditional_fidelity(tmp_path):
+    records = []
+    base = copy.deepcopy(_make_exact_triplet_records()[2])
+    for idx, validity in enumerate(["valid", "untriggered", "invalid"]):
+        record = copy.deepcopy(base)
+        record.update({
+            "pair_id": f"p{idx}",
+            "run_id": f"f{idx}",
+            "fault_type": "reviewer_response_corrupt",
+            "fault_target_role": "reviewer",
+            "validity": validity,
+        })
+        record["lifecycle"] = {
+            "configured": True,
+            "activated": True,
+            "triggered": validity != "untriggered",
+            "manifested": validity == "valid",
+            "reverted": True,
+            "recovered": True,
+            "verdict": validity,
+            "proxy_call_count": 1,
+            "evidence": {
+                "fault_evidence": [
+                    json.dumps([{
+                        "target": {"agent_role": "reviewer"},
+                        "target_matched": True,
+                        "triggered": validity != "untriggered",
+                        "applied": validity != "untriggered",
+                        "manifested": validity == "valid",
+                    }])
+                ]
+            },
+        }
+        records.append(record)
+
+    path = str(tmp_path / "trigger_coverage_summary.csv")
+    write_trigger_coverage_summary_csv(records, path)
+    rows = list(csv.DictReader(open(path)))
+
+    assert len(rows) == 1
+    assert rows[0]["configured_runs"] == "3"
+    assert rows[0]["target_reached_runs"] == "3"
+    assert rows[0]["target_reachability"] == "1.0"
+    assert rows[0]["valid_fault_runs"] == "1"
+    assert rows[0]["conditional_fidelity"] == str(1 / 3)
+
+
+def test_tool_stage_summary_identifies_tool_not_invoked(tmp_path):
+    tool_fault = copy.deepcopy(_make_exact_triplet_records()[2])
+    tool_fault.update({"fault_type": "tool_failure", "validity": "untriggered", "tool_calls": 0})
+    tool_fault["lifecycle"] = {
+        "configured": True,
+        "activated": True,
+        "triggered": False,
+        "manifested": False,
+        "proxy_calls_affected_count": 0,
+        "proxy_call_count": 1,
+        "evidence": {"proxy_calls": [{"tool_count": 0, "fault_triggered": 0}]},
+    }
+    path = str(tmp_path / "tool_stage_summary.csv")
+    write_tool_stage_summary_csv([tool_fault], path)
+    rows = list(csv.DictReader(open(path)))
+    assert len(rows) == 1
+    assert rows[0]["paper_reference"] == "ToolRobustBench"
+    assert rows[0]["dominant_failure_stage"] == "tool_not_invoked"
+
+
+def test_tool_stage_summary_counts_controlled_tool_workload_reachability(tmp_path):
+    tool_fault = copy.deepcopy(_make_exact_triplet_records()[2])
+    tool_fault.update({
+        "fault_type": "tool_failure",
+        "validity": "valid",
+        "tool_calls": 1,
+    })
+    tool_fault["lifecycle"] = {
+        "configured": True,
+        "activated": True,
+        "triggered": True,
+        "manifested": True,
+        "proxy_calls_affected_count": 1,
+        "evidence": {
+            "proxy_call_totals": {"intercepted_calls": 2, "affected_calls": 1},
+            "proxy_calls": [
+                {"fault_name": "tool_fault", "fault_triggered": 0, "tool_count": 0},
+                {"fault_name": "tool_fault", "fault_triggered": 1, "tool_count": 0},
+            ],
+            "fault_evidence": [
+                json.dumps([
+                    {
+                        "fault_type": "tool_fault",
+                        "target": {
+                            "operation": "execute_python",
+                            "tool_name": "execute_python",
+                        },
+                        "target_matched": True,
+                        "triggered": True,
+                        "applied": True,
+                        "manifested": True,
+                    }
+                ])
+            ],
+        },
+    }
+    path = str(tmp_path / "tool_stage_summary.csv")
+    write_tool_stage_summary_csv([tool_fault], path)
+    rows = list(csv.DictReader(open(path)))
+    assert len(rows) == 1
+    assert rows[0]["tool_stage_tool_invocation_reached"] == "1"
+    assert rows[0]["tool_stage_no_tool_invocation_runs"] == "0"
+    assert rows[0]["tool_stage_reachability_rate"] == "1.0"
+    assert rows[0]["tool_stage_effect_rate"] == "1.0"
+    assert rows[0]["dominant_failure_stage"] == "tool_observation_or_runtime_fault"
+
+
+def test_observability_alignment_summary_reports_trace_coverage(tmp_path):
+    record = copy.deepcopy(_make_exact_triplet_records()[2])
+    record.update({
+        "agent_level": "multi_agent",
+        "framework": "autogen-real",
+        "execution_trace": [
+            {
+                "trace_id": "t",
+                "span_id": "s",
+                "run_id": "r",
+                "agent_role": "planner",
+                "step_index": 0,
+                "event_type": "llm_invocation",
+            }
+        ],
+    })
+    path = str(tmp_path / "observability_alignment_summary.csv")
+    write_observability_alignment_summary_csv([record], path)
+    rows = list(csv.DictReader(open(path)))
+    assert len(rows) == 1
+    assert rows[0]["paper_reference"] == "llmmas-otel"
+    assert rows[0]["trace_id_coverage"] == "1.0"
+    assert rows[0]["role_coverage"] == "1.0"
+
+
+def test_paper_alignment_summary_lists_all_reference_papers(tmp_path):
+    records = _make_exact_triplet_records()
+    path = str(tmp_path / "paper_alignment_summary.csv")
+    write_paper_alignment_summary_csv(records, path)
+    rows = list(csv.DictReader(open(path)))
+    papers = {row["paper"] for row in rows}
+    assert {
+        "AgentChaos",
+        "MAS-FIRE",
+        "llmmas-otel",
+        "SequenceFI",
+        "ChaosEater",
+        "ToolRobustBench",
+    }.issubset(papers)
 
 
 # ── CLI dry-run ───────────────────────────────────────────────────────────────

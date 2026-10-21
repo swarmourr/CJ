@@ -262,8 +262,9 @@ class TestEvalPlusScoring:
         )
         import evaluation.benchmarks.executor as ex
         monkeypatch.setattr(
-            ex, "_get_evalplus_groundtruth",
-            lambda d: {"HumanEval/0": {"base": [], "plus": []}},
+            ex,
+            "_get_evalplus_task_groundtruth",
+            lambda dataset, task_id, problem: {"base": [], "plus": []},
         )
 
     def test_canonical_solution_passes(self, monkeypatch):

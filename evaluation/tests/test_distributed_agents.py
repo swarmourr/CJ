@@ -7,6 +7,10 @@ from pathlib import Path
 
 from chaos_jungle.faults.base import VerificationResult
 from evaluation.distributed_faults import DistributedFaultPlan, apply_communication_fault
+from evaluation.distributed_campaign import (
+    distributed_coordination_rows,
+    summarize_distributed_coordination,
+)
 from evaluation.distributed_entrypoint import run_role_request, run_score_request
 from evaluation.distributed_runner import DistributedNativeRunner, DistributedReferenceRunner
 from evaluation.docker_runner import DockerExecution, DockerExecutionConfig, PreparedContainer, RunContext
@@ -22,6 +26,69 @@ def _simple_task() -> dict:
         "canonical_solution": "def add(a, b):\n    return a + b\n",
         "metadata": {"source": "bundled"},
     }
+
+
+def _coordination_triplet() -> list[dict]:
+    base = {
+        "study_id": "study",
+        "campaign_id": "campaign",
+        "pair_id": "pair",
+        "framework": "autogen-real",
+        "topology": "linear",
+        "benchmark": "humanevalplus",
+        "task_id": "HumanEval/0",
+        "seed": 17,
+        "fault_type": "group_cpu_pressure",
+    }
+    direct = {**base, "run_id": "direct", "condition": "direct_baseline"}
+    control = {**base, "run_id": "control", "condition": "cj_control"}
+    fault = {
+        **base,
+        "run_id": "fault",
+        "condition": "cj_fault",
+        "validity": "valid",
+        "group_valid": True,
+        "partial_activation": False,
+        "rollback_success": True,
+        "verified_recovery": True,
+        "lifecycle": {"verdict": "valid"},
+        "distributed_group_evidence": {
+            "verdict": "valid",
+            "synchronization_valid": True,
+            "activation_skew_ms": 4.0,
+            "maximum_allowed_skew_ms": 100.0,
+            "members": [
+                {
+                    "target_role": role,
+                    "target_id": f"{role}-container",
+                    "active_at": "2026-01-01T00:00:00Z",
+                    "manifested": True,
+                    "reverted_at": "2026-01-01T00:00:01Z",
+                    "error": None,
+                }
+                for role in ("planner", "coder", "reviewer")
+            ],
+        },
+    }
+    return [direct, control, fault]
+
+
+def test_coordination_summary_uses_group_members_not_partial_trace():
+    records = _coordination_triplet()
+    records[-1]["distributed_trace"] = [
+        {"event_type": "agent_activation", "agent_role": "planner", "container_id": "planner-container"}
+    ]
+
+    rows = distributed_coordination_rows(records)
+    summary = summarize_distributed_coordination(records)
+
+    assert rows[0]["member_count"] == 3
+    assert rows[0]["target_role_count"] == 3
+    assert rows[0]["summary_consistent"] is True
+    assert summary["complete_triplets"] == 1
+    assert summary["group_valid_count"] == 1
+    assert summary["summary_inconsistency_count"] == 0
+    assert summary["verified_recovery_rate"] == 1.0
 
 
 def test_distributed_role_entrypoint_emits_role_identity_in_dry_run(monkeypatch):
@@ -314,6 +381,126 @@ def test_communication_fault_corruption_mutates_only_matching_handoff():
     assert second == [("reviewer", "bad code")]
     assert second_events[0]["event_type"] == "message_corruption"
     assert second_events[0]["payload"]["original_length"] == len("good code")
+
+
+def test_coordinated_group_fault_has_distinct_distributed_layer():
+    plan = DistributedFaultPlan.from_config({
+        "fault_type": "group_cpu_pressure",
+        "severity": "low",
+        "duration_s": 5,
+        "maximum_skew_ms": 75,
+    })
+
+    assert plan.is_active() is True
+    assert plan.is_coordinated_group() is True
+    assert plan.is_role_local() is False
+    assert plan.is_communication() is False
+    assert plan.layer() == "distributed_coordination"
+    assert plan.as_record_parameters()["maximum_skew_ms"] == 75
+
+
+def test_distributed_runner_builds_one_coordinated_injection_per_role(monkeypatch, tmp_path):
+    created_groups = []
+
+    class FakeDockerTarget:
+        def __init__(self, container_id, **_kwargs):
+            self.container_id = container_id
+
+    class FakeCPUStress:
+        def __init__(self, cores, duration_s):
+            self.cores = cores
+            self.duration_s = duration_s
+
+    class FakeMember:
+        active_at = 1.0
+        manifested = True
+
+    class FakeEvidence:
+        members = [FakeMember(), FakeMember(), FakeMember()]
+
+        def to_dict(self):
+            return {
+                "verdict": "valid",
+                "activation_skew_ms": 4.0,
+                "members": [{"manifested": True} for _ in self.members],
+            }
+
+    class FakeGroupRunner:
+        def __init__(self, group):
+            self.group = group
+            self.evidence = FakeEvidence()
+            created_groups.append(group)
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return self.evidence
+
+    monkeypatch.setattr("evaluation.distributed_runner.DockerTarget", FakeDockerTarget)
+    monkeypatch.setattr("evaluation.distributed_runner.CPUStress", FakeCPUStress)
+    monkeypatch.setattr("evaluation.distributed_runner.InjectionGroupRunner", FakeGroupRunner)
+
+    runner = DistributedReferenceRunner(DockerExecutionConfig(image="cj:test"))
+    fake_docker = _FakeDockerRunner(tmp_path)
+    runner.docker_runner = fake_docker
+    context = RunContext(
+        study_id="study",
+        campaign_id="campaign",
+        pair_id="pair",
+        run_id="run",
+        condition="cj_fault",
+        output_root=str(tmp_path / "distributed"),
+    )
+    containers = runner._prepare_role_containers(
+        task=_simple_task(),
+        seed=1,
+        model_config={"name": "fake", "base_url": "http://example.test/v1"},
+        execution_config={"dry_run": True},
+        run_context=context,
+    )
+    lifecycle = {
+        "configured": True,
+        "activated": False,
+        "triggered": False,
+        "manifested": False,
+        "reverted": False,
+        "recovered": False,
+        "verdict": "pending",
+        "details": "",
+    }
+    trace = []
+    plan = DistributedFaultPlan.from_config({
+        "fault_type": "group_cpu_pressure",
+        "duration_s": 7,
+        "maximum_skew_ms": 50,
+    })
+
+    group_runner = runner._maybe_apply_group_fault(
+        containers,
+        fault_plan=plan,
+        lifecycle=lifecycle,
+        trace=trace,
+        run_context=context,
+        trace_id="trace",
+    )
+
+    assert group_runner is not None
+    assert len(created_groups) == 1
+    group = created_groups[0]
+    assert len(group.injections) == 3
+    assert {injection.id for injection in group.injections} == {
+        "planner-cpu-pressure",
+        "coder-cpu-pressure",
+        "reviewer-cpu-pressure",
+    }
+    assert all(injection.fault.duration_s == 7 for injection in group.injections)
+    assert group.maximum_skew_ms == 50
+    assert lifecycle["activated"] is True
+    assert lifecycle["triggered"] is True
+    assert lifecycle["manifested"] is True
+    assert trace[-1]["event_type"] == "coordinated_fault_activated"
+    assert set(trace[-1]["payload"]["target_roles"]) == set(containers)
 
 
 def test_distributed_runner_records_communication_fault_lifecycle(tmp_path):

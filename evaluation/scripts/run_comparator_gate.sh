@@ -43,6 +43,16 @@ export CJ_EVAL_RUN_STAMP="${CJ_EVAL_RUN_STAMP:-$(cj_eval_timestamp)}"
 image="$(cj_eval_default_image)"
 category="comparator"
 name="${CJ_EVAL_RUN_NAME:-cj-vs-toxiproxy-gate}"
+checkpoint_key="${category}:${name}:image=${image}"
+checkpoint_title="comparator gate ${name}"
+if cj_eval_checkpoint_done "${checkpoint_key}"; then
+  cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+  exit 0
+fi
+if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "${category}" "${name}" "runs.jsonl"; then
+  exit 0
+fi
+
 run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
 cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
 
@@ -59,5 +69,6 @@ cat <<EOF
 [cj-eval] results  : ${run_dir}
 EOF
 cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"
+cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
 
 echo "[cj-eval] comparator gate complete: ${run_dir}"

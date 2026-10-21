@@ -44,6 +44,16 @@ for system in ${systems}; do
       run_index=$((run_index + 1))
       port=$((proxy_port_base + run_index))
       name="${system}-${benchmark}-${suite}-${CJ_EVAL_MODEL}"
+      checkpoint_key="${category}:${name}:subset=${benchmark_subset}:tasks=${tasks}:repeats=${repeats}:seed=${seed}:image=${image}"
+      checkpoint_title="individual ${system} ${benchmark} ${suite}"
+      if cj_eval_checkpoint_done "${checkpoint_key}"; then
+        cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+        continue
+      fi
+      if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "${category}" "${name}" "runs.jsonl"; then
+        continue
+      fi
+
       run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
       cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
 
@@ -76,6 +86,7 @@ for system in ${systems}; do
       cj_eval_write_command "${run_dir}/run_command.sh" "${cmd[@]}"
       echo "[cj-eval] running ${system} ${benchmark} ${suite} -> ${run_dir}"
       cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"
+      cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
     done
   done
 done

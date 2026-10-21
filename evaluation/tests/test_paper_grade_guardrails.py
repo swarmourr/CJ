@@ -880,10 +880,70 @@ def test_one_command_paper_runner_includes_image_debug_and_all_scenarios():
 
     assert "--debug-image" in script
     assert "--paper-all" in script
+    assert "--all-possible" in script
+    assert "--no-resume" in script
     assert "--with-missing" in script
     assert "debug_docker_image.sh" in script
     assert "run_all_current_scenarios.sh" in script
     assert "run_missing_paper_experiments.sh" in script
+
+
+def test_one_command_paper_runner_prints_progress_titles():
+    script = open("evaluation/scripts/run_paper_grade_tests.sh", encoding="utf-8").read()
+
+    assert "cj_eval_progress_bar" in script
+    assert "cj_eval_run_checkpointed_stage" in script
+    assert "cj_eval_checkpoint_path" in script
+    assert '"Docker image build" stage_docker_image_build' in script
+    assert '"Static and unit validation" stage_static_unit_validation' in script
+    assert '"Docker image debug" stage_docker_image_debug' in script
+    assert '"All current evaluation scenarios" stage_all_current_scenarios' in script
+    assert '"Missing paper experiment bundle" stage_missing_paper_bundle' in script
+
+
+def test_one_command_paper_runner_checkpoints_each_major_stage():
+    script = open("evaluation/scripts/run_paper_grade_tests.sh", encoding="utf-8").read()
+
+    for stage_key in (
+        "docker-image-build",
+        "static-unit-validation",
+        "docker-image-debug",
+        "docker-integration-tests",
+        "llm-gateway-tests",
+        "all-current-evaluation-scenarios",
+        "missing-paper-experiment-bundle",
+    ):
+        assert stage_key in script
+
+    assert "checkpoint exists; skipping completed stage" in script
+
+
+def test_scenario_scripts_use_nested_checkpoints_for_resume():
+    common = open("evaluation/scripts/common.sh", encoding="utf-8").read()
+
+    assert "cj_eval_checkpoint_done" in common
+    assert "cj_eval_mark_checkpoint_done" in common
+    assert "cj_eval_skip_checkpoint_message" in common
+    assert "cj_eval_find_completed_run_dir" in common
+    assert "cj_eval_backfill_checkpoint_from_run_dir" in common
+
+    for path in (
+        "evaluation/scripts/run_individual_resilience_pilot.sh",
+        "evaluation/scripts/run_native_multi_agent_pilot.sh",
+        "evaluation/scripts/run_multi_agent_reference_pilot.sh",
+        "evaluation/scripts/run_distributed_native_multi_agent_smoke.sh",
+        "evaluation/scripts/run_injector_validation.sh",
+        "evaluation/scripts/run_cj_overhead_study.sh",
+        "evaluation/scripts/run_real_llm_smoke.sh",
+        "evaluation/scripts/run_infrastructure_fault_smoke.sh",
+        "evaluation/scripts/run_process_container_fault_smoke.sh",
+        "evaluation/scripts/run_durable_state_smoke.sh",
+        "evaluation/scripts/run_comparator_gate.sh",
+    ):
+        script = open(path, encoding="utf-8").read()
+        assert "cj_eval_checkpoint_done" in script, path
+        assert "cj_eval_mark_checkpoint_done" in script, path
+        assert "cj_eval_backfill_checkpoint_from_run_dir" in script, path
 
 
 def test_docker_image_debug_script_runs_without_credentials_or_docker_socket_mount():
@@ -929,6 +989,38 @@ def test_missing_paper_bundle_records_all_remaining_categories():
         "run_comparator_gate.sh",
     ):
         assert token in script
+
+
+def test_statistical_campaign_separates_injector_validation_from_resilience_matrix():
+    script = open("evaluation/scripts/run_statistical_resilience_campaign.sh", encoding="utf-8").read()
+    wrapper = open("evaluation/scripts/run_evaluation_campaign.sh", encoding="utf-8").read()
+
+    for token in (
+        "CJ_EVAL_INJECTOR_FAULT_SUITE:-all",
+        "CJ_EVAL_STAT_FAULT_SUITES:-resilience_core",
+        "CJ_EVAL_STAT_TASKS:-30",
+        "CJ_EVAL_STAT_SEEDS:-3",
+        "autogen-real langgraph-real crewai-real",
+        "humanevalplus mbppplus",
+        "CJ_EVAL_SECOND_MODEL",
+        "CJ_EVAL_SECOND_MODEL_TASKS:-6",
+        "run_individual_resilience_pilot.sh",
+        "run_native_multi_agent_pilot.sh",
+    ):
+        assert token in script
+
+    assert "paper-statistical" in wrapper
+    assert "run_statistical_resilience_campaign.sh" in wrapper
+
+
+def test_process_container_smoke_uses_procfs_not_procps_tools():
+    script = open("evaluation/scripts/run_process_container_fault_smoke.sh", encoding="utf-8").read()
+
+    assert "pgrep" not in script
+    assert "pkill" not in script
+    assert "/proc/[0-9]*" in script
+    assert "find_sleep_pids" in script
+    assert "time.sleep(300)' & while true" in script
 
 
 def test_unsupported_experiment_writer_prevents_silent_missing_categories():

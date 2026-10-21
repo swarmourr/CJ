@@ -50,6 +50,10 @@ Two paths — pick yours
    **If in doubt, start with** ``inject()``. Switch to proxy faults when you
    need streaming interrupts, budget tracking, or network-level realism.
 
+   See :ref:`guide-choosing-injection` for the complete decision guide,
+   including decorators, measurement, Docker targets, managed scenarios, and
+   distributed injection.
+
 ----
 
 Installation

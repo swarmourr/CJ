@@ -244,48 +244,35 @@ Where to go next
 
 .. toctree::
    :maxdepth: 2
-   :caption: Start Here
+   :caption: Getting Started
 
    quickstart
+   guides/choosing-injection
    concepts
    architecture
-   guides/agent-failure-model
    examples
 
 .. toctree::
    :maxdepth: 2
-   :caption: LLM Agent Failure Injection
+   :caption: Agent and Model Faults
 
+   guides/agent-failure-model
    guides/intercept
    guides/llm
-   guides/gateway
    guides/semantic
    guides/conversation
+   guides/gateway
 
 .. toctree::
    :maxdepth: 2
-   :caption: Agent State, Memory, and Skills
+   :caption: Tool, Skill, and State Faults
 
-   guides/state
    guides/skill
-   guides/traces
+   guides/state
 
 .. toctree::
    :maxdepth: 2
-   :caption: Experiment Design and Evaluation
-
-   guides/strategies
-   guides/measurement
-   guides/hypothesis
-   guides/oracles
-   guides/judge
-   guides/metrics
-   guides/fuzzing
-   guides/pytest
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Runtime and Infrastructure Faults
+   :caption: Infrastructure Faults
 
    guides/network
    guides/process
@@ -295,7 +282,7 @@ Where to go next
 
 .. toctree::
    :maxdepth: 2
-   :caption: Targets and Deployment Modes
+   :caption: Targets and Deployment
 
    guides/local
    guides/ssh
@@ -306,33 +293,48 @@ Where to go next
 
 .. toctree::
    :maxdepth: 2
-   :caption: Observability and Results
+   :caption: Experiment Design
 
+   guides/strategies
+   guides/hypothesis
+   guides/measurement
+   guides/metrics
+   guides/oracles
+   guides/judge
+   guides/fuzzing
+   guides/pytest
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Operations and Observability
+
+   guides/traces
    guides/dashboard
    guides/data
    guides/exporters
    guides/scheduler
+   guides/safety
 
 .. toctree::
    :maxdepth: 2
    :caption: API Reference
 
-   api/faults
-   api/targets
    api/scenario
    api/runner
    api/suite
    api/scheduler
-   api/guardrails
-   api/preflight
+   api/faults
+   api/targets
    api/decorators
    api/intercept
    api/fuzzing
+   api/metrics
    api/hypothesis
    api/oracles
    api/judge
    api/conversation
-   api/metrics
+   api/guardrails
+   api/preflight
    api/cli
    api/daemon
    api/dashboard

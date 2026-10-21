@@ -21,7 +21,13 @@ ROLE_LOCAL_FAULTS = {
     "role_memory_pressure",
 }
 
-SUPPORTED_DISTRIBUTED_FAULTS = COMMUNICATION_FAULTS | ROLE_LOCAL_FAULTS
+COORDINATED_GROUP_FAULTS = {
+    "group_cpu_pressure",
+}
+
+SUPPORTED_DISTRIBUTED_FAULTS = (
+    COMMUNICATION_FAULTS | ROLE_LOCAL_FAULTS | COORDINATED_GROUP_FAULTS
+)
 
 
 @dataclass
@@ -69,6 +75,9 @@ class DistributedFaultPlan:
     def is_role_local(self) -> bool:
         return self.fault_type in ROLE_LOCAL_FAULTS
 
+    def is_coordinated_group(self) -> bool:
+        return self.fault_type in COORDINATED_GROUP_FAULTS
+
     def matches_handoff(self, from_role: str, to_role: str) -> bool:
         if not self.is_communication() or self.applied:
             return False
@@ -99,6 +108,8 @@ class DistributedFaultPlan:
             return "communication"
         if self.is_role_local():
             return "distributed_role_infrastructure"
+        if self.is_coordinated_group():
+            return "distributed_coordination"
         return ""
 
     def record_evidence(self, event: dict[str, Any]) -> None:

@@ -35,6 +35,21 @@ from evaluation.multi_agent import (
 NATIVE_MULTI_AGENT_SYSTEMS = {"autogen-real", "langgraph-real", "crewai-real"}
 
 
+class _LangGraphNativeState(TypedDict, total=False):
+    """Module-scoped schema so LangGraph can resolve postponed annotations."""
+
+    task: str
+    plan: str
+    code_text: str
+    final_code: str
+    review: str
+    needs_revision: bool
+    revision_round: int
+    step: int
+    usage: dict[str, int]
+    llm_calls: int
+
+
 def native_multi_agent_impl_name(system_name: str) -> str:
     if system_name not in NATIVE_MULTI_AGENT_SYSTEMS:
         raise ValueError(f"unsupported native multi-agent system: {system_name!r}")
@@ -678,18 +693,6 @@ def _run_langgraph_native(
     except ImportError as exc:
         raise ImportError("LangGraph native multi-agent requires langgraph and langchain-openai") from exc
 
-    class _State(TypedDict, total=False):
-        task: str
-        plan: str
-        code_text: str
-        final_code: str
-        review: str
-        needs_revision: bool
-        revision_round: int
-        step: int
-        usage: dict[str, int]
-        llm_calls: int
-
     def call(role: str, step: int, content: str) -> tuple[str, dict[str, int]]:
         return _langgraph_call_role(
             role=role,
@@ -701,11 +704,11 @@ def _run_langgraph_native(
             run_id=run_id,
         )
 
-    def add_usage(state: _State, usage: dict[str, int]) -> None:
+    def add_usage(state: _LangGraphNativeState, usage: dict[str, int]) -> None:
         state["usage"] = _add_usage(state.get("usage", _usage_dict()), usage)
         state["llm_calls"] = int(state.get("llm_calls", 0)) + 1
 
-    def planner_node(state: _State) -> _State:
+    def planner_node(state: _LangGraphNativeState) -> _LangGraphNativeState:
         step = int(state.get("step", 0))
         text, usage = call("planner", step, state["task"])
         state["plan"] = text
@@ -714,7 +717,7 @@ def _run_langgraph_native(
         state["step"] = step + 1
         return state
 
-    def coder_node(state: _State) -> _State:
+    def coder_node(state: _LangGraphNativeState) -> _LangGraphNativeState:
         step = int(state.get("step", 1))
         prompt = (
             f"Task:\n{state['task']}\n\nPrior solution:\n{state.get('final_code', '')}\n\n"
@@ -731,7 +734,7 @@ def _run_langgraph_native(
         state["step"] = step + 1
         return state
 
-    def reviewer_node(state: _State) -> _State:
+    def reviewer_node(state: _LangGraphNativeState) -> _LangGraphNativeState:
         step = int(state.get("step", 2))
         text, usage = call("reviewer", step, f"Task:\n{state['task']}\n\nSolution:\n{state.get('final_code', '')}")
         state["review"] = text
@@ -746,7 +749,7 @@ def _run_langgraph_native(
         state["step"] = step + 1
         return state
 
-    def route_after_review(state: _State) -> str:
+    def route_after_review(state: _LangGraphNativeState) -> str:
         if topology == CLOSED_LOOP and state.get("needs_revision") and int(state.get("revision_round", 0)) < MAX_REVISIONS:
             return "coder"
         return END
@@ -754,9 +757,9 @@ def _run_langgraph_native(
     reported_error = 0.0
     exception = ""
     termination = "completed"
-    final: _State = {}
+    final: _LangGraphNativeState = {}
     try:
-        graph = StateGraph(_State)
+        graph = StateGraph(_LangGraphNativeState)
         graph.add_node("planner", planner_node)
         graph.add_node("coder", coder_node)
         graph.add_node("reviewer", reviewer_node)

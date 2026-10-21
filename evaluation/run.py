@@ -108,7 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ── Experiment parameters ──────────────────────────────────────────────────
     p.add_argument("--system",
                    choices=["autogen", "mad", "mapcoder",
-                            "autogen-real", "langgraph-real", "crewai-real"],
+                            "autogen-real", "langgraph-real", "crewai-real",
+                            "tool-triggered-controlled"],
                    help="Agent system to evaluate")
     p.add_argument("--benchmark", choices=["humanevalplus", "mbppplus"],
                    help="Benchmark to use")
@@ -129,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
             "semantic_static",
             "semantic_generated",
             "tool",
+            "resilience_core",
             "multi_agent",
             "multi_agent_semantic",
             "all",
@@ -159,6 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Repetitions per task")
     p.add_argument("--seed", type=int, default=42,
                    help="Random seed")
+    p.add_argument(
+        "--task-selection-seed",
+        type=int,
+        default=17,
+        help="Fixed seed used to select one task manifest across execution seeds",
+    )
 
     # ── Output ─────────────────────────────────────────────────────────────────
     p.add_argument("--results-dir", default="results",
@@ -554,6 +562,7 @@ PUBLICATION_FAULT_SUITES: dict[str, list[str]] = {
     "semantic_static": ["false_response"],
     "semantic_generated": ["generated_false_response"],
     "tool": ["tool_failure"],
+    "resilience_core": ["llm_latency", "llm_unavailable", "false_response", "token_starvation"],
     "multi_agent": [
         "planner_llm_unavailable",
         "reviewer_response_corrupt",
@@ -628,7 +637,7 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
     task_list = _load_task_subset(
         args.benchmark,
         args.tasks,
-        args.seed,
+        args.task_selection_seed,
         benchmark_subset=args.benchmark_subset,
         complexity_balanced=args.complexity_balanced,
     )
@@ -655,6 +664,7 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
         "max_turns": args.max_turns,
         "score_timeout_s": args.score_timeout,
         "agent_level": args.agent_level,
+        "task_selection_seed": args.task_selection_seed,
     }
 
     total = 0
@@ -668,6 +678,7 @@ def run_publication_study(args: argparse.Namespace, yaml_model_cfg: dict | None 
         f"  benchmark : {args.benchmark} "
         f"({len(task_list)} tasks, subset={args.benchmark_subset})"
     )
+    print(f"  task seed : {args.task_selection_seed}")
     print(f"  faults    : {', '.join(fault_names)}")
     print(f"  results   : {args.results_dir}")
 

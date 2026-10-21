@@ -15,6 +15,16 @@ benchmark="${CJ_EVAL_BENCHMARK:-toy}"
 tasks="${CJ_EVAL_TASKS:-1}"
 seed="${CJ_EVAL_SEED:-31}"
 run_name="${CJ_EVAL_RUN_NAME:-${CJ_EVAL_MODEL}-${fault}-${benchmark}}"
+checkpoint_key="infrastructure-validation:${run_name}:fault=${fault}:benchmark=${benchmark}:tasks=${tasks}:seed=${seed}:dry=${CJ_EVAL_DRY_RUN:-1}:image=${image}"
+checkpoint_title="infrastructure ${fault} ${benchmark}"
+if cj_eval_checkpoint_done "${checkpoint_key}"; then
+  cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+  exit 0
+fi
+if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "infrastructure-validation" "${run_name}" "runs.jsonl"; then
+  exit 0
+fi
+
 results_dir="$(cj_eval_make_run_dir "infrastructure-validation" "${run_name}")"
 
 cmd=(
@@ -56,5 +66,6 @@ cat <<EOF
 EOF
 
 cj_eval_run_logged "${results_dir}/logs/infrastructure.log" "${cmd[@]}"
+cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
 
 echo "[cj-eval] infrastructure smoke complete: ${results_dir}"

@@ -562,6 +562,20 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "token_starvation",
     ]
 
+    resilience_core_args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "autogen-real",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "resilience_core",
+    ])
+    assert _publication_fault_names(resilience_core_args) == [
+        "llm_latency",
+        "llm_unavailable",
+        "false_response",
+        "token_starvation",
+    ]
+
     semantic_args = build_parser().parse_args([
         "--publication-study",
         "--docker-image", "cj:test",
@@ -625,6 +639,19 @@ def test_publication_fault_suites_and_comma_lists_are_validated():
         "--fault", "llm_latency,llm_unavailable",
     ])
     assert _publication_fault_names(list_args) == ["llm_latency", "llm_unavailable"]
+
+
+def test_publication_parser_accepts_controlled_tool_workload_system():
+    args = build_parser().parse_args([
+        "--publication-study",
+        "--docker-image", "cj:test",
+        "--system", "tool-triggered-controlled",
+        "--benchmark", "humanevalplus",
+        "--fault-suite", "tool",
+    ])
+
+    assert args.system == "tool-triggered-controlled"
+    assert _publication_fault_names(args) == ["tool_failure"]
 
 
 def test_evalplus_preflight_is_skipped_for_smoke(monkeypatch):
@@ -1472,6 +1499,8 @@ def test_publication_pair_splits_host_and_container_routing(tmp_path, monkeypatc
 
 def test_publication_orchestrator_allocates_dynamic_proxy_ports(tmp_path, monkeypatch):
     monkeypatch.delenv("CJ_EVAL_FIXED_PROXY_PORTS", raising=False)
+    monkeypatch.setenv("CJ_EVAL_PROXY_PORT_POOL_START", "23000")
+    monkeypatch.setenv("CJ_EVAL_PROXY_PORT_POOL_END", "23020")
     orch = PublicationStudyOrchestrator(
         object(),
         study_id="study-x",
@@ -1484,9 +1513,16 @@ def test_publication_orchestrator_allocates_dynamic_proxy_ports(tmp_path, monkey
     assert control_port > 0
     assert fault_port > 0
     assert control_port != fault_port
+    assert 23000 <= control_port <= 23020
+    assert 23000 <= fault_port <= 23020
 
     monkeypatch.setenv("CJ_EVAL_FIXED_PROXY_PORTS", "1")
     assert orch._select_proxy_ports() == (18099, 18100)
+
+
+def test_proxy_server_is_threaded_for_readiness_under_slow_connections():
+    assert llm_proxy._ReusableHTTPServer.daemon_threads is True
+    assert llm_proxy._ReusableHTTPServer.request_queue_size >= 128
 
 
 def test_container_scoped_fault_orchestration_sequence(monkeypatch):

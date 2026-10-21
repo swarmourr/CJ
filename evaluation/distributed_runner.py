@@ -31,7 +31,10 @@ from evaluation.docker_runner import (
 )
 from evaluation.multi_agent import CLOSED_LOOP, LINEAR, MAX_REVISIONS, ROLE_PROMPTS, TraceEvent
 from evaluation.native_multi_agent import NATIVE_MULTI_AGENT_SYSTEMS
+from chaos_jungle.distributed import Injection
 from chaos_jungle.faults.process import ContainerKill
+from chaos_jungle.faults.resources import CPUStress
+from chaos_jungle.inject.group import InjectionGroup, InjectionGroupRunner
 from chaos_jungle.targets import DockerContainerControllerTarget, DockerTarget
 
 
@@ -164,6 +167,8 @@ class DistributedReferenceRunner:
         trace: list[dict[str, Any]] = []
         role_outputs: dict[str, list[dict[str, Any]]] = {role: [] for role in ROLES}
         role_fault_cleanups: list[tuple[Any, Any, str]] = []
+        group_fault_runner: InjectionGroupRunner | None = None
+        final_group_evidence: dict[str, Any] = {}
         reported_error = 0.0
         exception = ""
         termination_reason = "completed"
@@ -178,6 +183,14 @@ class DistributedReferenceRunner:
                 model_config=model_config,
                 execution_config=execution_config,
                 run_context=run_context,
+            )
+            group_fault_runner = self._maybe_apply_group_fault(
+                containers,
+                fault_plan=fault_plan,
+                lifecycle=fault_lifecycle,
+                trace=trace,
+                run_context=run_context,
+                trace_id=trace_id,
             )
 
             step = 0
@@ -464,6 +477,47 @@ class DistributedReferenceRunner:
                 )
             )
         finally:
+            if group_fault_runner is not None:
+                try:
+                    group_evidence = group_fault_runner.stop()
+                    group_payload = self._coordinated_group_payload(
+                        group_evidence,
+                        containers,
+                    )
+                    final_group_evidence = group_payload
+                    reverted = all(
+                        member.reverted_at is not None
+                        for member in group_evidence.members
+                    )
+                    recovered = reverted and group_evidence.verdict != "recovery_invalid"
+                    fault_lifecycle["reverted"] = reverted
+                    fault_lifecycle["recovered"] = recovered
+                    fault_lifecycle["details"] = (
+                        f"coordinated CPU pressure completed on "
+                        f"{len(group_evidence.members)} role containers; "
+                        f"activation_skew_ms={group_evidence.activation_skew_ms}"
+                    )
+                    if not recovered:
+                        fault_lifecycle["verdict"] = "invalid"
+                    event = self._host_event(
+                        run_context,
+                        "coordinator",
+                        len(trace),
+                        trace_id,
+                        "coordinated_fault_recovered",
+                        fault_type=fault_plan.fault_type,
+                        recovered=recovered,
+                        group_evidence=group_payload,
+                    )
+                    trace.append(event)
+                    fault_plan.record_evidence(event)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    fault_lifecycle["reverted"] = False
+                    fault_lifecycle["recovered"] = False
+                    fault_lifecycle["verdict"] = "invalid"
+                    fault_lifecycle["details"] = (
+                        f"coordinated group cleanup failed: {cleanup_exc!r}"
+                    )
             for fault, target, role in role_fault_cleanups:
                 try:
                     fault.stop(target)
@@ -533,6 +587,27 @@ class DistributedReferenceRunner:
             "distributed_trace": trace,
             "distributed_fault_lifecycle": fault_lifecycle,
             "distributed_fault_evidence": fault_plan.evidence,
+            "distributed_group_evidence": final_group_evidence,
+            "group_valid": (
+                final_group_evidence.get("verdict") == "valid"
+                and final_group_evidence.get("synchronization_valid") is True
+                and bool(final_group_evidence.get("members"))
+                and all(
+                    member.get("manifested") is True and not member.get("error")
+                    for member in final_group_evidence.get("members", [])
+                )
+            ) if final_group_evidence else None,
+            "partial_activation": (
+                0 < sum(bool(member.get("active_at")) for member in final_group_evidence.get("members", []))
+                < len(final_group_evidence.get("members", []))
+            ) if final_group_evidence else None,
+            "rollback_success": (
+                bool(final_group_evidence.get("members"))
+                and all(bool(member.get("reverted_at")) for member in final_group_evidence.get("members", []))
+            ) if final_group_evidence else None,
+            "verified_recovery": fault_lifecycle.get("recovered") if final_group_evidence else None,
+            "activation_skew_ms": final_group_evidence.get("activation_skew_ms"),
+            "maximum_allowed_skew_ms": final_group_evidence.get("maximum_allowed_skew_ms"),
             "role_outputs": role_outputs,
             "role_container_ids": {role: c.container_id for role, c in containers.items()},
             "role_container_count": len({c.container_id for c in containers.values()}),
@@ -607,6 +682,112 @@ class DistributedReferenceRunner:
                 )
             )
         return deliveries
+
+    def _maybe_apply_group_fault(
+        self,
+        containers: dict[str, PreparedContainer],
+        *,
+        fault_plan: DistributedFaultPlan,
+        lifecycle: dict[str, Any],
+        trace: list[dict[str, Any]],
+        run_context: RunContext,
+        trace_id: str,
+    ) -> InjectionGroupRunner | None:
+        if not fault_plan.is_coordinated_group() or fault_plan.applied:
+            return None
+        fault_plan.applied = True
+        duration_s = int(
+            role_pressure_duration_s(fault_plan.severity, fault_plan.parameters)
+        )
+        maximum_skew_ms = float(
+            fault_plan.parameters.get("maximum_skew_ms", 100.0)
+        )
+        targets: dict[str, DockerTarget] = {}
+        injections: list[Injection] = []
+        for role, container in containers.items():
+            if not self.docker_runner.is_running(container):
+                started = self.docker_runner.start_container(container)
+                if started.returncode != 0:
+                    raise RuntimeError(
+                        f"could not start {role} container for coordinated fault: "
+                        f"{started.stderr or started.stdout}"
+                    )
+            target = DockerTarget(
+                container.container_id,
+                docker_bin=self.config.docker_bin,
+            )
+            targets[role] = target
+            injections.append(Injection(
+                id=f"{role}-cpu-pressure",
+                target=target,
+                fault=CPUStress(cores=1, duration_s=duration_s),
+            ))
+        runner = InjectionGroupRunner(InjectionGroup(
+            name=f"distributed-{run_context.run_id}-cpu-pressure",
+            injections=injections,
+            synchronization="scheduled",
+            atomic=True,
+            maximum_skew_ms=maximum_skew_ms,
+            start_after=0.5,
+            on_activation_failure="rollback_all",
+            on_skew_violation="rollback_all",
+            safety_maximum_duration=max(float(duration_s) + 30.0, 60.0),
+        ))
+        try:
+            runner.start()
+        except Exception:
+            runner.stop()
+            raise
+        evidence = runner.evidence
+        payload = (
+            self._coordinated_group_payload(evidence, containers)
+            if evidence is not None else {}
+        )
+        lifecycle["activated"] = bool(
+            evidence and all(member.active_at is not None for member in evidence.members)
+        )
+        lifecycle["triggered"] = lifecycle["activated"]
+        lifecycle["manifested"] = bool(
+            evidence and all(member.manifested is True for member in evidence.members)
+        )
+        lifecycle["details"] = (
+            f"coordinated CPU pressure active on {len(injections)} role containers; "
+            f"activation_skew_ms={payload.get('activation_skew_ms')}"
+        )
+        event = self._host_event(
+            run_context,
+            "coordinator",
+            0,
+            trace_id,
+            "coordinated_fault_activated",
+            fault_type=fault_plan.fault_type,
+            target_roles=list(containers),
+            container_ids={role: container.container_id for role, container in containers.items()},
+            group_evidence=payload,
+            configured_duration_s=duration_s,
+            maximum_skew_ms=maximum_skew_ms,
+        )
+        trace.append(event)
+        fault_plan.record_evidence(event)
+        return runner
+
+    @staticmethod
+    def _coordinated_group_payload(
+        evidence: Any,
+        containers: dict[str, PreparedContainer],
+    ) -> dict[str, Any]:
+        """Replace process-specific target reprs with stable role identities."""
+        payload = evidence.to_dict()
+        for member in payload.get("members", []):
+            injection_id = str(member.get("injection_id") or "")
+            role = injection_id.removesuffix("-cpu-pressure")
+            member.pop("host", None)
+            member["target_type"] = "docker"
+            member["target_role"] = role
+            member["target_id"] = (
+                containers[role].container_id if role in containers else ""
+            )
+        return payload
 
     def _content_for_role(self, deliveries: list[tuple[str, str]], role: str) -> str:
         return "\n\n".join(content for recipient, content in deliveries if recipient == role)

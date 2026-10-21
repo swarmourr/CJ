@@ -16,9 +16,6 @@ cj_eval_require_image "${image}"
 
 category="injector-validation"
 name="${CJ_EVAL_RUN_NAME:-${CJ_EVAL_MODEL}-all-proxy-faults}"
-run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
-cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
-
 system="${CJ_EVAL_SYSTEM:-autogen-real}"
 benchmark="${CJ_EVAL_BENCHMARK:-humanevalplus}"
 benchmark_subset="${CJ_EVAL_BENCHMARK_SUBSET:-auto}"
@@ -33,6 +30,18 @@ max_turns="${CJ_EVAL_MAX_TURNS:-3}"
 cpus="${CJ_EVAL_CPUS:-1}"
 memory="${CJ_EVAL_MEMORY:-2g}"
 proxy_port="${CJ_EVAL_PROXY_PORT:-18089}"
+checkpoint_key="${category}:${name}:system=${system}:benchmark=${benchmark}:subset=${benchmark_subset}:faults=${fault_suite}:tasks=${tasks}:repeats=${repeats}:seed=${seed}:image=${image}"
+checkpoint_title="injector validation ${system} ${benchmark} ${fault_suite}"
+if cj_eval_checkpoint_done "${checkpoint_key}"; then
+  cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+  exit 0
+fi
+if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "${category}" "${name}" "runs.jsonl"; then
+  exit 0
+fi
+
+run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
+cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
 
 cmd=(
   "${CJ_EVAL_PYTHON}" -m evaluation.run
@@ -70,5 +79,6 @@ echo "[cj-eval] category : ${category}"
 echo "[cj-eval] results  : ${run_dir}"
 echo "[cj-eval] faults   : ${fault_suite}"
 cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"
+cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
 
 echo "[cj-eval] injector-validation run complete: ${run_dir}"

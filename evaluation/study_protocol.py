@@ -6,6 +6,7 @@ import json
 import hashlib
 import os
 import platform
+import random
 import re
 import socket
 import subprocess
@@ -205,6 +206,7 @@ class PublicationStudyOrchestrator:
             "benchmark": task.benchmark,
             "task_id": task.task_id,
             "seed": seed,
+            "task_selection_seed": execution_config.get("task_selection_seed"),
             "model": model_config.get("name") or model_config.get("model", ""),
             "docker_image": result.image,
             "docker_image_digest": result.image_digest,
@@ -429,6 +431,7 @@ class PublicationStudyOrchestrator:
                     error=repr(exc),
                     routing=routing,
                     model_provenance=model_provenance,
+                    task_selection_seed=execution_config.get("task_selection_seed"),
                 )
         finally:
             try:
@@ -529,6 +532,7 @@ class PublicationStudyOrchestrator:
             "task_difficulty": task.get("metadata", {}).get("difficulty", ""),
             **_task_complexity_record_fields(task),
             "seed": seed,
+            "task_selection_seed": execution_config.get("task_selection_seed"),
             "model": model_config.get("name") or model_config.get("model", ""),
             "model_digest": (model_provenance or {}).get("digest", ""),
             "model_provenance": model_provenance or {},
@@ -570,6 +574,7 @@ class PublicationStudyOrchestrator:
         error: str,
         routing: dict[str, str] | None = None,
         model_provenance: dict[str, Any] | None = None,
+        task_selection_seed: int | None = None,
     ) -> dict[str, Any]:
         run_id = f"{condition}-{uuid.uuid4().hex[:12]}"
         is_reference_multi_agent = (
@@ -610,6 +615,7 @@ class PublicationStudyOrchestrator:
             "task_difficulty": task.get("metadata", {}).get("difficulty", ""),
             **_task_complexity_record_fields(task),
             "seed": seed,
+            "task_selection_seed": task_selection_seed,
             "model": model_config.get("name") or model_config.get("model", ""),
             "model_digest": (model_provenance or {}).get("digest", ""),
             "model_provenance": model_provenance or {},
@@ -717,15 +723,51 @@ class PublicationStudyOrchestrator:
         Long publication campaigns start and stop hundreds of short-lived proxy
         processes.  Reusing the same port pair for every task makes one slow or
         stale process fatal for the whole campaign.  By default, allocate a fresh
-        free pair per triplet and record the chosen ports in each output record.
-        Set CJ_EVAL_FIXED_PROXY_PORTS=1 to preserve the historical fixed pair.
+        free pair per triplet from a non-ephemeral pool and record the chosen
+        ports in each output record.  Avoiding ephemeral ports matters on long
+        real-model campaigns because the host is also opening many outbound
+        model connections.  Set CJ_EVAL_FIXED_PROXY_PORTS=1 to preserve the
+        historical fixed pair.
         """
         if _truthy_env("CJ_EVAL_FIXED_PROXY_PORTS"):
             return self.proxy_port, self.proxy_port + 1
 
-        sockets: list[socket.socket] = []
+        pool_start = _int_env("CJ_EVAL_PROXY_PORT_POOL_START", 20000)
+        pool_end = _int_env("CJ_EVAL_PROXY_PORT_POOL_END", 32767)
+        if pool_end - pool_start < 2:
+            pool_start, pool_end = 20000, 32767
+
+        span = pool_end - pool_start
+        start_offset = random.SystemRandom().randrange(0, max(1, span - 1))
+        attempts = min(2048, max(1, span // 2))
+        for idx in range(attempts):
+            base = pool_start + ((start_offset + idx * 2) % max(1, span - 1))
+            if base + 1 > pool_end:
+                continue
+            sockets: list[socket.socket] = []
+            try:
+                for port in (base, base + 1):
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    sock.bind(("127.0.0.1", port))
+                    sock.listen(1)
+                    sockets.append(sock)
+                return base, base + 1
+            except OSError:
+                pass
+            finally:
+                for sock in sockets:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+
+        # Last resort: preserve the old behavior.  This keeps developer
+        # machines with unusual local firewall rules usable, while the normal
+        # path still avoids ephemeral ports for long campaigns.
+        sockets = []
+        ports = []
         try:
-            ports: list[int] = []
             for _ in range(2):
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -734,6 +776,13 @@ class PublicationStudyOrchestrator:
                 sockets.append(sock)
                 ports.append(int(sock.getsockname()[1]))
             return ports[0], ports[1]
+        except OSError as exc:
+            raise RuntimeError(
+                "could not allocate a free CJ proxy port pair in "
+                f"{pool_start}-{pool_end} or via OS fallback; set "
+                "CJ_EVAL_PROXY_PORT_POOL_START/CJ_EVAL_PROXY_PORT_POOL_END, "
+                "free stale proxy processes, or check local firewall permissions"
+            ) from exc
         finally:
             for sock in sockets:
                 try:
@@ -815,6 +864,16 @@ def _float_env(name: str, default: float) -> float:
         return default
     try:
         return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(raw)
     except (TypeError, ValueError):
         return default
 

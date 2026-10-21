@@ -51,6 +51,16 @@ cj_eval_require_image "${image}"
 
 category="durable-state-validation"
 name="${CJ_EVAL_RUN_NAME:-json-state-corrupt}"
+checkpoint_key="${category}:${name}:image=${image}:timeout=${CJ_EVAL_DURABLE_TIMEOUT:-60}"
+checkpoint_title="durable state ${name}"
+if cj_eval_checkpoint_done "${checkpoint_key}"; then
+  cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+  exit 0
+fi
+if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "${category}" "${name}" "runs.jsonl"; then
+  exit 0
+fi
+
 run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
 cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
 
@@ -72,5 +82,6 @@ cat <<EOF
 [cj-eval] image    : ${image}
 EOF
 cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"
+cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
 
 echo "[cj-eval] durable-state validation complete: ${run_dir}"

@@ -23,6 +23,7 @@ Modes:
   distributed-native
                 Run native framework roles in separate containers.
   infra         Run one container-scoped infrastructure fault smoke.
+  statistical   Run cost-controlled paper statistical campaign.
   smoke        Run the full smoke bundle: verify, injector, overhead, individual, multi, infra.
   pilot        Run the broader pilot bundle from run_all_paper_scenarios.sh.
   real-smoke   Run the low-count real-LLM smoke script.
@@ -45,6 +46,7 @@ Preconfigured scenarios:
   infra-cpu-smoke             Container-scoped CPU pressure smoke, dry-run task.
   infra-network-smoke         Container-scoped network-latency smoke, dry-run task.
   paper-smoke                 Small bundle across implemented paper categories.
+  paper-statistical           30-task/3-seed representative resilience campaign.
   all-current                 Every current scenario category and infra fault.
   missing-paper               Missing paper experiments bundle.
 
@@ -61,11 +63,13 @@ Common options:
   --benchmark-subset NAME     auto, smoke, development, or full.
   --topology NAME             Single topology for multi mode.
   --topologies LIST           Space/comma-separated topologies for multi mode.
-  --fault-suite NAME          Fault suite, for example smoke, all, llm_api.
+  --fault-suite NAME          Fault suite, for example smoke, resilience_core,
+                              all, llm_api.
   --infra-fault NAME          Infrastructure fault: cpu_pressure, memory_pressure,
                               network_latency, packet_loss, or disk_full.
   --infra-faults LIST         Space/comma-separated infrastructure faults for all-scenarios.
   --models LIST               Space/comma-separated models for model sensitivity.
+  --second-model NAME         Optional smaller second-model sensitivity run.
   --tasks N                   Number of tasks.
   --repeats N                 Repetitions per task.
   --seed N                    Random seed.
@@ -194,6 +198,13 @@ Preconfigured evaluation scenarios:
     Mode: smoke
     Defaults: tasks=1, repeats=1.
     Purpose: broad small bundle across the implemented paper categories.
+
+  paper-statistical
+    Mode: statistical
+    Defaults: HumanEval+/MBPP+, AutoGen/LangGraph/CrewAI,
+              minimax-m2, resilience_core faults, 30 tasks, 3 seeds.
+    Purpose: representative statistically stronger campaign without running
+             every fault across every task/framework/seed.
 
   all-current
     Mode: all-scenarios
@@ -332,6 +343,16 @@ apply_scenario() {
       export CJ_EVAL_REPEATS="1"
       echo "smoke"
       ;;
+    paper-statistical)
+      export CJ_EVAL_MODEL="${CJ_EVAL_MODEL:-minimax-m2}"
+      export CJ_EVAL_STAT_TASKS="${CJ_EVAL_STAT_TASKS:-30}"
+      export CJ_EVAL_STAT_SEEDS="${CJ_EVAL_STAT_SEEDS:-3}"
+      export CJ_EVAL_STAT_SYSTEMS="${CJ_EVAL_STAT_SYSTEMS:-autogen-real langgraph-real crewai-real}"
+      export CJ_EVAL_STAT_BENCHMARKS="${CJ_EVAL_STAT_BENCHMARKS:-humanevalplus mbppplus}"
+      export CJ_EVAL_STAT_FAULT_SUITES="${CJ_EVAL_STAT_FAULT_SUITES:-resilience_core}"
+      export CJ_EVAL_RUN_NAME="paper-statistical"
+      echo "statistical"
+      ;;
     all-current)
       export CJ_EVAL_TASKS="${CJ_EVAL_TASKS:-3}"
       export CJ_EVAL_REPEATS="${CJ_EVAL_REPEATS:-1}"
@@ -409,6 +430,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --systems)
       export CJ_EVAL_SYSTEMS="$(normalize_list "$2")"
+      export CJ_EVAL_STAT_SYSTEMS="$(normalize_list "$2")"
       shift 2
       ;;
     --benchmark)
@@ -418,6 +440,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --benchmarks)
       export CJ_EVAL_BENCHMARKS="$(normalize_list "$2")"
+      export CJ_EVAL_STAT_BENCHMARKS="$(normalize_list "$2")"
       shift 2
       ;;
     --benchmark-subset)
@@ -431,15 +454,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --topologies)
       export CJ_EVAL_TOPOLOGIES="$(normalize_list "$2")"
+      export CJ_EVAL_STAT_TOPOLOGIES="$(normalize_list "$2")"
       shift 2
       ;;
     --fault-suite)
       export CJ_EVAL_FAULT_SUITE="$2"
       export CJ_EVAL_FAULT_SUITES="$2"
+      export CJ_EVAL_STAT_FAULT_SUITES="$2"
       shift 2
       ;;
     --fault-suites)
       export CJ_EVAL_FAULT_SUITES="$(normalize_list "$2")"
+      export CJ_EVAL_STAT_FAULT_SUITES="$(normalize_list "$2")"
       shift 2
       ;;
     --infra-fault)
@@ -454,12 +480,18 @@ while [[ $# -gt 0 ]]; do
       export CJ_EVAL_MODELS="$(normalize_list "$2")"
       shift 2
       ;;
+    --second-model)
+      export CJ_EVAL_SECOND_MODEL="$2"
+      shift 2
+      ;;
     --tasks)
       export CJ_EVAL_TASKS="$2"
+      export CJ_EVAL_STAT_TASKS="$2"
       shift 2
       ;;
     --repeats)
       export CJ_EVAL_REPEATS="$2"
+      export CJ_EVAL_STAT_SEEDS="$2"
       shift 2
       ;;
     --seed)
@@ -590,6 +622,10 @@ case "${mode}" in
   infra)
     ensure_image
     "${script_dir}/run_infrastructure_fault_smoke.sh"
+    ;;
+  statistical)
+    ensure_image
+    "${script_dir}/run_statistical_resilience_campaign.sh"
     ;;
   smoke)
     export CJ_EVAL_PROFILE="${CJ_EVAL_PROFILE:-smoke}"

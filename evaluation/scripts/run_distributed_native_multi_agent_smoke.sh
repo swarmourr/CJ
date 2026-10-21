@@ -20,13 +20,17 @@ Options:
   --benchmarks LIST     Space/comma list. Default: humanevalplus mbppplus.
   --topologies LIST     Space/comma list. Default: linear closed_loop.
   --tasks N             Number of tasks. Default: 1.
+  --task-selection-seed N Fixed task-manifest seed. Default: 17.
   --fault NAME          Distributed fault or suite. Default: none.
-  --fault-suite NAME    smoke, communication, role_local, or all.
+  --fault-suite NAME    smoke, communication, role_local, coordination, or all.
   --triplet             Run direct/control/fault records for the selected fault.
   --fault-target-role R Target role for role-local or misrouting faults. Default: coder.
   --fault-from-role R   Handoff source role for communication faults. Default: planner.
   --fault-to-role R     Handoff destination role for communication faults. Default: coder.
   --fault-severity S    low, medium, or high. Default: medium.
+  --fault-duration S    Coordinated pressure duration in seconds. Default: 300.
+  --maximum-skew-ms N   Coordinated activation-skew limit. Default: 100.
+  --proxy-port N         Preferred proxy-port pool hint. Default: 20600.
   --dry-run             Use deterministic no-model native-role responses.
   --results-run NAME    Result folder under results/.
   --help                Show this help.
@@ -63,6 +67,10 @@ while [[ $# -gt 0 ]]; do
       export CJ_EVAL_DISTRIBUTED_NATIVE_TASKS="$2"
       shift 2
       ;;
+    --task-selection-seed)
+      export CJ_EVAL_TASK_SELECTION_SEED="$2"
+      shift 2
+      ;;
     --fault)
       export CJ_EVAL_DISTRIBUTED_NATIVE_FAULT="$2"
       shift 2
@@ -89,6 +97,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --fault-severity)
       export CJ_EVAL_DISTRIBUTED_FAULT_SEVERITY="$2"
+      shift 2
+      ;;
+    --fault-duration)
+      export CJ_EVAL_DISTRIBUTED_FAULT_DURATION_S="$2"
+      shift 2
+      ;;
+    --maximum-skew-ms)
+      export CJ_EVAL_DISTRIBUTED_MAXIMUM_SKEW_MS="$2"
+      shift 2
+      ;;
+    --proxy-port)
+      export CJ_EVAL_DISTRIBUTED_PROXY_PORT="$2"
       shift 2
       ;;
     --dry-run)
@@ -125,6 +145,7 @@ benchmark_subset="${CJ_EVAL_DISTRIBUTED_NATIVE_SUBSET:-${CJ_EVAL_BENCHMARK_SUBSE
 topologies="${CJ_EVAL_DISTRIBUTED_NATIVE_TOPOLOGIES:-linear closed_loop}"
 tasks="${CJ_EVAL_DISTRIBUTED_NATIVE_TASKS:-${CJ_EVAL_TASKS:-1}}"
 seed="${CJ_EVAL_SEED:-401}"
+task_selection_seed="${CJ_EVAL_TASK_SELECTION_SEED:-17}"
 env_file="$(cj_eval_default_env_file)"
 container_timeout="${CJ_EVAL_CONTAINER_TIMEOUT:-420}"
 score_timeout="${CJ_EVAL_SCORE_TIMEOUT:-25}"
@@ -139,6 +160,9 @@ fault_target_role="${CJ_EVAL_DISTRIBUTED_FAULT_TARGET_ROLE:-coder}"
 fault_from_role="${CJ_EVAL_DISTRIBUTED_FAULT_FROM_ROLE:-planner}"
 fault_to_role="${CJ_EVAL_DISTRIBUTED_FAULT_TO_ROLE:-coder}"
 fault_severity="${CJ_EVAL_DISTRIBUTED_FAULT_SEVERITY:-medium}"
+fault_duration_s="${CJ_EVAL_DISTRIBUTED_FAULT_DURATION_S:-300}"
+maximum_skew_ms="${CJ_EVAL_DISTRIBUTED_MAXIMUM_SKEW_MS:-100}"
+proxy_port="${CJ_EVAL_DISTRIBUTED_PROXY_PORT:-20600}"
 
 cat <<EOF
 [cj-eval] category  : ${category}
@@ -158,6 +182,16 @@ for system in ${systems}; do
     for benchmark in ${benchmarks}; do
       run_index=$((run_index + 1))
       name="distributed-native-${system}-${topology}-${benchmark}-${fault_suite:-${fault}}-${CJ_EVAL_MODEL}"
+      checkpoint_key="${category}:${name}:subset=${benchmark_subset}:tasks=${tasks}:seed=${seed}:task-seed=${task_selection_seed}:triplet=${triplet}:dry=${dry_run}:image=${image}"
+      checkpoint_title="distributed-native ${system} ${topology} ${benchmark} ${fault_suite:-${fault}}"
+      if cj_eval_checkpoint_done "${checkpoint_key}"; then
+        cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+        continue
+      fi
+      if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "${category}" "${name}" "runs.jsonl"; then
+        continue
+      fi
+
       run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
       cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
 
@@ -170,6 +204,7 @@ for system in ${systems}; do
         --benchmark-subset "${benchmark_subset}"
         --tasks "${tasks}"
         --seed "${seed}"
+        --task-selection-seed "${task_selection_seed}"
         --topology "${topology}"
         --base-url "${CJ_EVAL_BASE_URL}"
         --container-base-url "${CJ_EVAL_CONTAINER_BASE_URL}"
@@ -184,6 +219,9 @@ for system in ${systems}; do
         --fault-from-role "${fault_from_role}"
         --fault-to-role "${fault_to_role}"
         --fault-severity "${fault_severity}"
+        --fault-duration-s "${fault_duration_s}"
+        --maximum-skew-ms "${maximum_skew_ms}"
+        --proxy-port "${proxy_port}"
       )
 
       if [[ -n "${fault_suite}" ]]; then
@@ -201,6 +239,7 @@ for system in ${systems}; do
       cj_eval_write_command "${run_dir}/run_command.sh" "${cmd[@]}"
       echo "[cj-eval] running distributed-native ${system} ${topology} ${benchmark} -> ${run_dir}"
       cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"
+      cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
     done
   done
 done

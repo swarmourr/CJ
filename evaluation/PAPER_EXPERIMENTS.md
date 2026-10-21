@@ -44,10 +44,14 @@ The lower-level category scripts still support the legacy layout
 | `evaluation/scripts/run_injector_validation.sh` | `injector-validation` | CJ proxy fault activation/trigger/manifest/recovery validation |
 | `evaluation/scripts/run_cj_overhead_study.sh` | `cj-overhead` | Direct baseline vs CJ-control overhead analysis |
 | `evaluation/scripts/run_individual_resilience_pilot.sh` | `individual-resilience-pilot` | AutoGen/LangGraph/CrewAI individual-agent pilot |
+| `evaluation/scripts/run_tool_triggered_workload.sh` | `tool-triggered-controlled-workload` | Controlled real-model + Python-tool workload for tool-fault trigger coverage |
+| `evaluation/scripts/run_targeted_recovery_experiments.sh` | `targeted-recovery-*` | Rerun only repaired LangGraph native studies and controlled tool-fault reachability studies |
 | `evaluation/scripts/run_multi_agent_reference_pilot.sh` | `multi-agent-reference-pilot` | Framework-neutral three-role multi-agent pilot |
 | `evaluation/scripts/run_native_multi_agent_pilot.sh` | `native-multi-agent-pilot` | Native AutoGen/LangGraph/CrewAI planner-coder-reviewer pilot |
 | `evaluation/scripts/run_distributed_native_multi_agent_smoke.sh` | `distributed-native-multi-agent-smoke` | Native framework roles with one Docker container per role |
 | `evaluation/scripts/run_infrastructure_fault_smoke.sh` | `infrastructure-validation` | Container-scoped infrastructure fault smoke |
+| `evaluation/scripts/run_statistical_resilience_campaign.sh` | multiple categories | Cost-controlled statistical campaign: all-fault injector validation plus representative agent resilience |
+| `evaluation/scripts/run_extended_paper_studies.sh` | `extended-evaluation` | Additive E7 distributed coordination, E8 cross-layer factorial, and E9 performance/restoration studies |
 | `evaluation/scripts/run_all_current_scenarios.sh` | multiple categories | Explicit all-current scenario runner, including all infra faults |
 | `evaluation/scripts/run_all_paper_scenarios.sh` | multiple categories | Smoke or pilot wrapper |
 | `evaluation/scripts/run_evaluation_campaign.sh` | multiple categories | Main user-facing wrapper with modes, flags, and named scenarios |
@@ -87,6 +91,31 @@ evaluation/scripts/run_evaluation_campaign.sh all-scenarios \
 This is different from the legacy `smoke` wrapper: it runs the category scripts
 directly and loops over every current infrastructure fault.
 
+Run the statistically stronger but cost-controlled paper campaign:
+
+```bash
+evaluation/scripts/run_evaluation_campaign.sh scenario paper-statistical \
+  --env-file .env \
+  --model minimax-m2
+```
+
+Default design:
+
+- benchmarks: HumanEval+ and MBPP+;
+- frameworks: AutoGen, LangGraph, and CrewAI;
+- primary model: MiniMax-M2;
+- task diversity: 30 reproducibly selected tasks per benchmark;
+- execution variability: 3 seeds via `--repeats 3`;
+- fault breadth: `resilience_core` only for agent-resilience effects;
+- injector breadth: all connected proxy faults on a small validation subset;
+- optional second model: pass `--second-model MODEL`, which runs a smaller
+  sensitivity slice rather than the full matrix.
+
+This separation is intentional. The paper can use the all-fault injector stage
+for CJ capability/fidelity claims, and the representative `resilience_core`
+stage for agent-resilience estimates without multiplying every fault by every
+task, seed, framework, and model.
+
 | Scenario | Underlying Mode | Purpose |
 | --- | --- | --- |
 | `no-cost-verify` | `verify` | Static/unit validation plus Docker image readiness; no model calls |
@@ -104,6 +133,7 @@ directly and loops over every current infrastructure fault.
 | `infra-network-smoke` | `infra` | Dry-run toy task under container-scoped network latency |
 | `all-current` | `all-scenarios` | All current scenario categories without using the legacy smoke wrapper |
 | `paper-smoke` | `smoke` | Small bundle across implemented paper categories |
+| `paper-statistical` | `statistical` | 30-task/3-seed representative HumanEval+/MBPP+ resilience campaign with optional second-model sensitivity |
 
 Default model routing is set for local Ollama-compatible endpoints:
 
@@ -116,6 +146,92 @@ export CJ_EVAL_API_KEY="${CJ_EVAL_API_KEY:-dummy}"
 
 Override those variables for a cloud OpenAI-compatible endpoint. Do not pass API
 keys as CLI arguments; use `.env`, `CJ_EVAL_ENV_FILE`, or process environment.
+
+## Additive E7--E9 Studies
+
+The extended studies preserve the existing canonical studies and write only to
+their own `extended-evaluation/` result tree. Run all three with:
+
+```bash
+evaluation/scripts/run_extended_paper_studies.sh \
+  --env-file .env \
+  --model minimax-m2 \
+  --results-run extended-paper-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+Use `--skip-e8` to run only the local/Docker studies without a remote model
+request. The runner builds the requested Docker image when it is missing and
+checkpoints each complete study, so rerunning the same `--results-run` resumes
+at the first incomplete stage.
+
+### E7: Distributed coordination
+
+```text
+Host coordinator
+  |-- scheduled CPUStress --> planner container
+  |-- scheduled CPUStress --> coder container
+  `-- scheduled CPUStress --> reviewer container
+             | workload probes |
+             `---- atomic rollback + verified recovery ---->
+```
+
+E7 uses CJ's native two-phase `InjectionGroupRunner`, one constrained Docker
+target per role, a shared scheduled activation time, a maximum-skew validity
+gate, and rollback-all policy. It reports activation-skew p50/p95, group-valid
+rate, partial-activation rate, rollback success, and verified recovery. This is
+a coordination/fault-controller study; it does not relabel the probe workload
+as a framework-native agent result.
+
+### E8: Cross-layer chaos
+
+```text
+                    +--> CJ LLM latency proxy --> model endpoint
+Agent container ----|
+                    `--> container-local CPU pressure
+
+Matched conditions: direct | LLM-only | CPU-only | LLM+CPU
+```
+
+E8 is a 2-by-2 factorial microbenchmark. LLM latency is measured from the
+complete CJ proxy evidence table, CPU pressure is confined through
+`DockerTarget`, and the compound condition uses the same atomic group protocol.
+`cross_layer_summary.json` reports isolated and compound operational effects,
+including difference-in-differences interaction. Its task metric is explicitly
+an OpenAI-compatible operational probe, not EvalPlus correctness; coding-agent
+resilience remains in the canonical benchmark studies.
+
+### E9: Performance and restoration
+
+```text
+direct load -------> deterministic local upstream
+CJ-control load ---> pass-through CJ proxy ---> same upstream
+restoration loop --> activate latency -> probe -> revert -> verify
+```
+
+E9 uses a deterministic local upstream so proxy overhead is not confounded by
+provider variability or cost. It reports latency p50/p95/p99, throughput,
+errors, response bytes, activation/manifestation/reversion rates, verified
+restoration rate, and cleanup p50/p95. Short smoke runs are diagnostics; paper
+claims require the configured repeated run and confidence intervals over
+independent repetitions.
+
+Output layout:
+
+```text
+results/<run>/extended-evaluation/
+  E7-distributed-coordination/
+    runs.jsonl
+    distributed_coordination_summary.json
+    study_manifest.json
+  E8-cross-layer-chaos/
+    runs.jsonl
+    cj_evidence.sqlite
+    cross_layer_summary.json
+    study_manifest.json
+  E9-performance-restoration/
+    runs.jsonl
+    performance_restoration_summary.json
+```
 
 ## Build Image
 
@@ -632,6 +748,8 @@ results/
       qwen2.5-latest-direct-vs-control/
     individual-resilience-pilot/
       autogen-real-humanevalplus-llm_api-qwen2.5-latest/
+    tool-triggered-controlled-workload/
+      tool-triggered-controlled-humanevalplus-tool-qwen2.5-latest/
     multi-agent-reference-pilot/
       reference-linear-humanevalplus-multi_agent-qwen2.5-latest/
     infrastructure-validation/
@@ -647,3 +765,93 @@ results/
 | Individual resilience | Only for valid, baseline-successful, complete triplets |
 | Multi-agent reference | Reference MAS propagation/containment only |
 | Infrastructure | Container-scoped lifecycle validation; paper resilience only after a full infra pilot |
+
+## Real E7--E9 Studies
+
+The additive E7--E9 controller studies are preflight/operational validation.
+They do not by themselves measure agent resilience. Use the real launcher for
+scored framework-agent experiments:
+
+```bash
+# One real AutoGen/HumanEval+ task through every E7--E9 stage.
+evaluation/scripts/run_extended_real_paper_studies.sh \
+  --profile smoke --env-file .env --model minimax-m2 --rebuild
+
+# Three frameworks, two benchmarks, two E7 topologies, six tasks.
+evaluation/scripts/run_extended_real_paper_studies.sh \
+  --profile pilot --env-file .env --model minimax-m2
+```
+
+The launcher checkpoints completed substudies. Rerun the same command with the
+same `--results-run` after a network interruption; complete outputs are skipped
+and partial attempts are preserved in suffixed directories.
+
+| Study | Real experimental unit | Conditions | Paper evidence |
+| --- | --- | --- | --- |
+| E7 | Native Planner, Coder, and Reviewer in three disposable containers | matched no-fault executions and synchronized group CPU pressure | activation skew, per-target manifestation, scored final code, rollback/recovery |
+| E8 | One native coding agent in one fresh container | direct, CJ control, LLM latency, CPU pressure, synchronized compound | strict benchmark score, CJ proxy evidence, container evidence, single-layer and interaction effects |
+| E9 | One native coding agent per direct/control/fault execution | direct, CJ pass-through, latency lifecycle check | paired real-endpoint overhead; deterministic local load supplies restoration timing |
+
+`smoke` is scientifically real but only validates the pipeline. `pilot` remains
+small-sample evidence. `paper` defaults to 30 tasks and three seeds and refuses
+to run from a dirty worktree; it also requires `--confirm-paper`.
+
+The task manifest is selected once with `--task-selection-seed 17` by default
+and reused for all execution seeds. This preserves task diversity while making
+seed effects repeated measurements on the same independent tasks.
+
+E7 group lifecycle metrics come from `distributed_group_evidence`, never from
+partial role traces. E8 distinguishes strict scorer coverage from task-outcome
+coverage: a run that completes without producing code has task success zero,
+but remains explicitly marked as having no executable EvalPlus candidate.
+
+To rebuild these derived summaries for a completed run without changing raw
+records or making model calls:
+
+```bash
+python -m evaluation.rebuild_extended_outputs \
+  --results-root results/<real-e7-e9-run>
+```
+
+## Resume After Interruption
+
+Top-level campaign scripts checkpoint completed categories in
+`results/<experiment-run>/.checkpoints/`. To resume, rerun the same command with
+the same experiment-run name. Completed categories are skipped; a failed or
+partial category is preserved and restarted in a suffixed directory.
+
+```bash
+evaluation/scripts/run_evaluation_campaign.sh scenario paper-statistical \
+  --experiment-run paper-statistical-20261014T120000Z \
+  --env-file .env --model minimax-m2
+```
+
+This protects completed categories from transient internet or gateway failures.
+It does not resume halfway through an individual direct/control/fault triplet,
+and it is not CJ controller crash recovery. Only checkpointed complete category
+folders are included in the final run index and aggregate analysis.
+
+## Related-Work Alignment Outputs
+
+Every generated result directory now includes additional paper-alignment
+summaries. These files do not replace the raw `runs.jsonl`; they make explicit
+which scientific claim each part of the evaluation supports.
+
+| Paper | CJ emphasis | Output files |
+| --- | --- | --- |
+| AgentChaos | Trigger verification, task-success degradation, resource/call amplification, silent failure | `scientific_summary.csv`, `trigger_coverage_summary.csv`, `fault_fidelity_summary.csv`, `agent_resilience_summary.csv` |
+| MAS-FIRE | Role-scoped multi-agent faults, topology, propagation, local repair vs final success | `multi_agent_process_summary.csv`, `observability_alignment_summary.csv`, `scientific_summary.csv` |
+| llmmas-otel | Trace/span/run/role/step evidence aligned with fault injection | `observability_alignment_summary.csv`, `cj_evidence.csv` |
+| SequenceFI | Temporal/interaction-point targeting and untriggered-fault exclusion | `trigger_coverage_summary.csv`, `cj_evidence.csv` |
+| ChaosEater | Full chaos-engineering lifecycle and automated experiment packaging | `validity_summary.csv`, `paper_alignment_summary.csv`, `study_manifest.json` |
+| ToolRobustBench | Stage-wise tool-use reachability and tool-fault diagnosis | `tool_stage_summary.csv`, `trigger_coverage_summary.csv`, `cj_evidence.csv` |
+
+Interpretation rules:
+
+- `valid` fault runs may enter resilience-effect estimates.
+- `untriggered` fault runs are excluded from degradation estimates and reported
+  as injection-coverage limitations.
+- Tool-fault rows with `dominant_failure_stage=tool_not_invoked` mean the agent
+  never reached the tool stage; they are not CJ manifestation failures.
+- Multi-agent claims should cite both outcome files and trace-alignment files,
+  so role/topology conclusions are tied to evidence rather than only pass@1.

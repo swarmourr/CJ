@@ -108,3 +108,26 @@ p:has(> .sd-badge) {
 ::-webkit-scrollbar-track { background: #0a1a10; }
 ::-webkit-scrollbar-thumb { background: #1a4731; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #7dc829; }
+
+/* Examples catalog: compact, equal-height navigation cards. */
+.cj-example-card {
+  height: 100%;
+  border-radius: 6px !important;
+  border-color: var(--color-background-border) !important;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.cj-example-card:hover {
+  border-color: var(--color-brand-primary) !important;
+  transform: translateY(-1px);
+}
+
+.cj-example-card .sd-card-title {
+  color: var(--color-brand-content);
+  font-size: 1rem;
+}
+
+.cj-example-card .sd-card-body {
+  display: flex;
+  flex-direction: column;
+}

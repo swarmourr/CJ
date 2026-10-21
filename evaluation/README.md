@@ -5,11 +5,11 @@ built on the Chaos Jungle (CJ) framework.
 
 ## Provenance
 
-| Component | Version / Commit |
-|---|---|
-| CJ package | `586c6c0835c707ea5a95c37006b9e0d0a1316623` |
-| AgentChaos reference | [floritange/AgentChaos](https://github.com/floritange/AgentChaos) — inspected for architecture descriptions; adapters are independent implementations |
-| EvalPlus (HumanEval+, MBPP+) | 0.3.1, Apache-2.0 |
+Do not rely on a commit printed in this document. Every run records the actual
+CJ source version, dirty-worktree state, Docker image reference and immutable
+image digest, Python/framework/EvalPlus versions, configuration hash, and
+resource limits in `runs.jsonl` and `study_manifest.json`. A paper campaign
+must use a clean commit and an image rebuilt from that same commit.
 
 ---
 
@@ -22,9 +22,16 @@ built on the Chaos Jungle (CJ) framework.
 | AutoGen-style | `autogen` | Two-agent UserProxy+Assistant conversation (Wu et al. 2023) | Uses direct API client instead of AutoGen's executor; no GroupChat |
 | MAD-style | `mad` | Multi-Agent Debate with majority vote (Du et al. 2023) | Agents share one endpoint; judge replaced by majority vote |
 | MapCoder-style | `mapcoder` | Five-stage pipeline: retrieval→planning→coding→verification→debugging (Islam et al. 2024) | Retrieval via LLM self-query instead of external vector store |
+| AutoGen native | `autogen-real` | Official AutoGen package; individual and planner/coder/reviewer workflows | Framework-native, one experiment container unless a distributed scenario is selected |
+| LangGraph native | `langgraph-real` | Official LangGraph package; individual and state-graph multi-agent workflows | Framework-native, one experiment container unless a distributed scenario is selected |
+| CrewAI native | `crewai-real` | Official CrewAI package; individual and sequential/feedback crews | Framework-native, writable temporary CrewAI storage inside the container |
 
-All adapters use the name `*-style` to be explicit that they are independent
-implementations, not wrappers around the original libraries.
+Only the legacy `autogen`, `mad`, and `mapcoder` adapters are independent
+implementations. The `*-real` adapters import and execute their official
+framework packages. Framework-neutral workflows are labeled
+`reference-multi-agent`; separate-process/container experiments are labeled
+`distributed-reference-multi-agent` or `distributed-native-multi-agent` and
+must not be aggregated with single-container native workflows.
 
 ### Benchmarks
 
@@ -56,30 +63,27 @@ subprocess. No LLM judge is used for primary coding results.
 ## Installation
 
 ```bash
-# Install CJ package (already done if you're in this repo)
-pip install -e .
-
-# Optional: install EvalPlus for development/full subsets
-pip install evalplus==0.3.1
+# Install CJ, real agent frameworks, EvalPlus, and evaluation dependencies.
+pip install -e '.[evaluation]'
 
 # Optional: install matplotlib for plots
 pip install matplotlib
 ```
 
-No extra agent-framework libraries are required. The adapters use a direct
-OpenAI-compatible HTTP client.
+The evaluation extra installs the pinned compatibility ranges for AutoGen,
+LangGraph, CrewAI, and EvalPlus. The Docker image uses the same dependency
+contract and records installed versions from inside the container.
 
 ---
 
 ## Model configuration
 
-Set these environment variables before running:
+Store these values in an ignored `.env` file or export them before running:
 
 ```bash
-export CJ_EVAL_BASE_URL="https://api.openai.com"   # or any OpenAI-compat URL
-export CJ_EVAL_API_KEY="sk-..."
-export CJ_EVAL_MODEL="gpt-4o-mini"
-export CJ_EVAL_TEMPERATURE="0.0"
+LLM_BASE_URL=https://provider.example/v1
+LLM_API_KEY=replace-me
+LLM_MODEL=minimax-m2
 ```
 
 For a local Ollama server:
@@ -94,11 +98,28 @@ For mock/smoke testing without any model:
 # Use --dry-run flag — no CJ_EVAL_BASE_URL needed
 ```
 
-**Never hardcode or commit credentials.**
+The scripts also accept `CJ_EVAL_*` names. Secrets are passed through environment
+variables, redacted from commands/artifacts, and must never be committed.
 
 ---
 
 ## Running experiments
+
+### Extended coordination, cross-layer, and restoration studies
+
+Run the additive E7--E9 studies without modifying canonical result folders:
+
+```bash
+evaluation/scripts/run_extended_paper_studies.sh \
+  --env-file .env \
+  --model minimax-m2 \
+  --results-run extended-paper-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+E7 coordinates faults across separate role containers, E8 runs the matched
+direct/LLM-only/infrastructure-only/compound factorial, and E9 measures CJ
+pass-through overhead plus repeated verified restoration. See
+`evaluation/PAPER_EXPERIMENTS.md` for diagrams, scope, and interpretation.
 
 ### Dry-run smoke test (no model required)
 
@@ -301,6 +322,17 @@ evaluation/scripts/run_injector_validation.sh
 # Individual-agent resilience pilot
 evaluation/scripts/run_individual_resilience_pilot.sh
 
+# Cost-controlled statistical paper campaign
+evaluation/scripts/run_evaluation_campaign.sh scenario paper-statistical \
+  --env-file .env \
+  --model minimax-m2
+
+# Optional smaller second-model sensitivity slice
+evaluation/scripts/run_evaluation_campaign.sh scenario paper-statistical \
+  --env-file .env \
+  --model minimax-m2 \
+  --second-model glm-5
+
 # Current framework-neutral multi-agent reference pilot
 evaluation/scripts/run_multi_agent_reference_pilot.sh
 
@@ -313,6 +345,24 @@ evaluation/scripts/run_evaluation_campaign.sh scenario real-minimax-all-faults
 
 See `evaluation/PAPER_EXPERIMENTS.md` for the scenario matrix, category layout,
 and architecture diagrams.
+
+### Checkpoints and resume
+
+Campaign wrappers create category checkpoints under
+`results/<experiment-run>/.checkpoints/`. Re-run the same scenario with the same
+`--experiment-run` value to skip completed categories and continue after an
+internet, model-gateway, or process failure:
+
+```bash
+evaluation/scripts/run_evaluation_campaign.sh scenario paper-statistical \
+  --experiment-run paper-statistical-20261014T120000Z \
+  --env-file .env --model minimax-m2
+```
+
+Checkpointing is category-level, not transaction-level. An interrupted category
+is preserved for diagnostics and restarted in a new suffixed directory; it is
+not silently merged into final analysis. A category log containing a command
+failure is never promoted to a completed checkpoint.
 
 ### Safe infrastructure faults
 
@@ -328,8 +378,6 @@ implements the safe order:
 6. execute workload in the same container;
 7. revert and verify recovery;
 8. clean up the container.
-5. revert and verify recovery;
-6. remove the container.
 
 `ContainerKill` uses `DockerContainerControllerTarget`, a host-side controller
 restricted to the exact experiment container ID. The Docker socket is never
@@ -352,6 +400,13 @@ Every event includes `study_id`, `run_id`, `pair_id`, role, step index,
 timestamp, trace ID, and span ID. Role-scoped proxy faults use internal
 headers `X-CJ-Run-ID`, `X-CJ-Agent-Role`, and `X-CJ-Step`; the proxy consumes
 them for selector matching and strips them before forwarding upstream.
+
+An untriggered fault is not automatically an injector failure. Output records
+distinguish `target_not_reached`, `workflow_terminated_early`,
+`selector_mismatch`, and `interception_failure`. Examples include a coder
+failure before reviewer invocation and a coding workload that never emits a
+tool-result message. Trigger and manifestation fidelity are therefore reported
+both unconditionally and conditional on reaching the intended injection stage.
 
 ### Output generation
 
@@ -582,6 +637,11 @@ python -m evaluation.run --generate-outputs --results-dir results/full
 #   results/full/agent_resilience_summary.csv
 #   results/full/data_quality_summary.csv
 #   results/full/multi_agent_process_summary.csv
+#   results/full/trigger_coverage_summary.csv
+#   results/full/tool_stage_summary.csv
+#   results/full/observability_alignment_summary.csv
+#   results/full/infrastructure_paper_summary.csv
+#   results/full/paper_alignment_summary.csv
 #   results/full/inferential_summary.csv
 #   results/full/group_summary.csv
 #   results/full/figures/degradation.pdf     (requires matplotlib)
@@ -612,35 +672,88 @@ python -m pytest tests/ evaluation/tests/ -v
 python -m pytest evaluation/tests/ -v
 ```
 
+### Real additive E7--E9 experiments
+
+Run one bounded real-model experiment across distributed coordination,
+cross-layer chaos, and CJ overhead/restoration:
+
+```bash
+evaluation/scripts/run_extended_real_paper_studies.sh \
+  --profile smoke \
+  --env-file .env \
+  --model minimax-m2 \
+  --rebuild
+```
+
+This is different from `run_extended_paper_studies.sh`: that earlier script is
+an inexpensive controller and operational-probe preflight. The `real` launcher
+runs native framework agents, executes benchmark scoring in Docker, and records
+generated code, tests, model usage, proxy evidence, infrastructure evidence,
+and cleanup verification. Use `--profile pilot` only after the smoke outputs
+show nonzero tests and valid lifecycle evidence.
+
+The `paper` profile uses one reproducible task manifest per benchmark (30 tasks
+by default) across execution seeds `17`, `29`, and `43`. Override the manifest
+seed with `--task-selection-seed`; changing an execution seed no longer changes
+which tasks are evaluated.
+
+Regenerate E7/E8 derived outputs from an existing real run without modifying
+its append-only `runs.jsonl` files:
+
+```bash
+python -m evaluation.rebuild_extended_outputs \
+  --results-root results/<real-e7-e9-run>
+```
+
+E8 reports strict EvalPlus coverage separately from binary task outcomes. A
+completed agent execution that emits no candidate program is an observed task
+failure, not an evaluator failure and not a reason for outcome-selected reruns.
+
 ---
 
 ## Known limitations
 
-### `tool_failure` fault cannot trigger
-The three agent adapters (AutoGen-style, MAD-style, MapCoder-style) communicate
-with the LLM via direct HTTP calls.  No `role="tool"` messages are sent because
-no tool-calling API feature is used.  The `ToolFault` CJ class intercepts
-tool-role messages; it will never activate for these adapters.
+### `tool_failure` fault cannot trigger in every workload
+`ToolFault` intercepts OpenAI-compatible requests containing `role="tool"`
+messages.  Natural coding agents may solve HumanEval+/MBPP+ without ever
+returning a tool result to the model, so those runs can correctly produce
+`validity=untriggered`.
 
-**Impact:** `tool_failure` experiments produce `validity=untriggered` records.
-Exclude `tool_failure` from degradation analysis or implement tool-use in the
-agent adapters before running it.
+For tool-layer validation, use the controlled workload:
+
+```bash
+evaluation/scripts/run_tool_triggered_workload.sh
+```
+
+It uses a real model call, executes Python inside the experiment container, and
+then sends the tool result back through the LLM endpoint so CJ can trigger and
+measure tool faults.  Keep this category separate from natural AutoGen,
+LangGraph, and CrewAI resilience results.
 
 ### Sandbox security scope
 `sandbox_exec` isolates code execution in a temporary directory with a
 wall-clock timeout and an env that excludes API keys.  It does NOT provide
 OS-level process/filesystem isolation (e.g. `nsjail`, `bubblewrap`, `seccomp`).
-Generated code can read host files and make network requests.
+In the publication protocol, generated code is scored inside the restricted
+experiment container and never falls back to host execution. The helper alone
+is not an OS sandbox, so legacy/non-Docker callers must not use it for arbitrary
+untrusted model output.
 
-**Impact:** Suitable for trusted benchmark tasks (HumanEval+, MBPP+) whose test
-code is known-safe.  Do not run arbitrary untrusted code from a real model
-without additional OS-level sandboxing in production.
+**Impact:** The Docker protocol is appropriate for the trusted HumanEval+/MBPP+
+campaign with explicit limits and disposable mounts. Production execution of
+arbitrary untrusted code still requires stronger sandboxing and egress policy.
 
-### Test coverage with dry-run only
-The 94 unit tests use a fake model server and `--dry-run` mode.  No test
-verifies real CJ proxy interception or actual fault manifestation.  Run
-`smoke.yaml` against a real model+endpoint as an integration smoke test before
-a paid campaign.
+### Validation tiers
+
+Unit/mock tests validate schemas and exceptional paths but are not scientific
+evidence. Separate integration suites exercise a real CJ proxy with a fake
+OpenAI-compatible server, a real Docker container and entrypoint, and bounded
+real-model smokes. Docker, Linux-capability, gateway, and real-model tests are
+reported separately and skipped tests are never counted as successful runs.
+
+Use `evaluation/scripts/run_paper_grade_tests.sh --help` to select validation
+tiers. `--paper-all` is an expensive orchestration wrapper, not a substitute
+for checking validity, scoring, provenance, and sample size in its outputs.
 
 ## Unresolved compatibility issues
 
@@ -649,8 +762,12 @@ a paid campaign.
 2. **matplotlib not installed** — plots are skipped with a notice. Install with
    `pip install matplotlib` for paper figures.
 3. **Real model required for non-dry-run** — set `CJ_EVAL_BASE_URL` before running.
-4. **LLM proxy faults require LocalTarget** — SSH and GPU faults from the CJ catalog
-   are not included in this initial evaluation; they require remote infrastructure.
+4. **Controller crash durability** — handled failures execute cleanup, but an
+   abrupt controller/host crash is not automatically reconciled because CJ does
+   not yet maintain a persistent active-scenario journal.
+5. **Durable agent state is separate** — the durable-state smoke validates a
+   real JSON checkpoint, corruption, resume, and recovery inside disposable
+   storage. It does not imply that every framework adapter is checkpointed.
 
 ---
 
@@ -661,4 +778,6 @@ a paid campaign.
 3. Use pilot variance to justify sample size for `full.yaml` (target n≥30 per condition).
 4. Install `evalplus` for full HumanEval+ (164 tasks) and MBPP+ (374 tasks).
 5. Install `matplotlib` for paper-ready figures.
-6. Add network, CPU, memory, and compound fault experiments once infrastructure is ready.
+6. Treat CPU, memory, network latency/loss, disk, process, and container results
+   as separate infrastructure-validation strata; do not infer agent resilience
+   from injector-only diagnostics.

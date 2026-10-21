@@ -8,10 +8,105 @@
 Examples
 ========
 
-Copy-paste-ready examples for every fault layer.  Start with the layer that
-matches your stack.
+Copy-paste-ready experiments for every fault layer. Choose the system boundary
+you want to test, then adapt the target and workload to your environment.
+See :ref:`guide-choosing-injection` before choosing between direct
+``inject()``, decorators, measurement, or a managed scenario.
+
+Choose an experiment
+--------------------
+
+.. grid:: 1 2 3 3
+   :gutter: 2
+
+   .. grid-item-card:: LLM and API faults
+      :link: examples-llm
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Add latency, rate limits, outages, malformed responses, and token
+      starvation to an OpenAI-compatible endpoint.
+
+      |any-os| |no-sudo| |ci|
+
+   .. grid-item-card:: Semantic faults
+      :link: examples-semantic
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Change meaning rather than availability with entity swaps, poisoned RAG
+      context, and quality evaluation.
+
+      |any-os| |no-sudo|
+
+   .. grid-item-card:: Process and containers
+      :link: examples-process
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Kill processes, stop services, and pause disposable containers.
+
+      |linux-only| |sudo-required| |ssh|
+
+   .. grid-item-card:: Resource exhaustion
+      :link: examples-resources
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Apply bounded CPU, memory, and disk pressure to a controlled target.
+
+      |linux-only| |sudo-required|
+
+   .. grid-item-card:: Network faults
+      :link: examples-network
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Measure behavior under delay, loss, bandwidth limits, and corruption.
+
+      |linux-only| |sudo-required| |ssh|
+
+   .. grid-item-card:: Storage and state
+      :link: examples-storage
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Corrupt disposable files or application state and verify restoration.
+
+      |linux-only| |sudo-required|
+
+   .. grid-item-card:: Compound scenarios
+      :link: examples-compound
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Combine faults to model a realistically degraded node.
+
+   .. grid-item-card:: Python injection styles
+      :link: examples-python-styles
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Use runners, decorators, or context managers to control fault scope.
+
+      |any-os| |no-sudo|
+
+   .. grid-item-card:: Suites and results
+      :link: examples-suites
+      :link-type: ref
+      :class-card: cj-example-card
+
+      Run multi-node suites, load YAML configuration, and export evidence.
+
+.. important::
+
+   Run infrastructure examples only against disposable local containers or
+   hosts you are authorized to disrupt. Keep blast radius, abort conditions,
+   and cleanup behavior explicit before increasing fault severity.
 
 ----
+
+.. _examples-llm:
 
 LLM / AI Faults
 ----------------
@@ -158,6 +253,8 @@ Token starvation
 
 ----
 
+.. _examples-semantic:
+
 Semantic Faults
 ----------------------------------
 
@@ -243,6 +340,8 @@ Measure faithfulness and hallucination scores automatically:
 
 ----
 
+.. _examples-process:
+
 Process / Service / Container Faults
 ------------------------------------
 
@@ -305,6 +404,8 @@ Pause a Docker container
 
 ----
 
+.. _examples-resources:
+
 Resource Exhaustion Faults
 --------------------------
 
@@ -362,6 +463,8 @@ Memory pressure
 
 ----
 
+.. _examples-network:
+
 Network Faults
 --------------
 
@@ -410,6 +513,8 @@ Silent network corruption (BPF):
 
 
 ----
+
+.. _examples-storage:
 
 Storage Faults
 --------------
@@ -466,6 +571,8 @@ State Faults
 
 ----
 
+.. _examples-compound:
+
 Combined — degraded node
 -------------------------
 
@@ -492,6 +599,8 @@ Combine multiple faults for realistic compound failure scenarios:
 
 
 ----
+
+.. _examples-python-styles:
 
 Decorator style
 ----------------
@@ -544,6 +653,8 @@ Context manager style
    print(f"Chaos ran for {summary['duration_s']} s")
    print(f"Result: {summary['fn_result']}")
 
+
+.. _examples-suites:
 
 ExperimentSuite — parallel multi-node
 ---------------------------------------

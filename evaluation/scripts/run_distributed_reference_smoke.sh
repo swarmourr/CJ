@@ -131,6 +131,16 @@ fault_from_role="${CJ_EVAL_DISTRIBUTED_FAULT_FROM_ROLE:-planner}"
 fault_to_role="${CJ_EVAL_DISTRIBUTED_FAULT_TO_ROLE:-coder}"
 fault_severity="${CJ_EVAL_DISTRIBUTED_FAULT_SEVERITY:-medium}"
 name="${CJ_EVAL_RUN_NAME:-${topology}-${benchmark}-${CJ_EVAL_MODEL}}"
+checkpoint_key="${category}:${name}:subset=${benchmark_subset}:tasks=${tasks}:seed=${seed}:fault=${fault_suite:-${fault}}:triplet=${triplet}:dry=${dry_run}:image=${image}"
+checkpoint_title="distributed reference ${topology} ${benchmark} ${fault_suite:-${fault}}"
+if cj_eval_checkpoint_done "${checkpoint_key}"; then
+  cj_eval_skip_checkpoint_message "${checkpoint_key}" "${checkpoint_title}"
+  exit 0
+fi
+if cj_eval_backfill_checkpoint_from_run_dir "${checkpoint_key}" "${checkpoint_title}" "${category}" "${name}" "runs.jsonl"; then
+  exit 0
+fi
+
 run_dir="$(cj_eval_make_run_dir "${category}" "${name}")"
 cj_eval_metadata "${run_dir}/study_manifest.json" "${category}" "${name}" "${image}"
 
@@ -191,5 +201,6 @@ cat <<EOF
 [cj-eval] image    : ${image}
 EOF
 cj_eval_run_logged "${run_dir}/logs/run.log" "${cmd[@]}"
+cj_eval_mark_checkpoint_done "${checkpoint_key}" "${checkpoint_title}"
 
 echo "[cj-eval] distributed reference smoke complete: ${run_dir}"
