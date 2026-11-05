@@ -229,10 +229,9 @@ def _build_lifecycle_chain(
         fault_type = cfg.get("fault", "")
         ev = fault_evidence.get(fault_type, {})
         triggered = fault_type in triggered_faults
-        target_matched = (
-            _selector_matches(cfg, request_meta)
-            and _fault_target_reached(fault_type, cfg, req_body)
-        )
+        selector_matched = _selector_matches(cfg, request_meta)
+        operation_reached = _fault_target_reached(fault_type, cfg, req_body)
+        target_matched = selector_matched and operation_reached
 
         # Determine manifestation using canonical payload comparison.
         # A fault manifested if the response was semantically different after
@@ -291,6 +290,8 @@ def _build_lifecycle_chain(
             "target": target_info,
             "configured": True,
             "activated": True,   # proxy running = activated
+            "selector_matched": selector_matched,
+            "operation_reached": operation_reached,
             "target_matched": target_matched,
             "triggered": triggered,
             "applied": triggered,

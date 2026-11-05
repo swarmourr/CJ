@@ -130,6 +130,11 @@ print(runner.exposure_report()["verdict"])
 For a stage that was demonstrably not reached, use `triggered=False`,
 `event_reached=False`, and an `untriggered_reason` such as
 `workflow_stage_not_reached`. A missing probe should remain `inconclusive`.
+For proxy traffic, CJ distinguishes a matching request where selection did
+not fire (`selection_not_fired`), a matching selector without the required
+operation (`operation_not_reached`), and no request matching the selector
+(`selected_request_not_observed`). The last reason does not prove why an agent
+stage was absent; that requires a workflow trace.
 An injection group requires effect evidence for every member via
 `runner.record_group_exposure(group_name, injection_id, ...)`; its existing
 activation verdict and measured activation skew remain separate. Task success
@@ -378,7 +383,7 @@ container must already be running; this target does not run fault commands on
 the host. A plan or scenario retains the container ID when serialized.
 
 ```python
-from chaos_jungle.targets import DockerTarget
+from chaos_jungle import DockerTarget
 
 target = DockerTarget("experiment-coder")
 ```

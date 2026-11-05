@@ -113,7 +113,14 @@ def classify_fault_exposure(
 
     untriggered_reason = str(observation.get("untriggered_reason") or "")
     if not untriggered_reason and triggered is False and entries:
-        untriggered_reason = "selection_not_fired" if matched_calls else "target_not_observed"
+        if matched_calls:
+            untriggered_reason = "selection_not_fired"
+        elif any(entry.get("selector_matched") is True for entry in entries):
+            untriggered_reason = "operation_not_reached"
+        elif all(entry.get("selector_matched") is False for entry in entries):
+            untriggered_reason = "selected_request_not_observed"
+        else:
+            untriggered_reason = "target_not_observed"
 
     if policy_compliant is False:
         verdict, reason = "invalid", "safety policy failed"
@@ -121,6 +128,8 @@ def classify_fault_exposure(
         verdict, reason = "invalid", "fault activation failed"
     elif activated is None:
         verdict, reason = "inconclusive", "fault activation was not verified"
+    elif policy_compliant is None:
+        verdict, reason = "inconclusive", "safety policy compliance was not established"
     elif ambiguous_proxy_type and not explicit:
         verdict, reason = "inconclusive", "multiple faults share one proxy type; call attribution is ambiguous"
     elif explicit and not observation.get("evidence"):

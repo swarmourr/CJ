@@ -115,7 +115,10 @@ from chaos_jungle.faults import (
     SkillFileConflict,
     SkillFilePermissionDenied,
 )
-from chaos_jungle.targets import LocalTarget, SSHTarget, HTTPTarget
+from chaos_jungle.targets import (
+    LocalTarget, SSHTarget, HTTPTarget, DockerTarget,
+    DockerContainerControllerTarget,
+)
 from chaos_jungle.distributed import (
     DistributedScenario,
     DistributedCoordinator,
@@ -202,6 +205,8 @@ __all__ = [
     "LocalTarget",
     "SSHTarget",
     "HTTPTarget",
+    "DockerTarget",
+    "DockerContainerControllerTarget",
     # Distributed injection
     "DistributedScenario",
     "DistributedCoordinator",

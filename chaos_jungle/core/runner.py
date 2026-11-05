@@ -1135,7 +1135,7 @@ class ChaosRunner:
         final_status = "partially_reverted" if cleanup_errors else "injection_failed"
         self.db.close_session(self._session_id, status=final_status)
         try:
-            self.db.classify_session_exposure(self._session_id)
+            self.db.classify_session_exposure(self._session_id, policy_compliant=True)
         except Exception as exc:
             print(f"[chaos-jungle] WARNING: exposure report unavailable: {exc}")
         self.target.disconnect()
@@ -1364,8 +1364,7 @@ class ChaosRunner:
         try:
             self.db.classify_session_exposure(
                 self._session_id,
-                policy_compliant=(False if _status_override == "aborted" else True)
-                if self.policy is not None else None,
+                policy_compliant=_status_override != "aborted",
             )
         except Exception as exc:
             print(f"[chaos-jungle] WARNING: exposure report unavailable: {exc}")

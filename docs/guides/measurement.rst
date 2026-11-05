@@ -15,6 +15,16 @@ was reached and the requested effect was observed. Its verdict is ``valid``,
 ``untriggered``, ``invalid``, or ``inconclusive``. A proxy with no captured
 requests is inconclusive unless a separate workflow trace proves that the
 selected stage was never reached.
+When other requests were captured, the report distinguishes a selector with
+no matching request, a matching selector without the required operation,
+and a matching operation where selection did not fire. A missing role request
+alone does not prove that the role was never executed.
+
+An exposure is valid only when activation, trigger, effect, and policy
+compliance are established. A managed run without a safety policy has no
+policy constraint to violate. When classifying stored evidence directly,
+pass ``policy_compliant=True`` only when compliance is known; leaving it
+unknown produces an inconclusive verdict.
 
 Proxy faults use full request-level evidence automatically. For a target-side
 fault, record a mechanism-specific observation while the runner is active::
