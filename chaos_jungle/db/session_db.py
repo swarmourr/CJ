@@ -60,7 +60,9 @@ class SessionDB:
                 target_type TEXT    NOT NULL DEFAULT '',
                 target_addr TEXT    NOT NULL DEFAULT '',
                 abort_reason TEXT,
-                verdict     TEXT    NOT NULL DEFAULT 'INCONCLUSIVE'
+                verdict     TEXT    NOT NULL DEFAULT 'INCONCLUSIVE',
+                exposure_verdict TEXT NOT NULL DEFAULT 'inconclusive',
+                exposure_report_json TEXT NOT NULL DEFAULT '{}'
             );
 
             CREATE TABLE IF NOT EXISTS faults (
@@ -73,7 +75,9 @@ class SessionDB:
                 status          TEXT    NOT NULL DEFAULT 'pending',
                 verified_active INTEGER NOT NULL DEFAULT 0,
                 verified_recovered INTEGER NOT NULL DEFAULT 0,
-                verification_note TEXT
+                verification_note TEXT,
+                exposure_observation_json TEXT NOT NULL DEFAULT '{}',
+                exposure_verdict TEXT NOT NULL DEFAULT 'inconclusive'
             );
 
             CREATE TABLE IF NOT EXISTS events (
@@ -302,6 +306,8 @@ class SessionDB:
             ("verified_active",     "INTEGER NOT NULL DEFAULT 0"),
             ("verified_recovered",  "INTEGER NOT NULL DEFAULT 0"),
             ("verification_note",   "TEXT"),
+            ("exposure_observation_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("exposure_verdict", "TEXT NOT NULL DEFAULT 'inconclusive'"),
         ]
         for col, defn in _fault_cols:
             try:
@@ -324,6 +330,8 @@ class SessionDB:
             ("target_type",  "TEXT NOT NULL DEFAULT ''"),
             ("target_addr",  "TEXT NOT NULL DEFAULT ''"),
             ("verdict",      "TEXT NOT NULL DEFAULT 'INCONCLUSIVE'"),
+            ("exposure_verdict", "TEXT NOT NULL DEFAULT 'inconclusive'"),
+            ("exposure_report_json", "TEXT NOT NULL DEFAULT '{}'"),
         ]
         for col, defn in _session_cols:
             try:
@@ -560,7 +568,8 @@ class SessionDB:
         name : str
             Human-readable scenario name.
         target_type : str, optional
-            Target kind: ``"local"``, ``"http"``, or ``"ssh"``.
+            Target kind: ``"local"``, ``"http"``, ``"ssh"``, ``"docker"``, or
+            ``"docker_controller"``.
         target_addr : str, optional
             Address of the target, e.g. ``"http://localhost:7781"`` or
             ``"user@host"``.
@@ -739,6 +748,157 @@ class SessionDB:
         )
         self._conn.commit()
 
+    def record_fault_observation(
+        self,
+        fault_id: int,
+        *,
+        triggered: bool | None = None,
+        manifested: bool | None = None,
+        event_reached: bool | None = None,
+        untriggered_reason: str = "",
+        evidence: dict | None = None,
+    ) -> None:
+        """Attach target-side exposure evidence to a fault, without changing its status."""
+        values = (triggered, manifested, event_reached)
+        if any(value is not None and not isinstance(value, bool) for value in values):
+            raise TypeError("triggered, manifested, and event_reached must be booleans or None")
+        if manifested is True and triggered is not True:
+            raise ValueError("manifestation requires an observed trigger")
+        if event_reached is False and triggered is True:
+            raise ValueError("an unreached event cannot be triggered")
+        observation = {
+            "triggered": triggered,
+            "manifested": manifested,
+            "event_reached": event_reached,
+            "untriggered_reason": untriggered_reason,
+            "evidence": evidence or {},
+        }
+        cur = self._conn.execute(
+            "UPDATE faults SET exposure_observation_json=? WHERE id=?",
+            (json.dumps(observation), fault_id),
+        )
+        if cur.rowcount != 1:
+            raise ValueError(f"fault {fault_id} not found")
+        self._conn.commit()
+
+    def classify_session_exposure(
+        self, session_id: int, *, policy_compliant: bool | None = None,
+    ) -> dict:
+        """Persist a versioned exposure report from all available fault evidence.
+
+        The legacy session ``verdict`` remains an activation/cleanup verdict.
+        This separate report requires observed delivery and effect for validity.
+        """
+        from collections import Counter
+        from chaos_jungle.exposure import (
+            EXPOSURE_SCHEMA_VERSION, aggregate_exposure, classify_fault_exposure,
+        )
+
+        # Use a private connection: abort monitors may read the live session
+        # concurrently through the shared connection while this report is built.
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        exists = conn.execute(
+            "SELECT 1 FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        if exists is None:
+            conn.close()
+            raise ValueError(f"session {session_id} not found")
+        faults = [dict(row) for row in conn.execute(
+            "SELECT * FROM faults WHERE session_id=? ORDER BY id", (session_id,)
+        ).fetchall()]
+        calls = [dict(row) for row in conn.execute(
+            "SELECT id, fault_evidence_json FROM llm_calls "
+            "WHERE session_id=? AND phase='fault' ORDER BY call_index",
+            (session_id,),
+        ).fetchall()]
+        types = Counter(
+            str((json.loads(fault["parameters"] or "{}")).get("fault") or "")
+            for fault in faults
+        )
+        verdicts = []
+        for fault in faults:
+            params = json.loads(fault["parameters"] or "{}")
+            observation = json.loads(fault["exposure_observation_json"] or "{}")
+            verdict = classify_fault_exposure(
+                fault, proxy_calls=calls, observation=observation,
+                policy_compliant=policy_compliant,
+                ambiguous_proxy_type=bool(params.get("fault") and types[params["fault"]] > 1),
+            )
+            verdicts.append(verdict)
+            conn.execute(
+                "UPDATE faults SET exposure_verdict=? WHERE id=?",
+                (verdict.verdict, fault["id"]),
+            )
+        fault_verdicts = list(verdicts)
+        group_reports = []
+        for group_row in conn.execute(
+            "SELECT * FROM group_evidence WHERE session_id=? ORDER BY id", (session_id,)
+        ).fetchall():
+            group = dict(group_row)
+            members = []
+            for member in json.loads(group.get("members_json") or "[]"):
+                active_at = member.get("active_at")
+                synthetic_fault = {
+                    "id": f"{group['group_id']}:{member.get('injection_id', '')}",
+                    "status": "injection_failed" if member.get("error") or not active_at else "active",
+                    "verified_active": bool(active_at and member.get("manifested") is True),
+                    "verified_recovered": 0,
+                    "parameters": {},
+                }
+                observation = {
+                    "triggered": member.get("triggered"),
+                    "manifested": member.get("effect_manifested"),
+                    "event_reached": member.get("event_reached"),
+                    "untriggered_reason": member.get("untriggered_reason", ""),
+                    "evidence": member.get("effect_evidence") or {},
+                }
+                members.append(classify_fault_exposure(
+                    synthetic_fault, observation=observation,
+                    policy_compliant=policy_compliant,
+                ))
+            group_verdict = aggregate_exposure(members)
+            if group.get("verdict") in {"cancelled", "invalid", "recovery_invalid"} or group.get("synchronization_valid") == 0:
+                group_verdict = "invalid"
+            elif (group.get("verdict") in {"pending", "inconclusive"}
+                  or group.get("synchronization_valid") is None) and group_verdict == "valid":
+                group_verdict = "inconclusive"
+            group_reports.append({
+                "group_id": group["group_id"],
+                "verdict": group_verdict,
+                "activation_skew_ms": group.get("skew_ms"),
+                "members": [member.to_dict() for member in members],
+            })
+            from chaos_jungle.exposure import ExposureVerdict
+            verdicts.append(ExposureVerdict(
+                fault_id=group["group_id"], verdict=group_verdict,
+                reason="all members require effect evidence and acceptable skew",
+                activated=None, triggered=None, manifested=None,
+                evidence_source="group",
+            ))
+        report = {
+            "schema_version": EXPOSURE_SCHEMA_VERSION,
+            "session_id": session_id,
+            "verdict": aggregate_exposure(verdicts),
+            "faults": [verdict.to_dict() for verdict in fault_verdicts],
+            "groups": group_reports,
+        }
+        conn.execute(
+            "UPDATE sessions SET exposure_verdict=?, exposure_report_json=? WHERE id=?",
+            (report["verdict"], json.dumps(report), session_id),
+        )
+        conn.commit()
+        conn.close()
+        return report
+
+    def get_exposure_report(self, session_id: int) -> dict | None:
+        """Return the stored report, or None for an unclassified legacy session."""
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError(f"session {session_id} not found")
+        report = json.loads(session["exposure_report_json"] or "{}")
+        return report or None
+
     # ── Events ────────────────────────────────────────────────────
 
     def add_event(
@@ -805,6 +965,7 @@ class SessionDB:
 
         return {
             "session": dict(session),
+            "exposure_report": self.get_exposure_report(session_id),
             "faults": fault_list,
             "events": [dict(e) for e in events],
             "commands": self.get_commands(session_id),

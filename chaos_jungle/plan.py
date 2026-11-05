@@ -34,7 +34,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 # ---------------------------------------------------------------------------
 # Sub-specs
@@ -59,11 +59,45 @@ class ScenarioSpec:
 @dataclass
 class TargetSpec:
     """Where the faults are injected."""
-    kind: str = "local"              # local | ssh | http
+    kind: str = "local"              # local | ssh | http | docker | docker_controller
     host: str = ""
     user: str = ""
     port: int = 0
     url: str = ""                    # full URL for http targets
+    container_id: str = ""
+    exec_user: str | None = None
+    docker_bin: str = "docker"
+    timeout_s: float = 30.0
+
+    def to_dict(self) -> dict:
+        result = {"kind": self.kind, "host": self.host, "user": self.user,
+                  "port": self.port, "url": self.url}
+        if self.kind in {"docker", "docker_controller"}:
+            result.update(container_id=self.container_id, exec_user=self.exec_user,
+                          docker_bin=self.docker_bin, timeout_s=self.timeout_s)
+        return result
+
+
+def _target_spec(target: "Target | None") -> TargetSpec:
+    from chaos_jungle.targets.docker import DockerTarget, DockerContainerControllerTarget
+    from chaos_jungle.targets.http import HTTPTarget
+    from chaos_jungle.targets.local import LocalTarget
+    from chaos_jungle.targets.ssh import SSHTarget
+
+    if isinstance(target, DockerContainerControllerTarget):
+        return TargetSpec(kind="docker_controller", container_id=target.container_id,
+                          docker_bin=target.docker_bin, timeout_s=target.timeout_s)
+    if isinstance(target, DockerTarget):
+        return TargetSpec(kind="docker", container_id=target.container_id,
+                          exec_user=target.exec_user, docker_bin=target.docker_bin,
+                          timeout_s=target.timeout_s)
+    if isinstance(target, SSHTarget):
+        return TargetSpec(kind="ssh", host=target.host, user=target.user, port=target.port)
+    if isinstance(target, HTTPTarget):
+        return TargetSpec(kind="http", url=target.url)
+    if target is None or isinstance(target, LocalTarget):
+        return TargetSpec(kind="local")
+    raise ValueError(f"cannot serialize unsupported target type: {type(target).__name__}")
 
 
 @dataclass
@@ -239,13 +273,7 @@ class InjectionGroupSpec:
             "injections": [
                 {
                     "id": m.id,
-                    "target": {
-                        "kind": m.target.kind,
-                        "host": m.target.host,
-                        "user": m.target.user,
-                        "port": m.target.port,
-                        "url": m.target.url,
-                    },
+                    "target": m.target.to_dict(),
                     "fault": {
                         "fault_class": m.fault.fault_class,
                         "parameters": m.fault.parameters,
@@ -310,14 +338,25 @@ class ExperimentPlan:
                     f"scenario.faults[{i}].layer={f.layer!r} is not a recognised layer"
                 )
 
-        if self.target.kind not in {"local", "ssh", "http"}:
-            errors.append(f"target.kind={self.target.kind!r} must be local | ssh | http")
+        if self.target.kind not in {"local", "ssh", "http", "docker", "docker_controller"}:
+            errors.append(f"target.kind={self.target.kind!r} is not supported")
 
         if self.target.kind == "ssh" and not self.target.host:
             errors.append("target.host is required for ssh targets")
 
         if self.target.kind == "http" and not self.target.url:
             errors.append("target.url is required for http targets")
+        if self.target.kind in {"docker", "docker_controller"} and not self.target.container_id:
+            errors.append("target.container_id is required for Docker targets")
+
+        for group_index, group in enumerate(self.groups):
+            for member_index, member in enumerate(group.injections):
+                target = member.target
+                prefix = f"groups[{group_index}].injections[{member_index}].target"
+                if target.kind not in {"local", "ssh", "http", "docker", "docker_controller"}:
+                    errors.append(f"{prefix}.kind={target.kind!r} is not supported")
+                if target.kind in {"docker", "docker_controller"} and not target.container_id:
+                    errors.append(f"{prefix}.container_id is required for Docker targets")
 
         if self.trigger.mode not in {"immediate", "on_event", "scheduled"}:
             errors.append(f"trigger.mode={self.trigger.mode!r} must be immediate | on_event | scheduled")
@@ -352,13 +391,7 @@ class ExperimentPlan:
                 ],
                 "conflict_policy": self.scenario.conflict_policy,
             },
-            "target": {
-                "kind": self.target.kind,
-                "host": self.target.host,
-                "user": self.target.user,
-                "port": self.target.port,
-                "url": self.target.url,
-            },
+            "target": self.target.to_dict(),
             "trigger": {
                 "mode": self.trigger.mode,
                 "event_type": self.trigger.event_type,
@@ -458,6 +491,10 @@ class ExperimentPlan:
             user=target_d.get("user", ""),
             port=target_d.get("port", 0),
             url=target_d.get("url", ""),
+            container_id=target_d.get("container_id", ""),
+            exec_user=target_d.get("exec_user"),
+            docker_bin=target_d.get("docker_bin", "docker"),
+            timeout_s=target_d.get("timeout_s", 30.0),
         )
         trigger_d = d.get("trigger", {})
         trigger = TriggerSpec(
@@ -505,6 +542,10 @@ class ExperimentPlan:
                         user=inj.get("target", {}).get("user", ""),
                         port=inj.get("target", {}).get("port", 0),
                         url=inj.get("target", {}).get("url", ""),
+                        container_id=inj.get("target", {}).get("container_id", ""),
+                        exec_user=inj.get("target", {}).get("exec_user"),
+                        docker_bin=inj.get("target", {}).get("docker_bin", "docker"),
+                        timeout_s=inj.get("target", {}).get("timeout_s", 30.0),
                     ),
                     fault=FaultSpec(
                         fault_class=inj.get("fault", {}).get("fault_class", ""),
@@ -576,25 +617,7 @@ class ExperimentPlan:
         ]
         scenario_spec = ScenarioSpec(name=scenario.name, faults=faults)
 
-        target_spec = TargetSpec()
-        if target is not None:
-            from chaos_jungle.targets.local import LocalTarget
-            from chaos_jungle.targets.ssh import SSHTarget
-            from chaos_jungle.targets.http import HTTPTarget
-            if isinstance(target, SSHTarget):
-                target_spec = TargetSpec(
-                    kind="ssh",
-                    host=getattr(target, "host", ""),
-                    user=getattr(target, "user", ""),
-                    port=getattr(target, "port", 22),
-                )
-            elif isinstance(target, HTTPTarget):
-                target_spec = TargetSpec(
-                    kind="http",
-                    url=getattr(target, "url", ""),
-                )
-            else:
-                target_spec = TargetSpec(kind="local")
+        target_spec = _target_spec(target)
 
         duration_s = None
         if duration is not None:
@@ -607,17 +630,7 @@ class ExperimentPlan:
         for g in getattr(scenario, "groups", []):
             member_specs = []
             for inj in getattr(g, "injections", []):
-                t = inj.target
-                from chaos_jungle.targets.local import LocalTarget as _LT
-                from chaos_jungle.targets.ssh import SSHTarget as _SSH
-                from chaos_jungle.targets.http import HTTPTarget as _HTTP
-                if isinstance(t, _SSH):
-                    ts = TargetSpec(kind="ssh", host=getattr(t, "host", ""),
-                                    user=getattr(t, "user", ""), port=getattr(t, "port", 22))
-                elif isinstance(t, _HTTP):
-                    ts = TargetSpec(kind="http", url=getattr(t, "url", ""))
-                else:
-                    ts = TargetSpec(kind="local")
+                ts = _target_spec(inj.target)
                 f = inj.fault
                 fs = FaultSpec(
                     fault_class=f.__class__.__name__,
@@ -688,20 +701,7 @@ class ExperimentPlan:
 
         scenario_spec = ScenarioSpec(name=name, faults=faults, conflict_policy=conflict)
 
-        target_spec = TargetSpec()
-        from chaos_jungle.targets.ssh import SSHTarget
-        from chaos_jungle.targets.http import HTTPTarget
-        if isinstance(target_obj, SSHTarget):
-            target_spec = TargetSpec(
-                kind="ssh",
-                host=getattr(target_obj, "host", ""),
-                user=getattr(target_obj, "user", ""),
-                port=getattr(target_obj, "port", 22),
-            )
-        elif isinstance(target_obj, HTTPTarget):
-            target_spec = TargetSpec(kind="http", url=getattr(target_obj, "url", ""))
-        else:
-            target_spec = TargetSpec(kind="local")
+        target_spec = _target_spec(target_obj)
 
         from chaos_jungle.core._duration import parse_duration
         duration_s = None

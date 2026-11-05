@@ -9,12 +9,24 @@ def _serialize_group(g) -> dict:
     """Serialize an InjectionGroup to a JSON-compatible dict."""
     def _target_dict(t) -> dict:
         cls = type(t).__name__
+        if cls in {"DockerTarget", "DockerContainerControllerTarget"}:
+            result = {
+                "kind": "docker" if cls == "DockerTarget" else "docker_controller",
+                "container_id": t.container_id,
+                "docker_bin": t.docker_bin,
+                "timeout_s": t.timeout_s,
+            }
+            if cls == "DockerTarget":
+                result["exec_user"] = t.exec_user
+            return result
         if cls == "SSHTarget":
             return {"kind": "ssh", "host": getattr(t, "host", ""),
                     "user": getattr(t, "user", ""), "port": getattr(t, "port", 22)}
         if cls == "HTTPTarget":
             return {"kind": "http", "url": getattr(t, "url", "")}
-        return {"kind": "local"}
+        if cls == "LocalTarget":
+            return {"kind": "local"}
+        raise ValueError(f"cannot serialize unsupported target type: {cls}")
 
     return {
         "name": g.name,
@@ -49,6 +61,16 @@ def _deserialize_group(d: dict):
 
     def _build_target(td: dict):
         kind = td.get("kind", "local")
+        if kind in {"docker", "docker_controller"}:
+            from chaos_jungle.targets.docker import DockerTarget, DockerContainerControllerTarget
+            container_id = td.get("container_id", "")
+            if not container_id:
+                raise ValueError("Docker group target requires container_id")
+            options = {"docker_bin": td.get("docker_bin", "docker"),
+                       "timeout_s": td.get("timeout_s", 30.0)}
+            if kind == "docker_controller":
+                return DockerContainerControllerTarget(container_id, **options)
+            return DockerTarget(container_id, exec_user=td.get("exec_user"), **options)
         if kind == "ssh":
             from chaos_jungle.targets.ssh import SSHTarget
             return SSHTarget(td.get("host", ""), user=td.get("user", ""),
@@ -56,8 +78,10 @@ def _deserialize_group(d: dict):
         if kind == "http":
             from chaos_jungle.targets.http import HTTPTarget
             return HTTPTarget(td.get("url", ""))
-        from chaos_jungle.targets.local import LocalTarget
-        return LocalTarget()
+        if kind == "local":
+            from chaos_jungle.targets.local import LocalTarget
+            return LocalTarget()
+        raise ValueError(f"unsupported group target kind: {kind!r}")
 
     injections = []
     for inj_d in d.get("injections", []):

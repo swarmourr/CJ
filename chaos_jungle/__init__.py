@@ -45,6 +45,7 @@ Measure style (auto-records return dict as results)::
 
 from chaos_jungle.core.scenario import Scenario
 from chaos_jungle.core.runner import ChaosRunner, MeasurementResult
+from chaos_jungle.exposure import ExposureVerdict, classify_fault_exposure, aggregate_exposure
 from chaos_jungle.core.suite import ExperimentSuite
 from chaos_jungle.inject.decorators import chaos, chaos_session, chaos_measure
 from chaos_jungle.metrics import Metric, PingLatency, CommandMetric, FileIntegrity, metric, ScriptMetric
@@ -163,6 +164,9 @@ __all__ = [
     "Scenario",
     "ChaosRunner",
     "MeasurementResult",
+    "ExposureVerdict",
+    "classify_fault_exposure",
+    "aggregate_exposure",
     "ExperimentSuite",
     # Decorators
     "chaos",

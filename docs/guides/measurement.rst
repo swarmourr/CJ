@@ -8,6 +8,27 @@ chaos-jungle turns fault injection into a **quantitative** experiment.
 conditions, computes the delta automatically, and optionally scores AI
 output quality with ``LLMJudge``.
 
+Exposure is a separate question from task success. The legacy session
+``verdict`` reports activation and cleanup checks; the versioned
+``runner.exposure_report()`` additionally asks whether a selected operation
+was reached and the requested effect was observed. Its verdict is ``valid``,
+``untriggered``, ``invalid``, or ``inconclusive``. A proxy with no captured
+requests is inconclusive unless a separate workflow trace proves that the
+selected stage was never reached.
+
+Proxy faults use full request-level evidence automatically. For a target-side
+fault, record a mechanism-specific observation while the runner is active::
+
+   runner.record_exposure(
+       fault, triggered=True, manifested=True,
+       evidence={"observed_delay_ms": 210},
+   )
+
+For grouped faults use ``runner.record_group_exposure(group_name,
+injection_id, ...)`` for each member. The activation skew and cleanup verdict
+remain separate from this effect verdict. Neither verdict scores application
+correctness; the workload and its oracle supply that outcome.
+
 ----
 
 How measure() works

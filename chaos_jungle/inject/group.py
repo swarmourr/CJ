@@ -447,6 +447,36 @@ class InjectionGroupRunner:
         """The evidence record. Populated after :meth:`start` and complete after :meth:`stop`."""
         return self._evidence
 
+    def record_member_exposure(
+        self,
+        injection_id: str,
+        *,
+        triggered: bool | None = None,
+        manifested: bool | None = None,
+        event_reached: bool | None = None,
+        untriggered_reason: str = "",
+        evidence: dict | None = None,
+    ) -> None:
+        """Attach effect evidence without changing the activation-only group verdict."""
+        values = (triggered, manifested, event_reached)
+        if any(value is not None and not isinstance(value, bool) for value in values):
+            raise TypeError("triggered, manifested, and event_reached must be booleans or None")
+        if manifested is True and triggered is not True:
+            raise ValueError("manifestation requires an observed trigger")
+        if event_reached is False and triggered is True:
+            raise ValueError("an unreached event cannot be triggered")
+        if self._stopped:
+            raise RuntimeError("group has already stopped")
+        for state in self._states:
+            if state.injection.id == injection_id:
+                state.evidence.triggered = triggered
+                state.evidence.effect_manifested = manifested
+                state.evidence.event_reached = event_reached
+                state.evidence.untriggered_reason = untriggered_reason
+                state.evidence.effect_evidence = evidence or {}
+                return
+        raise ValueError(f"injection {injection_id!r} not found in group")
+
     def emergency_stop(self) -> None:
         """Trigger an immediate stop from any thread, including signal handlers.
 

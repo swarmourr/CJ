@@ -87,7 +87,7 @@ chaos-jungle dashboard        # → http://localhost:8050
 |------|---------|
 | **Fault** | A specific failure to inject (delay, loss, LLM timeout…) |
 | **Scenario** | Named collection of faults applied together |
-| **Target** | Where to inject faults (local machine, SSH host, HTTP daemon) |
+| **Target** | Where to inject faults (host, Docker container, SSH host, HTTP daemon) |
 | **Session** | One complete experiment run: preflight → inject → revert → record |
 | **Metric** | A measurement collected at baseline and under chaos |
 | **ChaosRunner** | Orchestrator: manages lifecycle, DB logging, guardrails |
@@ -98,7 +98,42 @@ chaos-jungle dashboard        # → http://localhost:8050
 preflight → baseline metrics → inject faults → run workload → chaos metrics → revert → record
 ```
 
-All faults are reverted in a `finally` block — even on exception or crash.
+CJ attempts to revert active faults when a managed run stops or raises an exception. A hard process crash requires an external cleanup mechanism.
+
+### Exposure verdicts
+
+The existing session `verdict` checks activation and cleanup. It is not proof
+that the workload encountered the fault. CJ also stores a separate, versioned
+`exposure_report` with `valid`, `untriggered`, `invalid`, or `inconclusive`
+verdicts per fault and for the session. Proxy faults use the full recorded call
+evidence; no proxy traffic is `inconclusive`, not automatically `untriggered`.
+
+For target-side faults, attach an observation from the affected environment:
+
+```python
+fault = runner.scenario.faults[0]  # target-side fault already configured
+runner.start()
+try:
+    run_workload()
+    runner.record_exposure(
+        fault,
+        triggered=True,
+        manifested=True,
+        evidence={"measured_cpu_pct": 83.0},
+    )
+finally:
+    runner.stop()
+
+print(runner.exposure_report()["verdict"])
+```
+
+For a stage that was demonstrably not reached, use `triggered=False`,
+`event_reached=False`, and an `untriggered_reason` such as
+`workflow_stage_not_reached`. A missing probe should remain `inconclusive`.
+An injection group requires effect evidence for every member via
+`runner.record_group_exposure(group_name, injection_id, ...)`; its existing
+activation verdict and measured activation skew remain separate. Task success
+and statistical comparisons are workload-specific and are not inferred by CJ.
 
 ---
 
@@ -335,6 +370,22 @@ from chaos_jungle.targets import LocalTarget
 
 target = LocalTarget()
 ```
+
+### DockerTarget
+
+Run commands inside one named container through the local Docker daemon. The
+container must already be running; this target does not run fault commands on
+the host. A plan or scenario retains the container ID when serialized.
+
+```python
+from chaos_jungle.targets import DockerTarget
+
+target = DockerTarget("experiment-coder")
+```
+
+For a fault that acts on the container itself, such as a container kill, use
+`DockerContainerControllerTarget("experiment-coder")`. Its host-side Docker
+commands are restricted to that container.
 
 ### SSHTarget
 

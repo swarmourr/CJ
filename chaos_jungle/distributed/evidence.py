@@ -15,8 +15,13 @@ class MemberEvidence:
     active_at: datetime | None = None
     reverted_at: datetime | None = None
     clock_offset_ms: float | None = None
-    manifested: bool | None = None
+    manifested: bool | None = None  # Legacy verify_active result, not measured workload effect.
     error: str | None = None
+    triggered: bool | None = None
+    effect_manifested: bool | None = None
+    event_reached: bool | None = None
+    untriggered_reason: str = ""
+    effect_evidence: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         def _fmt(dt: datetime | None) -> str | None:
@@ -31,6 +36,11 @@ class MemberEvidence:
             "clock_offset_ms": self.clock_offset_ms,
             "manifested": self.manifested,
             "error": self.error,
+            "triggered": self.triggered,
+            "effect_manifested": self.effect_manifested,
+            "event_reached": self.event_reached,
+            "untriggered_reason": self.untriggered_reason,
+            "effect_evidence": self.effect_evidence,
         }
 
 
@@ -57,21 +67,21 @@ class GroupActivationEvidence:
 
     @property
     def group_valid(self) -> bool:
-        """Return ``True`` iff the experiment is scientifically valid.
+        """Return ``True`` iff group activation was verified.
 
-        A group is valid when *every* required validity condition has been
-        **proven**, not merely not disproven:
+        Activation passes only when every required check is proven:
 
         * ``verdict == "valid"`` — the only verdict that implies full validity.
         * No member error.
         * Skew within tolerance (``synchronization_valid is True``).
-        * Every member manifested (``manifested is True``).
+        * Every member passed ``verify_active`` (legacy ``manifested`` field).
 
         Any unknown condition (``manifested=None``, skew not computable,
         unfinalized evidence) produces ``False``, because validity is a
-        positive claim that requires affirmative evidence.  This is
+        positive claim that requires affirmative evidence. This is
         consistent with ``finalize()``, which sets ``verdict="inconclusive"``
-        rather than ``"valid"`` when any condition is unknown.
+        rather than ``"valid"`` when any condition is unknown. Effect exposure
+        is classified separately.
 
         Returns
         -------
@@ -114,9 +124,12 @@ class GroupActivationEvidence:
 
         1. ``"cancelled"`` / ``"recovery_invalid"`` — already set, return immediately.
         2. ``"invalid"``      — strict skew exceeded.
-        3. ``"inconclusive"`` — single member (no skew computable), non-strict
-           skew exceeded, or any member has ``manifested=None``.
-        4. ``"valid"``        — all gates pass and all members manifested ``True``.
+        3. ``"inconclusive"`` — no skew, non-strict skew exceeded, or unknown
+           activation verification for any member.
+        4. ``"valid"``        — all activation gates pass.
+
+        This legacy verdict does not prove that the workload experienced the
+        intended effect. Use the separate exposure report for that claim.
         """
         if self.verdict in {"cancelled", "recovery_invalid"}:
             return
@@ -170,6 +183,11 @@ class GroupActivationEvidence:
                 clock_offset_ms=m.get("clock_offset_ms"),
                 manifested=m.get("manifested"),
                 error=m.get("error"),
+                triggered=m.get("triggered"),
+                effect_manifested=m.get("effect_manifested"),
+                event_reached=m.get("event_reached"),
+                untriggered_reason=m.get("untriggered_reason", ""),
+                effect_evidence=m.get("effect_evidence", {}),
             )
             for m in d.get("members", [])
         ]

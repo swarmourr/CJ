@@ -454,6 +454,10 @@ def _target_info(target) -> tuple[str, str]:
         user = getattr(target, "user", "") or ""
         host = getattr(target, "host", "") or ""
         return "ssh", f"{user}@{host}" if user else host
+    if cls == "DockerTarget":
+        return "docker", getattr(target, "container_id", "")
+    if cls == "DockerContainerControllerTarget":
+        return "docker_controller", getattr(target, "container_id", "")
     # LocalTarget or anything else
     import socket
     try:
@@ -1130,6 +1134,10 @@ class ChaosRunner:
         self._stop_shared_resources()
         final_status = "partially_reverted" if cleanup_errors else "injection_failed"
         self.db.close_session(self._session_id, status=final_status)
+        try:
+            self.db.classify_session_exposure(self._session_id)
+        except Exception as exc:
+            print(f"[chaos-jungle] WARNING: exposure report unavailable: {exc}")
         self.target.disconnect()
 
     def _stop_shared_resources(self) -> None:
@@ -1353,6 +1361,14 @@ class ChaosRunner:
             final_status = "reverted"
 
         self.db.close_session(self._session_id, status=final_status)
+        try:
+            self.db.classify_session_exposure(
+                self._session_id,
+                policy_compliant=(False if _status_override == "aborted" else True)
+                if self.policy is not None else None,
+            )
+        except Exception as exc:
+            print(f"[chaos-jungle] WARNING: exposure report unavailable: {exc}")
         self.db.add_event(self._session_id, f"Session closed ({final_status})")
         try:
             from chaos_jungle.control.registry import ScenarioRegistry
@@ -2019,6 +2035,64 @@ class ChaosRunner:
 
         print(f"\n[chaos-jungle] Door test DONE — {cycles} cycle(s) completed.")
         return results
+
+    def record_exposure(
+        self,
+        fault: "Fault | int",
+        *,
+        triggered: bool | None = None,
+        manifested: bool | None = None,
+        event_reached: bool | None = None,
+        untriggered_reason: str = "",
+        evidence: dict | None = None,
+    ) -> None:
+        """Record an observed target-side effect for a fault in this session.
+
+        Use this for resource, process, network, or state faults whose effect
+        cannot be established from CJ proxy records alone. The task outcome is
+        not an exposure signal.
+        """
+        if self._session_id is None:
+            raise RuntimeError("No active session")
+        if isinstance(fault, int):
+            fault_id = fault
+            if fault_id not in self._fault_ids:
+                raise ValueError(f"fault {fault_id} does not belong to this session")
+        else:
+            matches = [fid for item, fid in self._activated if item is fault]
+            if not matches:
+                raise ValueError("fault is not active in this session")
+            fault_id = matches[0]
+        self.db.record_fault_observation(
+            fault_id, triggered=triggered, manifested=manifested,
+            event_reached=event_reached, untriggered_reason=untriggered_reason,
+            evidence=evidence,
+        )
+
+    def exposure_report(self) -> dict | None:
+        """Return the versioned exposure report after stop, if available."""
+        if self._session_id is None:
+            return None
+        return self.db.get_exposure_report(self._session_id)
+
+    def record_group_exposure(
+        self, group_name: str, injection_id: str, *,
+        triggered: bool | None = None,
+        manifested: bool | None = None,
+        event_reached: bool | None = None,
+        untriggered_reason: str = "",
+        evidence: dict | None = None,
+    ) -> None:
+        """Record effect evidence for one active injection-group member."""
+        for group_runner in self._group_runners:
+            if group_runner.group.name == group_name:
+                group_runner.record_member_exposure(
+                    injection_id, triggered=triggered, manifested=manifested,
+                    event_reached=event_reached,
+                    untriggered_reason=untriggered_reason, evidence=evidence,
+                )
+                return
+        raise ValueError(f"active group {group_name!r} not found")
 
     def record_result(self, metrics: dict) -> None:
         """Attach workflow outcome metrics to the current session.
