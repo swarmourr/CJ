@@ -1,72 +1,10 @@
-"""InjectionGroup — the canonical CJ abstraction for coordinated fault injection.
+"""Coordinate explicitly targeted faults across one or more targets.
 
-Hierarchy
----------
-Injection          one fault on one target
-InjectionGroup     coordinated faults on one or more targets (this module)
-Scenario           workload + hypothesis + one or more injection groups
-Campaign           repeated scenarios across tasks / models / configs
-
-Protocol
---------
-Phase 1 — Prepare (concurrent)
-    Each member: connect → fault.prepare() (optional) → clock probe → READY.
-    Timed out / failed members set error on their MemberEvidence.
-
-Phase 2 — Commit (concurrent, timed)
-    All members sleep until ``commit_at`` (coarse sleep + 1 ms spin), then
-    call ``fault.start()``.  Activation timestamp is recorded immediately
-    after.  ``fault.verify_active()`` is called to populate
-    ``MemberEvidence.manifested``:
-      True  → manifested
-      False → not manifested (fails group_valid)
-      None  → inconclusive (evidence verdict → "inconclusive")
-
-    Any member whose thread is still alive after ``join(timeout=...)``
-    is marked timed-out.  On activation failure the runner triggers atomic
-    rollback if ``atomic=True`` or ``on_activation_failure == "rollback_all"``.
-
-Revert (concurrent)
-    Each member: fault.stop() → fault.revert() → fault.verify_recovered().
-    verify_recovered() failure sets verdict → "recovery_invalid".
-
-Quick start
------------
-Local group (multiple faults, single target)::
-
-    from chaos_jungle.inject.group import InjectionGroup, InjectionGroupRunner
-    from chaos_jungle.distributed import Injection
-    from chaos_jungle.faults import LLMLatency, NetworkLoss
-    from chaos_jungle.targets import LocalTarget
-
-    group = InjectionGroup(
-        name="local-compound",
-        synchronization="barrier",
-        injections=[
-            Injection("llm-delay", LocalTarget(), LLMLatency(delay_s=0.5)),
-            Injection("net-loss",  LocalTarget(), NetworkLoss("5%")),
-        ],
-    )
-    runner = InjectionGroupRunner(group)
-    runner.start()
-    # ... workload ...
-    evidence = runner.stop()
-    print(evidence.group_valid, evidence.activation_skew_ms, "ms")
-
-Distributed group (multiple targets, scheduled activation)::
-
-    group = InjectionGroup(
-        name="distributed-agent-degradation",
-        synchronization="scheduled",
-        atomic=True,
-        maximum_skew_ms=100,
-        start_after=5.0,
-        injections=[
-            Injection("llm-delay",   HTTPTarget("http://agent-node:8080"), LLMLatency(delay_s=1.0)),
-            Injection("tool-loss",   SSHTarget("tool-node", user="ubuntu"), NetworkLoss("5%")),
-            Injection("db-pressure", SSHTarget("db-node",   user="ubuntu"), IOStress(workers=2)),
-        ],
-    )
+``InjectionGroupRunner`` prepares members concurrently, activates them under
+the selected synchronization policy, and records activation timestamps and
+cleanup evidence. The group activation verdict is separate from evidence
+that the workload encountered each fault. See the Coordinated Injection
+guide for target selection, examples, and exposure reporting.
 """
 from __future__ import annotations
 
@@ -105,11 +43,10 @@ class InjectionGroup:
     injections :
         List of :class:`~chaos_jungle.distributed.scenario.Injection` objects,
         one per (target, fault) pair.
-    synchronization :
-        ``"best_effort"`` — activate each member ASAP (no timing guarantee).
-        ``"barrier"``     — activate after every member signals READY.
-        ``"scheduled"``   — activate at a shared timestamp ``start_after``
-                           seconds after all READY (default).
+    synchronization : str
+        One of ``"best_effort"`` (start as soon as possible), ``"barrier"``
+        (wait for all members), or ``"scheduled"`` (use a shared future
+        timestamp after all members are ready).
     atomic :
         When ``True`` (default) any prepare or activation failure triggers
         rollback of the entire group.
@@ -145,13 +82,10 @@ class InjectionGroup:
 
     Notes
     -----
-    The validity formula for a strictly-synchronized group is:
-
-        Valid(G) = Ready(G) ∧ Skew(G) ≤ ε ∧ ∧ Manifested(F_i)
-
-    where ``Manifested(F_i)`` is ``True`` for verified, ``False`` for
-    disproven (fails the gate), or ``None`` for inconclusive (verdict
-    downgrades to ``"inconclusive"`` rather than failing the boolean gate).
+    For a strictly synchronized group, activation validity requires all
+    members to be ready, skew within the configured limit, and each member
+    to pass ``verify_active()``. This check does not prove that the workload
+    encountered the fault; effect exposure is classified separately.
     """
 
     name: str

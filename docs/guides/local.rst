@@ -124,6 +124,7 @@ See also
 ---------
 
 * :ref:`guide-ssh` — SSHTarget setup and authentication
+* :ref:`guide-docker` — explicit container targets and their prerequisites
 * :ref:`guide-http` — HTTPTarget and daemon setup
 * :ref:`guide-llm` — full LLM fault parameter reference
 * :ref:`guide-ollama` — testing with a local Ollama model

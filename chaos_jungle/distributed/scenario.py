@@ -24,11 +24,10 @@ class SyncConfig:
 
     Parameters
     ----------
-    mode :
-        ``best_effort`` — activate each member ASAP, no timing guarantee.
-        ``barrier``     — wait for all READY, then activate simultaneously.
-        ``scheduled``   — wait for all READY, then activate at a shared
-                          future timestamp (``start_after`` seconds from now).
+    mode : str
+        One of ``best_effort`` (start as soon as possible), ``barrier``
+        (wait for all members), or ``scheduled`` (use a shared future
+        timestamp after all members are ready).
     start_after :
         Seconds between all-ready barrier and the commit timestamp.
         Only used in ``scheduled`` mode. Default ``5.0``.

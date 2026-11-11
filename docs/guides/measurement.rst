@@ -38,6 +38,8 @@ For grouped faults use ``runner.record_group_exposure(group_name,
 injection_id, ...)`` for each member. The activation skew and cleanup verdict
 remain separate from this effect verdict. Neither verdict scores application
 correctness; the workload and its oracle supply that outcome.
+See :ref:`guide-coordinated` for group activation policies and per-member
+evidence.
 
 ----
 

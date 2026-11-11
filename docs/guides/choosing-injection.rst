@@ -150,6 +150,9 @@ execute*.
 
 Running Docker locally does not make a container workload a ``LocalTarget``.
 Never fall back to the host when a container target is unavailable.
+See :ref:`guide-docker` for prerequisites and the distinction between
+commands inside a container and container lifecycle actions. For faults
+across multiple targets, see :ref:`guide-coordinated`.
 
 Reachability before severity
 ----------------------------

@@ -127,6 +127,7 @@ the Python package does not grant those permissions.
    :caption: Targets and Deployment
 
    guides/local
+   guides/docker
    guides/ssh
    guides/http
    guides/separate-mode
@@ -138,6 +139,7 @@ the Python package does not grant those permissions.
    :caption: Experiment Design
 
    guides/strategies
+   guides/coordinated
    guides/hypothesis
    guides/measurement
    guides/metrics
@@ -167,6 +169,8 @@ the Python package does not grant those permissions.
    api/scheduler
    api/faults
    api/targets
+   api/coordinated
+   api/exposure
    api/decorators
    api/intercept
    api/fuzzing
