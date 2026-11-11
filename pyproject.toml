@@ -71,6 +71,9 @@ chaos-jungle = "chaos_jungle.pytest_plugin"
 [tool.hatch.build.targets.wheel]
 packages = ["chaos_jungle"]
 
+[tool.hatch.build.targets.sdist]
+only-include = ["chaos_jungle", "README.md", "LICENSE"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "evaluation/tests"]
 addopts = "-v --tb=short -m 'not real_eval'"
