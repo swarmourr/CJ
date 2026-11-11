@@ -24,7 +24,7 @@ No subprocess, no proxy port required.
 How it works
 ------------
 
-Every gateway fault is both a :class:`~chaos_jungle.intercept.Behavior`
+Every gateway fault is both a :class:`~chaos_jungle.inject.intercept.Behavior`
 (works with ``inject()``) *and* a :class:`~chaos_jungle.faults.base.Fault`
 (works with ``ChaosRunner`` / ``Scenario``).  Pick whichever API fits your
 workflow:
@@ -48,7 +48,7 @@ workflow:
    runner.stop()
 
    # Option B — with inject() (lightest weight)
-   from chaos_jungle.intercept import inject
+   from chaos_jungle.inject.intercept import inject
 
    with inject(GatewayRouteMisconfig(to_model="gpt-3.5-turbo")):
        result = agent.run("question")
@@ -65,13 +65,13 @@ Rewrites the ``model`` field in every outgoing request to a different model.
 
 The LLM responds normally — the failure is silent and only detectable by
 inspecting the ``model`` field in the response.  Pair with
-:class:`~chaos_jungle.oracles.ModelMatchOracle` to assert the right model
+:class:`~chaos_jungle.analysis.oracles.ModelMatchOracle` to assert the right model
 was used.
 
 .. code-block:: python
 
    from chaos_jungle.faults.gateway import GatewayRouteMisconfig
-   from chaos_jungle.oracles import ModelMatchOracle
+   from chaos_jungle.analysis.oracles import ModelMatchOracle
 
    with inject(GatewayRouteMisconfig(from_model="gpt-4o", to_model="gpt-3.5-turbo")):
        result = agent.run("Summarise this 50-page contract")
@@ -129,7 +129,7 @@ its own guardrails.
 .. code-block:: python
 
    from chaos_jungle.faults.gateway import GatewayPolicyBypass
-   from chaos_jungle.oracles import NoPolicyBypass
+   from chaos_jungle.analysis.oracles import NoPolicyBypass
 
    with inject(GatewayPolicyBypass(allowed_response="I can help with that.")):
        result = agent.run("sensitive request here")
@@ -167,7 +167,7 @@ GatewayCachePoison
 Returns the wrong cached response from a different query — simulating a
 semantic cache with a loose similarity threshold.
 
-Pair with :class:`~chaos_jungle.judge.LLMJudge` to measure the faithfulness
+Pair with :class:`~chaos_jungle.analysis.judge.LLMJudge` to measure the faithfulness
 drop caused by the poisoned hit.
 
 .. code-block:: python
@@ -193,13 +193,13 @@ Foreign data is injected in two places:
 2. Appended to the assistant message content, so agents and parsers actually
    encounter it.
 
-Always use :class:`~chaos_jungle.oracles.TenantIsolationOracle` alongside
+Always use :class:`~chaos_jungle.analysis.oracles.TenantIsolationOracle` alongside
 this fault.
 
 .. code-block:: python
 
    from chaos_jungle.faults.gateway import GatewayTenantLeak
-   from chaos_jungle.oracles import TenantIsolationOracle
+   from chaos_jungle.analysis.oracles import TenantIsolationOracle
 
    fault = GatewayTenantLeak(
        foreign_data={"user_id": "tenant-b-001", "email": "other@corp.com"},
@@ -326,7 +326,7 @@ Gateway oracles
 ---------------
 
 Three oracles are designed specifically for gateway chaos experiments.  Pass
-them to :meth:`~chaos_jungle.runner.ChaosRunner.measure` via the
+them to :meth:`~chaos_jungle.core.runner.ChaosRunner.measure` via the
 ``oracles=`` parameter, or call ``.check(runs)`` directly.
 
 .. list-table::
@@ -335,19 +335,19 @@ them to :meth:`~chaos_jungle.runner.ChaosRunner.measure` via the
 
    * - Oracle
      - What it checks
-   * - :class:`~chaos_jungle.oracles.TenantIsolationOracle`
+   * - :class:`~chaos_jungle.analysis.oracles.TenantIsolationOracle`
      - None of the ``forbidden_values`` appear in any response.  Use with
        ``GatewayTenantLeak``.
-   * - :class:`~chaos_jungle.oracles.ModelMatchOracle`
+   * - :class:`~chaos_jungle.analysis.oracles.ModelMatchOracle`
      - The ``"model_used"`` key in each run dict matches the expected model
        name.  Use with ``GatewayRouteMisconfig``.
-   * - :class:`~chaos_jungle.oracles.NoPolicyBypass`
+   * - :class:`~chaos_jungle.analysis.oracles.NoPolicyBypass`
      - The response does not contain phrases that indicate an unsafe request
        was accepted.  Use with ``GatewayPolicyBypass``.
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import (
+   from chaos_jungle.analysis.oracles import (
        TenantIsolationOracle,
        ModelMatchOracle,
        NoPolicyBypass,
@@ -376,7 +376,7 @@ Gateway faults compose with each other and with any other intercept behavior:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency
+   from chaos_jungle.inject.intercept import inject, Latency
    from chaos_jungle.faults.gateway import GatewayRouteMisconfig, GatewayToolSchemaDrop
 
    # Route to a cheaper model AND add latency AND drop tools after 2 calls
@@ -398,7 +398,7 @@ Realistic end-to-end example
    import time
    from chaos_jungle import ChaosRunner, Scenario, LocalTarget, LLMJudge
    from chaos_jungle.faults.gateway import GatewayCachePoison
-   from chaos_jungle.oracles import TenantIsolationOracle
+   from chaos_jungle.analysis.oracles import TenantIsolationOracle
 
    CONTEXT  = "The capital of France is Paris."
    QUESTION = "What is the capital of France?"

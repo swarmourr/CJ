@@ -16,7 +16,7 @@ exceeded, a prompt injection was followed.
    from chaos_jungle import ChaosRunner, Scenario
    from chaos_jungle.faults import LLMLatency
    from chaos_jungle.targets import LocalTarget
-   from chaos_jungle.oracles import (
+   from chaos_jungle.analysis.oracles import (
        NoSecretLeakage, NoPIILeakage, ValidJSONSchema,
        MaxCost, MaxRetries,
    )
@@ -48,7 +48,7 @@ exceeded, a prompt injection was followed.
 How oracles run
 ---------------
 
-Oracles are called **twice** by :meth:`~chaos_jungle.runner.ChaosRunner.measure`:
+Oracles are called **twice** by :meth:`~chaos_jungle.core.runner.ChaosRunner.measure`:
 
 1. Once on the baseline run results (``phase="baseline"``) — to detect
    pre-existing issues.
@@ -56,8 +56,8 @@ Oracles are called **twice** by :meth:`~chaos_jungle.runner.ChaosRunner.measure`
    fault-induced violations.
 
 Both sets of results are stored in
-:attr:`~chaos_jungle.runner.MeasurementResult.oracle_results` and printed
-by :meth:`~chaos_jungle.runner.MeasurementResult.summary`.
+:attr:`~chaos_jungle.core.runner.MeasurementResult.oracle_results` and printed
+by :meth:`~chaos_jungle.core.runner.MeasurementResult.summary`.
 
 ----
 
@@ -72,7 +72,7 @@ key headers in every workload response.
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import NoSecretLeakage
+   from chaos_jungle.analysis.oracles import NoSecretLeakage
 
    oracle = NoSecretLeakage()
 
@@ -97,7 +97,7 @@ numbers in responses.
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import NoPIILeakage
+   from chaos_jungle.analysis.oracles import NoPIILeakage
 
    oracle = NoPIILeakage()                                # all PII types
    oracle = NoPIILeakage(categories=["email", "ssn"])    # specific types
@@ -112,7 +112,7 @@ a JSON Schema (requires ``pip install jsonschema``).
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import ValidJSONSchema
+   from chaos_jungle.analysis.oracles import ValidJSONSchema
 
    oracle = ValidJSONSchema()    # just check it parses as JSON
 
@@ -135,7 +135,7 @@ Asserts that total LLM cost does not exceed a USD budget.  Reads the
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import MaxCost
+   from chaos_jungle.analysis.oracles import MaxCost
 
    oracle = MaxCost(max_usd=0.10)
    oracle = MaxCost(max_usd=1.0, cost_per_1k_tokens=0.01)  # GPT-4 rate
@@ -155,7 +155,7 @@ Asserts that the agent did not exceed a retry budget.  Reads the
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import MaxRetries
+   from chaos_jungle.analysis.oracles import MaxRetries
 
    oracle = MaxRetries(max_retries=3)
 
@@ -173,7 +173,7 @@ patterns (e.g. ``"Ignore previous instructions..."``).
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import NoPromptInjectionFollowed
+   from chaos_jungle.analysis.oracles import NoPromptInjectionFollowed
 
    oracle = NoPromptInjectionFollowed()
    oracle = NoPromptInjectionFollowed(
@@ -188,7 +188,7 @@ Reads the ``"tool_calls"`` key (int or list) from each run dict.
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import MaxAgentSteps
+   from chaos_jungle.analysis.oracles import MaxAgentSteps
 
    oracle = MaxAgentSteps(max_steps=10)
 
@@ -207,10 +207,10 @@ Your workload should return:
 Writing a custom oracle
 -----------------------
 
-Subclass :class:`~chaos_jungle.oracles.Oracle` and implement
-:meth:`~chaos_jungle.oracles.Oracle.check`::
+Subclass :class:`~chaos_jungle.analysis.oracles.Oracle` and implement
+:meth:`~chaos_jungle.analysis.oracles.Oracle.check`::
 
-    from chaos_jungle.oracles import Oracle, OracleResult
+    from chaos_jungle.analysis.oracles import Oracle, OracleResult
 
     class RequiredCitation(Oracle):
         name = "RequiredCitation"

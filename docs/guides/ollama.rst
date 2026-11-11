@@ -31,8 +31,8 @@ Prerequisites
    ollama pull llama3.2
    ollama pull mistral    # optional — useful for multi-model comparisons
 
-   # Install chaos-jungle
-   pip install chaos-jungle openai
+   # After installing CJ from the current source, install the model client
+   python -m pip install openai
 
 Running the system test
 -----------------------
@@ -342,7 +342,7 @@ Ollama's answers degraded under fault:
 
    from chaos_jungle import ChaosRunner, Scenario
    from chaos_jungle.faults.llm import SemanticCorrupt
-   from chaos_jungle.judge import LLMJudge
+   from chaos_jungle.analysis.judge import LLMJudge
    from chaos_jungle.targets import LocalTarget
    import openai
 

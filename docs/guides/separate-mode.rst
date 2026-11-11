@@ -1,8 +1,3 @@
-.. |any-os|        replace:: :bdg-success:`Any OS`
-.. |no-sudo|       replace:: :bdg-success:`No sudo`
-.. |linux-only|    replace:: :bdg-info:`Linux`
-.. |sudo-required| replace:: :bdg-warning:`sudo`
-
 .. _guide-separate-mode:
 
 Separate Mode

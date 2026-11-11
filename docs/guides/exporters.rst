@@ -3,7 +3,7 @@
 Observability Exporters
 =======================
 
-Exporters push :class:`~chaos_jungle.runner.MeasurementResult` metrics to
+Exporters push :class:`~chaos_jungle.core.runner.MeasurementResult` metrics to
 external observability systems after an experiment completes.  Without
 exporters, results live only in the local SQLite database.  Exporters let
 you correlate fault injection events with your existing dashboards, alerts,
@@ -189,7 +189,7 @@ the Python standard library only.
        "hypothesis": {
            "name":   "handles delay gracefully",
            "passed": true,
-           "assertions": [...]
+           "assertions": []
        }
    }
 

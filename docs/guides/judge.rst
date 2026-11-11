@@ -64,7 +64,7 @@ Quick start
 
    from chaos_jungle import ChaosRunner, Scenario
    from chaos_jungle.faults.llm import SemanticCorrupt
-   from chaos_jungle.judge import LLMJudge
+   from chaos_jungle.analysis.judge import LLMJudge
    from chaos_jungle.targets import LocalTarget
    import openai
 
@@ -141,7 +141,7 @@ question–context–response triple:
 
 .. code-block:: python
 
-   from chaos_jungle.judge import LLMJudge
+   from chaos_jungle.analysis.judge import LLMJudge
 
    judge = LLMJudge(model="gpt-4o-mini")
 
@@ -160,7 +160,7 @@ Averaging multiple scores
 
 .. code-block:: python
 
-   from chaos_jungle.judge import LLMJudge, average_scores
+   from chaos_jungle.analysis.judge import LLMJudge, average_scores
 
    judge  = LLMJudge(model="gpt-4o-mini")
    scores = [judge.score(q, c, r) for q, c, r in triples]
@@ -199,7 +199,7 @@ Pluggable evaluator protocol
 -----------------------------
 
 ``ChaosRunner.measure()`` accepts any object that satisfies the
-:class:`~chaos_jungle.judge.Evaluator` protocol — not just ``LLMJudge``.
+:class:`~chaos_jungle.analysis.judge.Evaluator` protocol — not just ``LLMJudge``.
 This lets you plug in DeepEval, Pydantic Evals, or any custom evaluator
 without changing your experiment code.
 
@@ -220,7 +220,7 @@ qualifies, use ``isinstance``:
 
 .. code-block:: python
 
-   from chaos_jungle.judge import Evaluator
+   from chaos_jungle.analysis.judge import Evaluator
 
    assert isinstance(LLMJudge(), Evaluator)   # True
 
@@ -231,7 +231,7 @@ Any class with a compatible ``score()`` method works:
 
 .. code-block:: python
 
-   from chaos_jungle.judge import Evaluator, JudgeScore
+   from chaos_jungle.analysis.judge import Evaluator, JudgeScore
 
    class MyEval:
        def score(self, question: str, context: str = "", response: str = "") -> JudgeScore:
@@ -251,7 +251,7 @@ Wrapping DeepEval (example)
 
 .. code-block:: python
 
-   from chaos_jungle.judge import JudgeScore
+   from chaos_jungle.analysis.judge import JudgeScore
 
    class DeepEvalAdapter:
        """Thin wrapper around DeepEval metrics."""

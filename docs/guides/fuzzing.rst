@@ -20,9 +20,9 @@ Two modes
 
 .. code-block:: python
 
-   from chaos_jungle.fuzzing import ChaosFuzzer, summarise_fuzz
+   from chaos_jungle.inject.fuzzing import ChaosFuzzer, summarise_fuzz
    from chaos_jungle.faults.llm import LLMLatency, LLMRateLimit, LLMUnavailable
-   from chaos_jungle.intercept import ToolMutate
+   from chaos_jungle.inject.intercept import ToolMutate
    from chaos_jungle import LocalTarget
 
    fuzzer = ChaosFuzzer(
@@ -58,7 +58,7 @@ Shared baseline
 ---------------
 
 ``ChaosFuzzer`` measures a **single baseline** before any fault experiments
-start.  Every :class:`~chaos_jungle.runner.MeasurementResult` in the returned
+start.  Every :class:`~chaos_jungle.core.runner.MeasurementResult` in the returned
 list carries that same baseline — all fault comparisons are consistent and no
 redundant baseline runs are wasted.
 
@@ -173,11 +173,11 @@ to work unchanged.  New code should use ``ChaosFuzzer`` directly.
 .. code-block:: python
 
    # Old — still works
-   from chaos_jungle.fuzzing import fuzz_scenarios
+   from chaos_jungle.inject.fuzzing import fuzz_scenarios
    results = fuzz_scenarios(fault_pool=pool, workload=wl, target=t, n_combinations=10)
 
    # New — preferred
-   from chaos_jungle.fuzzing import ChaosFuzzer
+   from chaos_jungle.inject.fuzzing import ChaosFuzzer
    results = ChaosFuzzer(fault_pool=pool, target=t).measure(wl, n=10)
 
 ----

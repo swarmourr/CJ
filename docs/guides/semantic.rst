@@ -113,7 +113,7 @@ automatically score whether the LLM's answer degraded:
 
    from chaos_jungle import ChaosRunner, Scenario
    from chaos_jungle.faults.llm import SemanticCorrupt
-   from chaos_jungle.judge import LLMJudge
+   from chaos_jungle.analysis.judge import LLMJudge
    from chaos_jungle.targets import LocalTarget
 
    judge  = LLMJudge(model="gpt-4o-mini")   # or any OpenAI-compatible model

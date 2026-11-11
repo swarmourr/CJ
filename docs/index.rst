@@ -1,249 +1,87 @@
-.. |any-os|        replace:: :bdg-success:`Any OS`
-.. |no-sudo|       replace:: :bdg-success:`No sudo`
-.. |ci|            replace:: :bdg-success:`CI`
-.. |linux-only|    replace:: :bdg-info:`Linux`
-.. |ssh|           replace:: :bdg-info:`SSH`
-.. |sudo-required| replace:: :bdg-warning:`sudo`
-
 chaos-jungle
 ============
 
-**Chaos engineering for AI agents and distributed systems.**
+Chaos Jungle (CJ) is a Python toolkit for controlled fault injection in
+agentic and distributed applications. It can perturb model requests, tool
+results, network paths, containers, processes, resources, and stored state.
+Experiments are defined in code and can be scoped to a block, a function, a
+target, or a coordinated group of targets.
 
-chaos-jungle lets you deliberately break things — LLM APIs, agent tools,
-network links, storage, services, system resources — so you can measure
-exactly what breaks, by how much, and whether your system recovers
-gracefully.
+CJ records what was configured and what happened at the injection boundary.
+An application-specific success metric, such as code correctness or completed
+jobs, remains the experimenter's choice. A failed task alone is not evidence
+that an intended fault was experienced.
 
-----
+Get started
+-----------
 
-Why chaos-jungle?
------------------
-
-Modern systems fail in ways that are hard to reproduce:
-
-* The LLM API is slow at 3 AM and your agent silently loops.
-* A 2 % packet loss causes your database to time out, but your service
-  returns 200 anyway.
-* An injected tool result convinces your AI agent to book the wrong flight.
-* A Redis key gets corrupted and the agent reasons from stale state.
-
-chaos-jungle injects these failures on demand, measures the impact
-side-by-side against a healthy baseline, and tells you whether your system
-passed a quality gate — all from a single ``pip install``.
-
-----
-
-Two-minute tour
----------------
-
-**Testing an AI agent?**
+1. :doc:`Install and verify <guides/installation>` the current source.
+2. Run the :doc:`quickstart` without an external model or privileged target.
+3. Use :ref:`guide-choosing-injection` to choose an interface for your workload.
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, RateLimit, Latency
+   from chaos_jungle.inject.intercept import Latency, inject
 
-   # Zero setup — patches httpx/requests directly.
-   with inject(Latency(3.0), RateLimit(after_n=5)):
-       result = my_agent.run("Book me a flight to Paris")
+   with inject(Latency(0.5), urls=["api.example.com"]):
+       result = run_agent()
 
-   # Measure baseline vs fault side-by-side
-   from chaos_jungle import ChaosRunner, Scenario, LLMLatency, LocalTarget
+``inject(...)`` intercepts supported ``httpx`` and ``requests`` calls in the
+current process and removes the interception on exit. The URL filter above is
+illustrative; the application must actually send a matching request for the
+fault to be reached. For external processes or role-specific model traffic,
+use a managed proxy or an explicit target instead.
 
-   runner = ChaosRunner(
-       Scenario("slow-llm", [LLMLatency(delay_s=3.0)]),
-       LocalTarget(),
-   )
-   result = runner.measure(workload, n_baseline=5, n_fault=5)
-   print(result.summary())
+Experiment model
+----------------
 
-**Testing infrastructure?**
-
-.. code-block:: python
-
-   from chaos_jungle import ChaosRunner, Scenario, NetworkDelay, SSHTarget
-
-   target = SSHTarget("192.168.1.100", user="ubuntu")
-   runner = ChaosRunner(
-       Scenario("wan-degraded", [NetworkDelay("200ms", jitter="20ms")]),
-       target,
-   )
-   result = runner.measure(workload, n_baseline=5, n_fault=5)
-   print(result.summary())   # fault_mean("duration_s") ≈ baseline + 0.2 s
-
-----
-
-What can you break?
---------------------
-
-**LLM / AI Agent faults**
-
-.. rst-class:: compat-badges
-
-   |any-os| |no-sudo|
-
-
-.. list-table::
-   :header-rows: 1
-   :widths: 40 60
-
-   * - Fault category
-     - Examples
-   * - API failures (:ref:`guide-llm`)
-     - Latency, rate-limit (429), timeout, corrupt response, 503/401/403/402
-   * - Zero-setup intercept (:ref:`guide-intercept`)
-     - ``inject(Latency(3.0))``, ``inject(RateLimit(after_n=5))``,
-       ``inject(PromptInjection(...))``
-   * - Semantic faults (:ref:`guide-semantic`)
-     - Entity swap, RAG poison, context truncation, distractor injection
-   * - Agent state (:ref:`guide-state`)
-     - Redis key mutation, JSON checkpoint corruption, Postgres column update
-   * - AI gateway faults (:ref:`guide-gateway`)
-     - Route misconfig, fallback broken, policy block/bypass, cache stale,
-       cache poison, tenant leak, header strip, tool schema drop,
-       response rewrite, budget desync, retry storm
-   * - Skill / tool faults (:ref:`guide-skill`)
-     - Skill unavailable, bad output, version skew, permission denied,
-       conflicting results, instruction corruption
-   * - Quality scoring (:ref:`guide-judge`)
-     - Faithfulness, hallucination, coherence, guardrail violation (LLMJudge)
-
-**Infrastructure faults**
-
-.. rst-class:: compat-badges
-
-   |linux-only| |sudo-required|
-
-
-.. list-table::
-   :header-rows: 1
-   :widths: 40 60
-
-   * - Fault category
-     - Examples
-   * - Network (:ref:`guide-network`)
-     - Delay, loss, corruption, duplicate, bandwidth cap, reorder, TCP RST,
-       partition
-   * - Storage (:ref:`guide-storage`)
-     - Bit-flip on cron schedule, immediate byte corruption, SQLite page
-       corruption
-   * - Process / service (:ref:`guide-process`)
-     - Process kill, systemd service stop/restart/mask, container kill/pause
-   * - Resource exhaustion (:ref:`guide-resources`)
-     - CPU saturation, memory pressure, disk full, inode exhaustion, FD
-       exhaustion, process exhaustion
-   * - GPU (:ref:`guide-gpu`)
-     - GPU memory pressure, process kill, driver error injection
-
-----
-
-How it works
-------------
-
-Every fault follows the same four-step lifecycle:
+A :doc:`scenario <concepts>` names one or more faults. A target specifies
+where a fault acts; a runner manages preflight, activation, observation, and
+cleanup. The session record keeps lifecycle events, commands, proxy records,
+and available verification measurements.
 
 .. code-block:: text
 
-   preflight → start → [your workload] → stop → revert
+   configure -> activate -> reach operation -> observe effect -> revert -> check recovery
 
-1. **preflight** — check that required tools (tc, stress-ng, iptables, …)
-   are available and auto-install missing packages where possible.
-2. **start** — inject the fault (add tc rule, launch stress-ng, start proxy,
-   corrupt file, …).
-3. **[workload]** — your code runs under the fault condition.
-4. **stop / revert** — remove all rules and restore any modified files.
-   ``revert()`` is always called even if the workload throws an exception.
+These stages answer different questions. Activation says CJ installed a fault.
+Triggering says the workload reached the selected operation. Manifestation
+says the intended effect was observed. Reversion and recovery concern the
+environment after the experiment. CJ's exposure verdicts distinguish valid,
+untriggered, invalid, and inconclusive interventions; none is a task score.
+See :ref:`guide-choosing-injection` and :doc:`guides/measurement` for the
+evidence and outcome workflow.
 
-The :class:`~chaos_jungle.runner.ChaosRunner` orchestrates this lifecycle and
-writes a full audit trail — every command, every metric, every event — to a
-local SQLite database.
-
-----
-
-Measurement and quality gates
-------------------------------
-
-``runner.measure()`` runs your workload N times under baseline conditions and
-N times under fault, then computes mean, standard deviation, and delta for
-every metric you return:
-
-.. code-block:: python
-
-   def workload():
-       t0 = time.time()
-       response = call_my_service()
-       return {
-           "duration_s": round(time.time() - t0, 3),
-           "success":    int(response.ok),
-       }
-
-   result = runner.measure(workload, n_baseline=5, n_fault=5)
-   print(result.summary())
-   # duration_s  baseline=0.12s  fault=0.34s  delta=+183%
-   # success     baseline=1.00   fault=0.60   delta=-40%
-
-Add an LLM judge to score response quality across the same runs:
-
-.. code-block:: python
-
-   from chaos_jungle import LLMJudge
-
-   judge  = LLMJudge(model="gpt-4o-mini")
-   result = runner.measure(workload, n_baseline=5, n_fault=5, evaluator=judge)
-   print("Quality gate:", result.passed_quality(min_faithfulness=0.70, max_hallucination=0.30))
-
-----
-
-Installation
-------------
-
-Use Python 3.9 or newer in a virtual environment. Until a PyPI release is
-available, install the current source from GitHub:
-
-.. code-block:: bash
-
-   python3 -m venv .venv
-   . .venv/bin/activate
-   python -m pip install git+https://github.com/swarmourr/CJ.git
-
-See :doc:`guides/installation` for verification, development installs, and
-target-side requirements.
+Fault placement
+---------------
 
 .. list-table::
-   :widths: 50 25 25
    :header-rows: 1
+   :widths: 23 35 42
 
-   * - Fault family
-     - OS
-     - Privileges
-   * - LLM / AI faults
-     - Any
-     - None
-   * - Infrastructure faults
-     - Linux
-     - sudo
+   * - Boundary
+     - Examples
+     - Evidence to inspect
+   * - Model and tool traffic
+     - Delay, HTTP error, response mutation, matching tool-result failure
+     - Matched request, status, timing, or mutation in proxy/intercept records
+   * - Network and resources
+     - Packet delay or loss, CPU or memory pressure
+     - Target-local rule or process state and measured network or resource effect
+   * - Process and stored state
+     - Container or service interruption, file or data corruption
+     - Observed state transition or before/after value and restoration check
 
-----
+The supported mechanisms are broader than those repeatedly exercised in any
+one evaluation. Always verify effects at the boundary being perturbed.
 
-Where to go next
------------------
+Documentation
+-------------
 
-.. list-table::
-   :widths: 50 50
-   :header-rows: 0
-
-   * - **Testing an AI agent?**
-     - **Testing infrastructure?**
-   * - Start with :ref:`guide-intercept` (zero setup) or :ref:`guide-llm`
-       (proxy faults), then explore :ref:`guide-semantic`,
-       :ref:`guide-skill`, and :ref:`guide-judge`.
-     - Start with :doc:`quickstart`, then pick a fault guide:
-       :ref:`guide-network`, :ref:`guide-storage`, :ref:`guide-process`,
-       or :ref:`guide-resources`.
-   * - See :doc:`concepts` for the Fault / Target / Scenario / Runner model.
-     - See :doc:`architecture` for the system design.
-
-----
+The guides below cover the available interfaces, fault families, targets,
+measurement options, and API. Infrastructure faults can require Linux tools,
+container access, or elevated permissions on the selected target; installing
+the Python package does not grant those permissions.
 
 .. toctree::
    :maxdepth: 2
@@ -334,7 +172,6 @@ Where to go next
    api/fuzzing
    api/metrics
    api/hypothesis
-   api/oracles
    api/judge
    api/conversation
    api/guardrails

@@ -1,6 +1,6 @@
 """ChaosFuzzer — random fault exploration for chaos-jungle.
 
-Follows the same pattern as ChaosRunner:
+Follows the same pattern as ChaosRunner::
 
     fuzzer = ChaosFuzzer(fault_pool=[...], target=target)
     # or
@@ -13,14 +13,14 @@ Follows the same pattern as ChaosRunner:
 
 Two modes
 ---------
-**explicit pool** — user provides the faults (same as legacy fuzz_scenarios):
+**explicit pool** — user provides the faults (same as legacy fuzz_scenarios)::
 
     fuzzer = ChaosFuzzer(
         fault_pool=[LLMLatency(3.0), LLMRateLimit(n=2), LLMUnavailable()],
         target=LocalTarget(),
     )
 
-**category-based** — CJ picks faults and randomizes their parameters:
+**category-based** — CJ picks faults and randomizes their parameters::
 
     fuzzer = ChaosFuzzer(
         categories=["llm", "system"],
@@ -336,7 +336,8 @@ def fuzz_scenarios(
 ) -> "list[MeasurementResult]":
     """Randomly combine faults from *fault_pool* and measure each combination.
 
-    .. deprecated::
+    .. deprecated:: 0.1
+
         Use :class:`ChaosFuzzer` directly::
 
             fuzzer = ChaosFuzzer(fault_pool=fault_pool, target=target, seed=seed)

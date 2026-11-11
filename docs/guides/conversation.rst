@@ -15,12 +15,12 @@ Inspired by the ``Turn`` + ``BaselineScenario`` API in `agent-chaos
 Concepts
 --------
 
-A **conversation** is a sequence of :class:`~chaos_jungle.conversation.Turn`
+A **conversation** is a sequence of :class:`~chaos_jungle.analysis.conversation.Turn`
 objects.  Each turn:
 
 * provides a user message (static string *or* a lambda that receives the
   previous response),
-* optionally activates a set of fault :class:`~chaos_jungle.intercept.Behavior`
+* optionally activates a set of fault :class:`~chaos_jungle.inject.intercept.Behavior`
   objects scoped to that turn only,
 * optionally checks an expected substring in the agent's response.
 
@@ -34,8 +34,8 @@ Quick start
 
 .. code-block:: python
 
-   from chaos_jungle.conversation import ConversationScenario, Turn
-   from chaos_jungle.intercept import RateLimit, ToolMutate, Latency
+   from chaos_jungle.analysis.conversation import ConversationScenario, Turn
+   from chaos_jungle.inject.intercept import RateLimit, ToolMutate, Latency
    import openai
 
    client = openai.OpenAI()
@@ -102,7 +102,7 @@ Turn reference
 
    Turn(lambda prev: f"You said '{prev[:50]}'. Please clarify.")
 
-``chaos_after_n`` maps to ``after_n_calls`` in :func:`~chaos_jungle.intercept.inject`.
+``chaos_after_n`` maps to ``after_n_calls`` in :func:`~chaos_jungle.inject.intercept.inject`.
 Setting it to ``1`` lets the first LLM call through before the fault kicks in:
 
 .. code-block:: python
@@ -156,7 +156,7 @@ Silent tool mutation (most dangerous — agent never knows)
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import ToolMutate
+   from chaos_jungle.inject.intercept import ToolMutate
 
    scenario = ConversationScenario(
        name="search-corrupt",
@@ -175,7 +175,7 @@ Prompt injection test
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import PromptInjection
+   from chaos_jungle.inject.intercept import PromptInjection
 
    scenario = ConversationScenario(
        name="injection-resistance",
@@ -198,7 +198,7 @@ Latency + recovery
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import Latency
+   from chaos_jungle.inject.intercept import Latency
 
    scenario = ConversationScenario(
        name="latency-recovery",

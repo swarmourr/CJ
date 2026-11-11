@@ -46,7 +46,7 @@ Changelog
      scheduler.start()
 
 * **Observability exporters** (``chaos_jungle.exporters``) — push
-  :class:`~chaos_jungle.runner.MeasurementResult` metrics to external systems
+  :class:`~chaos_jungle.core.runner.MeasurementResult` metrics to external systems
   after an experiment completes.
 
   - :class:`~chaos_jungle.exporters.PrometheusExporter` — push baseline,
@@ -85,7 +85,7 @@ Changelog
 
 **New features**
 
-* **``ChaosFuzzer``** (``chaos_jungle.fuzzing``) — replaces ``fuzz_scenarios()``
+* **``ChaosFuzzer``** (``chaos_jungle.inject.fuzzing``) — replaces ``fuzz_scenarios()``
   as the primary fuzzing API.  Follows the same pattern as ``ChaosRunner``:
   construct with a source and target, call ``.measure()``.  Two modes:
 
@@ -94,7 +94,7 @@ Changelog
     ``"application"``); CJ picks faults *and* randomizes their parameters.
 
   Key improvement: a **single shared baseline** is measured once before all
-  experiments.  Every :class:`~chaos_jungle.runner.MeasurementResult` in the
+  experiments.  Every :class:`~chaos_jungle.core.runner.MeasurementResult` in the
   returned list carries the same baseline — comparisons are consistent and
   no redundant baseline runs are wasted.
 
@@ -104,7 +104,7 @@ Changelog
 * **``inject(measure=)``** — ``inject()`` now accepts an optional ``measure``
   parameter (``True`` or a list of metric names) that collects lightweight
   metrics from the ``with`` block without requiring a workload function.
-  Returns an :class:`~chaos_jungle.intercept.InjectResult` via the context
+  Returns an :class:`~chaos_jungle.inject.intercept.InjectResult` via the context
   variable with: ``duration_s``, ``http_calls``, ``http_errors``,
   ``memory_mb`` (psutil), ``cpu_percent`` (psutil).
 
@@ -176,20 +176,20 @@ Changelog
      with inject(RateLimit(after_n=0), after_n_calls=2, only_model="gpt-4o"):
          run_pipeline()   # first 2 calls pass, then gpt-4o calls get 429
 
-* **``ToolMutate`` behavior** (``chaos_jungle.intercept``)
+* **``ToolMutate`` behavior** (``chaos_jungle.inject.intercept``)
 
   Silently rewrites ``role: "tool"`` messages before the LLM sees them.
   The HTTP status stays 200 and no exception is raised — the hardest fault
   to detect.  Modes: ``"garble"``, ``"empty"``, ``"null"``, ``"wrong_type"``,
   or a custom ``replacement`` value.
 
-* **``PromptInjection`` behavior** (``chaos_jungle.intercept``)
+* **``PromptInjection`` behavior** (``chaos_jungle.inject.intercept``)
 
   Appends adversarial text to outgoing LLM messages.  Targets: ``"user"``,
   ``"system"``, or ``"all"``.  Tests injection resistance without modifying
   agent code.
 
-* **``Evaluator`` protocol** (``chaos_jungle.judge``)
+* **``Evaluator`` protocol** (``chaos_jungle.analysis.judge``)
 
   A ``@runtime_checkable`` ``Protocol`` that any object with a compatible
   ``score(question, context, response) -> JudgeScore`` method satisfies.
@@ -197,13 +197,13 @@ Changelog
   custom evaluator via the same ``evaluator=`` parameter in
   ``ChaosRunner.measure()``.
 
-* **``fuzz_scenarios()``** (``chaos_jungle.fuzzing``, new module)
+* **``fuzz_scenarios()``** (``chaos_jungle.inject.fuzzing``, new module)
 
   Randomly combines faults from a pool and measures each combination.
   Parameters: ``n_combinations``, ``max_faults_per_run``, ``seed``,
   ``stop_on_first_failure``.  Includes ``summarise_fuzz()`` for tabular output.
 
-* **``ConversationScenario`` + ``Turn``** (``chaos_jungle.conversation``, new module)
+* **``ConversationScenario`` + ``Turn``** (``chaos_jungle.analysis.conversation``, new module)
 
   Multi-turn agent conversation runner with per-turn fault injection.
   ``Turn`` supports static or dynamic (lambda) inputs, ``chaos=``,
@@ -226,7 +226,7 @@ Changelog
 
 **New features**
 
-* **LangSmith-style dashboard** — ``chaos_jungle.dashboard`` rebuilt with a
+* **LangSmith-style dashboard** — ``chaos_jungle.control.dashboard`` rebuilt with a
   full six-tab UI covering every fault type (network, resource, process,
   storage, state, LLM/MCP, skill, semantic, GPU) and LLM call tracing:
 
@@ -277,8 +277,8 @@ Changelog
   (OpenAI, Anthropic, Google, Ollama models) auto-computes ``cost_usd`` for
   every forwarded call, not just ``LLMBudgetExceeded`` experiments.
 
-* **Blocked call recording** — all 11 early-return paths in the proxy (
-  unavailable, rate-limit, budget-exceeded, timeout, tool-fault, skill-*)
+* **Blocked call recording** — early-return paths in the proxy (including
+  unavailability, rate limits, timeouts, tool faults, and skill faults)
   now call ``_record_llm_call()`` with ``was_blocked=1``.
 
 * **Streaming TTFT** — ``_stream_interrupt()`` captures time-to-first-token
@@ -559,7 +559,7 @@ Changelog
   - ``PostgresStateCorrupt`` — runs a parameterised ``UPDATE`` via ``psql``;
     supports an optional ``condition`` (WHERE clause)
 
-* **LLMJudge evaluator** (``chaos_jungle.judge``):
+* **LLMJudge evaluator** (``chaos_jungle.analysis.judge``):
 
   - ``LLMJudge.score()`` returns a ``JudgeScore`` with four quality metrics:
     ``faithfulness``, ``hallucination``, ``coherence``, ``guardrail_violation``

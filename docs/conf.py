@@ -27,9 +27,9 @@ rst_epilog = """
 .. |any-os|        replace:: :bdg-success:`Any OS`
 .. |no-sudo|       replace:: :bdg-success:`No sudo`
 .. |ci|            replace:: :bdg-success:`CI`
-.. |linux-only|    replace:: :bdg-ref-info-line:`Linux`
-.. |ssh|           replace:: :bdg-ref-info-line:`SSH`
-.. |sudo-required| replace:: :bdg-ref-warning-line:`sudo`
+.. |linux-only|    replace:: :bdg-info:`Linux`
+.. |ssh|           replace:: :bdg-info:`SSH`
+.. |sudo-required| replace:: :bdg-warning:`sudo`
 """
 
 # ── Mermaid ────────────────────────────────────────────────────────
@@ -160,3 +160,4 @@ source_suffix = {
     ".md": "markdown",
 }
 master_doc = "index"
+exclude_patterns = ["_build", "future-improvement-faults.md"]

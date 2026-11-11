@@ -65,7 +65,7 @@ Only one schedule mode is active at a time.  The last call to ``.every()`` or
 Callbacks
 ---------
 
-**On result** — called with each :class:`~chaos_jungle.runner.MeasurementResult`
+**On result** — called with each :class:`~chaos_jungle.core.runner.MeasurementResult`
 after a successful run:
 
 .. code-block:: python
@@ -97,7 +97,7 @@ Multiple callbacks can be registered.  They are called in registration order.
 Accessing results
 -----------------
 
-All :class:`~chaos_jungle.runner.MeasurementResult` objects collected so far
+All :class:`~chaos_jungle.core.runner.MeasurementResult` objects collected so far
 are available on ``scheduler.results``:
 
 .. code-block:: python

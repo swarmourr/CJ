@@ -44,7 +44,7 @@ Quick example:
 
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos_measure
+   from chaos_jungle.inject.decorators import chaos_measure
    from chaos_jungle import NetworkDelay
    from chaos_jungle.metrics import PingLatency, CommandMetric
 

@@ -121,7 +121,7 @@ the fault:
 .. code-block:: python
 
    from chaos_jungle.db.session_db import SessionDB
-   from chaos_jungle.oracles import NoPIILeakage, MaxCost, run_oracles
+   from chaos_jungle.analysis.oracles import NoPIILeakage, MaxCost, run_oracles
 
    db = SessionDB()
 

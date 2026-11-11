@@ -236,7 +236,7 @@ space available.
 
 .. code-block:: python
 
-   from chaos_jungle import InodeFull
+   from chaos_jungle.faults import InodeFull
    from chaos_jungle.targets import SSHTarget
 
    target = SSHTarget("10.0.0.5", user="ubuntu")
@@ -256,23 +256,24 @@ FDExhaust
 ---------
 
 Starts a background Python process that opens ``count`` file descriptors
-(``/dev/null``) and holds them open until ``stop()``.  When the per-process
-``ulimit -n`` is hit, any further ``open()`` or ``socket()`` call in any
-process on the machine fails with ``EMFILE`` (Too many open files).
+(``/dev/null``) and holds them open until ``stop()``. This pressures that
+process's descriptor limit; it does not directly exhaust the per-process
+limit of unrelated application processes.
 
 .. code-block:: python
 
-   from chaos_jungle import FDExhaust
+   from chaos_jungle.faults import FDExhaust
    from chaos_jungle.targets import SSHTarget
 
    fault = FDExhaust(count=60_000)
 
 **What to observe:**
 
-* Does the application handle ``EMFILE`` gracefully (close idle connections)?
-* Do connection pools fail to acquire new sockets?
-* Does the health-check endpoint itself fail, causing the load balancer to
-  remove the node from rotation?
+* Did the background stress process actually hold the requested descriptors?
+* Was a system-wide file-table limit reached? A per-process limit in the
+  stress process alone does not imply application ``EMFILE`` errors.
+* If the application reports ``EMFILE``, confirm its own descriptor usage
+  before attributing that error to this intervention.
 
 **Default metrics:** ``open_fds``, ``write_errors``, ``error_rate``, ``duration_s``
 
@@ -291,7 +292,7 @@ down all children simultaneously.
 
 .. code-block:: python
 
-   from chaos_jungle import ProcessExhaust
+   from chaos_jungle.faults import ProcessExhaust
    from chaos_jungle.targets import SSHTarget
 
    fault = ProcessExhaust(count=5_000)

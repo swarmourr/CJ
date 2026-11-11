@@ -1,307 +1,70 @@
-.. |any-os|        replace:: :bdg-success:`Any OS`
-.. |no-sudo|       replace:: :bdg-success:`No sudo`
-.. |ci|            replace:: :bdg-success:`CI`
-.. |linux-only|    replace:: :bdg-info:`Linux`
-.. |ssh|           replace:: :bdg-info:`SSH`
-.. |sudo-required| replace:: :bdg-warning:`sudo`
-
 Quickstart
 ==========
 
-Two paths — pick yours
------------------------
+This example verifies a same-process HTTP delay without an API key, a model,
+or a privileged target. Install and verify CJ first with
+:doc:`guides/installation`.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 50 50
-
-   * - **Testing an AI agent?**
-     - **Testing infrastructure?**
-   * - Inject faults into LLM API calls, tool results, RAG context, agent
-       state, or skill definitions.  Works on **any OS**.  No ``sudo``
-       or Linux kernel required for most faults.
-     - Inject network delay/loss, storage corruption, process crashes, CPU /
-       memory / disk exhaustion on a Linux machine via SSH.  Requires a Linux
-       target and ``sudo``.
-   * - **Start here →** Examples 1 & 2 below, then
-
-       * :ref:`guide-intercept` — zero-setup ``inject()`` API (recommended first)
-       * :ref:`guide-llm` — proxy-based faults (streaming, cost tracking)
-       * :ref:`guide-semantic` — RAG poison, entity swap
-       * :ref:`guide-skill` — skill / tool definition faults
-     - **Start here →** Examples 3 & 4 below, then
-
-       * :ref:`guide-network` — delay, loss, bandwidth, partition
-       * :ref:`guide-storage` — bit-flip, SQLite, immediate corruption
-       * :ref:`guide-process` — process kill, service stop, container chaos
-       * :ref:`guide-resources` — CPU, memory, disk, inode, FD exhaustion
-
-.. note::
-
-   **Which API should I use?**
-
-   chaos-jungle has two ways to inject faults into LLM calls:
-
-   * ``inject(Latency(3.0))`` — :ref:`intercept layer <guide-intercept>`.
-     Zero setup, works everywhere, best for local tests and CI.
-   * ``LLMLatency(delay_s=3.0)`` — :ref:`proxy faults <guide-llm>`.
-     Real TCP proxy, supports streaming faults and per-session cost tracking.
-
-   **If in doubt, start with** ``inject()``. Switch to proxy faults when you
-   need streaming interrupts, budget tracking, or network-level realism.
-
-   See :ref:`guide-choosing-injection` for the complete decision guide,
-   including decorators, measurement, Docker targets, managed scenarios, and
-   distributed injection.
-
-----
-
-Installation
-------------
-
-Install the current source in a virtual environment and verify the CLI using
-:doc:`guides/installation`. A PyPI installation command will be available
-after the first release.
-
-Requirements
-~~~~~~~~~~~~
-
-* Python 3.9+
-* Any OS
-* **Linux only** — network, storage, process, and resource faults
-* ``sudo`` on the target machine for privileged commands
-
-
-Choose your starting point
---------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 40 30 30
-
-   * - What you want to test
-     - Target
-     - Linux required?
-   * - LLM API (latency, rate-limit, corrupt response)
-     - ``LocalTarget``
-     - No
-   * - Semantic fault (RAG poison, entity swap)
-     - ``LocalTarget``
-     - No
-   * - Network delay / loss
-     - ``SSHTarget``
-     - Yes
-   * - Process / service crash
-     - ``SSHTarget``
-     - Yes
-   * - CPU / memory / disk pressure
-     - ``SSHTarget``
-     - Yes
-
-
-Example 1 — LLM latency
-------------------------------------------
-
-Inject a 3-second delay into every call to a local Ollama model and verify
-your application's timeout logic fires correctly.
-
-.. code-block:: python
-
-   import os, time
-   os.environ["OPENAI_BASE_URL"] = "http://127.0.0.1:11434/v1"
-   os.environ["OPENAI_API_KEY"]  = "ollama"
-
-   from chaos_jungle import ChaosRunner, Scenario, LLMLatency, LocalTarget
-   import openai
-
-   fault  = LLMLatency(delay_s=3.0, port=18001, upstream="http://127.0.0.1:11434")
-   runner = ChaosRunner(Scenario("llm-latency", [fault]), LocalTarget())
-
-   def workload():
-       t0 = time.time()
-       try:
-           resp = openai.OpenAI().chat.completions.create(
-               model="qwen2.5:latest",
-               messages=[{"role": "user", "content": "What is 2+2?"}],
-               timeout=5.0,
-           )
-           return {"success": 1, "duration_s": round(time.time()-t0, 2)}
-       except Exception:
-           return {"success": 0, "duration_s": round(time.time()-t0, 2)}
-
-   result = runner.measure(workload, n_baseline=3, n_fault=3)
-   print(result.summary())
-   # fault_mean("duration_s") should be ≈ baseline + 3 s
-
-
-Example 2 — semantic quality measurement
------------------------------------------------------------
-
-Inject entity swaps into LLM context and measure the quality drop using a
-local judge model.
-
-.. code-block:: python
-
-   import os
-   os.environ["OPENAI_BASE_URL"] = "http://127.0.0.1:11434/v1"
-   os.environ["OPENAI_API_KEY"]  = "ollama"
-
-   from chaos_jungle import ChaosRunner, Scenario, SemanticCorrupt, LLMJudge, LocalTarget
-   import openai
-
-   CONTEXT  = "France is in Western Europe. Its capital is Paris."
-   QUESTION = "What is the capital of France?"
-
-   judge  = LLMJudge(model="qwen2.5:latest")
-   fault  = SemanticCorrupt(mode="entity_swap", port=18050,
-                            upstream="http://127.0.0.1:11434")
-   runner = ChaosRunner(Scenario("semantic-qa", [fault]), LocalTarget())
-
-   def workload():
-       resp = openai.OpenAI().chat.completions.create(
-           model="qwen2.5:latest",
-           messages=[
-               {"role": "system", "content": "Answer ONLY from the context."},
-               {"role": "user",   "content": f"Context: {CONTEXT}\nQuestion: {QUESTION}"},
-           ],
-       )
-       return {
-           "question": QUESTION,
-           "context":  CONTEXT,
-           "response": resp.choices[0].message.content or "",
-       }
-
-   result = runner.measure(workload, n_baseline=3, n_fault=3, evaluator=judge)
-   print(result.summary())
-   print("Quality gate passed:", result.passed_quality(min_faithfulness=0.70))
-
-
-Example 3 — network delay on a remote machine
-
-|linux-only| |sudo-required| |ssh|
------------------------------------------------------------
-
-Measure the latency impact of a 200 ms delay on an HTTP service running on
-a remote Ubuntu machine.
-
-.. code-block:: python
-
-   import time, requests
-   from chaos_jungle import ChaosRunner, Scenario, NetworkDelay, SSHTarget
-
-   target = SSHTarget("192.168.1.100", user="ubuntu")
-   fault  = NetworkDelay("200ms", jitter="20ms")
-   runner = ChaosRunner(Scenario("net-delay", [fault]), target)
-
-   def workload():
-       t0 = time.time()
-       r  = requests.get("http://192.168.1.100:8080/api/ping", timeout=5.0)
-       return {
-           "duration_s": round(time.time()-t0, 2),
-           "success":    int(r.status_code == 200),
-       }
-
-   result = runner.measure(workload, n_baseline=5, n_fault=5)
-   print(result.summary())
-   # fault_mean("duration_s") ≈ baseline_mean + 0.2 s
-
-
-Example 4 — service crash
-
-|linux-only| |sudo-required| |ssh|
----------------------------------------
-
-Stop nginx, measure health-check failures, then restore it automatically.
-
-.. code-block:: python
-
-   import time, requests
-   from chaos_jungle import ChaosRunner, Scenario, ServiceFault, SSHTarget
-
-   target = SSHTarget("192.168.1.100", user="ubuntu")
-   fault  = ServiceFault("nginx", action="stop")
-   runner = ChaosRunner(Scenario("nginx-stop", [fault]), target)
-
-   def workload():
-       try:
-           r = requests.get("http://192.168.1.100/health", timeout=2.0)
-           return {"success": int(r.status_code == 200)}
-       except Exception:
-           return {"success": 0}
-
-   result = runner.measure(workload, n_baseline=5, n_fault=5)
-   print(result.summary())
-   # fault_mean("success") should be 0.0 (nginx is down)
-   # After stop() nginx is automatically restarted
-
-
-Using the decorator
+Run a bounded fault
 -------------------
 
+``inject(...)`` temporarily intercepts supported ``httpx`` and ``requests``
+clients. The mock transport below keeps the demonstration local while still
+exercising the HTTP interception path.
+
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos
-   from chaos_jungle import NetworkDelay, StorageCorrupt
+   import time
+   import httpx
 
-   @chaos(NetworkDelay("100ms"), StorageCorrupt("*.pdb", "/data"))
-   def my_experiment():
-       run_my_pipeline()
+   from chaos_jungle.inject.intercept import Latency, inject
 
-   my_experiment()   # chaos starts, function runs, chaos stops automatically
+   client = httpx.Client(
+       transport=httpx.MockTransport(
+           lambda request: httpx.Response(200, json={"ok": True})
+       )
+   )
 
+   def workload():
+       start = time.perf_counter()
+       response = client.get("https://example.invalid/v1/check")
+       return response.status_code, time.perf_counter() - start
 
-Using the context manager
+   control_status, control_seconds = workload()
+   with inject(Latency(0.05), urls=["example.invalid"]):
+       fault_status, fault_seconds = workload()
+   client.close()
+
+   print(f"control: {control_status}, {control_seconds:.3f} s")
+   print(f"fault:   {fault_status}, {fault_seconds:.3f} s")
+
+Both calls should return 200; the faulted call should take roughly 50 ms
+longer. The context manager removes the interception on exit, including when
+the block raises an exception. The URL filter means other HTTP destinations
+are not selected by this example.
+
+Apply it to an application
 --------------------------
 
-.. code-block:: python
+Replace ``workload()`` with a real agent or service call made in the same
+Python process. Check that its HTTP client uses ``httpx`` or ``requests`` and
+that its destination matches the selected URL. A configured fault does not
+prove the call was reached.
 
-   from chaos_jungle.decorators import chaos_session
-   from chaos_jungle import NetworkLoss
+For a model client running in another process or container, choose a managed
+proxy or an explicit target instead; see :ref:`guide-choosing-injection`.
+For a fault that must remain active around a function or a longer-running
+workload, use :doc:`guides/choosing-injection` to choose between
+``@chaos``, ``chaos_session(...)``, and ``ChaosRunner``.
 
-   with chaos_session(NetworkLoss("5%"), scenario_name="loss-test") as session:
-       run_my_pipeline()
-       print(session.export("json"))
-
-
-CLI — separate mode
+Interpret the result
 --------------------
 
-Start chaos independently from your workload:
-
-.. code-block:: bash
-
-   # Terminal 1 — start chaos
-   chaos-jungle start --scenario net-delay --delay 100ms --jitter 10ms
-
-   # Terminal 2 — run anything
-   bash my-workflow.sh
-
-   # Terminal 1 — stop chaos
-   chaos-jungle stop
-
-Remote machine (SSH):
-
-.. code-block:: bash
-
-   chaos-jungle start --scenario net-delay --delay 100ms \
-       --target ssh://ubuntu@worker1
-
-Remote machine (HTTP daemon):
-
-.. code-block:: bash
-
-   # On the remote machine
-   cj-daemon --port 7777 --token mysecret
-
-   # From your machine
-   chaos-jungle start --scenario net-delay --delay 100ms \
-       --target http://worker1:7777
-
-
-What next?
-----------
-
-* **Guides** — see the fault-specific guides for detailed parameters,
-  what to observe, and pass/fail criteria
-* **Concepts** — understand the Fault / Target / Scenario / Runner model
-* **API Reference** — full class and method documentation
+The response status and timing above are application observations chosen for
+this example. In a real experiment, specify the workload's success condition
+separately from evidence that the fault was activated, reached, and manifested.
+CJ's session record and exposure verdict can help distinguish a genuine
+fault response from an operation that was never called. Cleanup and
+post-checks answer a separate question: whether the affected environment was
+restored. Continue with :doc:`concepts`, :doc:`guides/measurement`, and
+:doc:`guides/traces`.

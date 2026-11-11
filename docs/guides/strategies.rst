@@ -66,12 +66,12 @@ Percentage-Based / Stochastic
 ------------------------------
 
 Pass a ``probability`` between ``0.0`` (never) and ``1.0`` (always) to any
-:class:`~chaos_jungle.intercept.Behavior`.  The roll is made **once per
+:class:`~chaos_jungle.inject.intercept.Behavior`.  The roll is made **once per
 request** so ``before()`` and ``after()`` are always consistent.
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency, Unavailable
+   from chaos_jungle.inject.intercept import inject, Latency, Unavailable
 
    # 30 % of LLM calls get a 2-second delay
    with inject(Latency(2.0, probability=0.30)):
@@ -116,7 +116,7 @@ Custom behaviors inherit the same mechanism — set ``self.probability`` in
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import Behavior, inject
+   from chaos_jungle.inject.intercept import Behavior, inject
 
    class SlowOnce(Behavior):
        def __init__(self, probability=0.5):
@@ -143,7 +143,7 @@ on each iteration:
 .. code-block:: python
 
    import time
-   from chaos_jungle.intercept import inject, Latency
+   from chaos_jungle.inject.intercept import inject, Latency
 
    steps = [0.0, 0.10, 0.25, 0.50, 0.75, 1.0]   # fault probability ramp
    for p in steps:
@@ -168,8 +168,8 @@ With ``ChaosRunner`` and ``chaos_measure``:
    from chaos_jungle import ChaosRunner, Scenario
    from chaos_jungle.faults import LLMLatency
    from chaos_jungle.targets import LocalTarget
-   from chaos_jungle.decorators import chaos_measure
-   from chaos_jungle.intercept import inject, Latency
+   from chaos_jungle.inject.decorators import chaos_measure
+   from chaos_jungle.inject.intercept import inject, Latency
 
    for p in [0.0, 0.25, 0.50, 1.0]:
        @chaos_measure(scenario_name=f"ramp-p{int(p*100)}")
@@ -184,7 +184,7 @@ With ``ChaosRunner`` and ``chaos_measure``:
 Cycling / door
 --------------
 
-:func:`~chaos_jungle.runner.ChaosRunner.door` alternates between a *fault-ON*
+:func:`~chaos_jungle.core.runner.ChaosRunner.door` alternates between a *fault-ON*
 phase and a *rest* phase for ``cycles`` iterations.  It is useful for testing
 whether a system recovers after a fault clears.
 
@@ -213,7 +213,7 @@ whether a system recovers after a fault clears.
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import door, Latency
+   from chaos_jungle.inject.intercept import door, Latency
 
    door(
        Latency(2.0),
@@ -233,8 +233,8 @@ using ``inject()`` as a context manager or the ``@chaos`` decorator.
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, RateLimit
-   from chaos_jungle.decorators import chaos
+   from chaos_jungle.inject.intercept import inject, RateLimit
+   from chaos_jungle.inject.decorators import chaos
    from chaos_jungle.faults import NetworkDelay
 
    # Context manager — explicit start and end
@@ -256,7 +256,7 @@ Restrict faults to specific providers or URLs using the ``urls`` parameter of
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Unavailable
+   from chaos_jungle.inject.intercept import inject, Unavailable
 
    # Only OpenAI calls fail
    with inject(Unavailable(), urls=["api.openai.com"]):

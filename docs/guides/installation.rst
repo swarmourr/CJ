@@ -7,7 +7,8 @@ package and its dependencies do not change the system Python installation.
 Install the current source
 --------------------------
 
-Until a PyPI release is available, install from the GitHub repository:
+Until a PyPI release is available, contributors with repository access can
+install the current source from the Pegasus repository:
 
 .. code-block:: bash
 
@@ -15,7 +16,11 @@ Until a PyPI release is available, install from the GitHub repository:
    python3 -m venv .venv
    . .venv/bin/activate
    python -m pip install --upgrade pip
-   python -m pip install git+https://github.com/swarmourr/CJ.git
+   python -m pip install git+https://github.com/pegasus-isi/Chaos-jungle.git@main
+
+The repository currently requires access; a public PyPI installation is not
+yet available. A checkout of the same revision can instead be installed with
+``python -m pip install -e .`` from its root directory.
 
 On Windows, activate the environment with ``.venv\Scripts\activate``. If
 ``python3`` selects an older interpreter, use the command for a Python 3.9+

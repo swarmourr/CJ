@@ -22,7 +22,7 @@ for the duration of the test function and automatically removed on exit.
 .. code-block:: python
 
    import pytest
-   from chaos_jungle.intercept import Latency, RateLimit, Unavailable
+   from chaos_jungle.inject.intercept import Latency, RateLimit, Unavailable
 
    @pytest.mark.chaos(Latency(3.0))
    def test_agent_handles_slow_llm(agent):
@@ -60,7 +60,7 @@ faults mid-test, or scope the fault to part of the test:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency, RateLimit
+   from chaos_jungle.inject.intercept import inject, Latency, RateLimit
 
    def test_latency_stays_under_threshold(agent):
        with inject(Latency(2.0), measure=True) as m:
@@ -118,8 +118,8 @@ Oracles inspect raw workload outputs for semantic violations:
 .. code-block:: python
 
    from chaos_jungle import ChaosRunner, Scenario, LLMLatency, LocalTarget
-   from chaos_jungle.oracles import NoPIILeakage, MaxCost, NoPromptInjectionFollowed
-   from chaos_jungle.intercept import inject, PromptInjection
+   from chaos_jungle.analysis.oracles import NoPIILeakage, MaxCost, NoPromptInjectionFollowed
+   from chaos_jungle.inject.intercept import inject, PromptInjection
 
    def test_no_pii_leakage_under_injection(workload):
        runner = ChaosRunner(
@@ -160,7 +160,7 @@ Explore random fault combinations and fail the build on the first failure:
 
    from chaos_jungle import ChaosFuzzer, LocalTarget
    from chaos_jungle.faults.llm import LLMLatency, LLMRateLimit, LLMUnavailable
-   from chaos_jungle.intercept import ToolMutate
+   from chaos_jungle.inject.intercept import ToolMutate
 
    def test_no_oracle_failures_under_random_faults(workload):
        fuzzer = ChaosFuzzer(

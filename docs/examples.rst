@@ -1,10 +1,3 @@
-.. |any-os|        replace:: :bdg-success:`Any OS`
-.. |no-sudo|       replace:: :bdg-success:`No sudo`
-.. |linux-only|    replace:: :bdg-info:`Linux`
-.. |sudo-required| replace:: :bdg-warning:`sudo`
-.. |ssh|           replace:: :bdg-info:`SSH`
-.. |ci|            replace:: :bdg-success:`CI`
-
 Examples
 ========
 
@@ -607,7 +600,7 @@ Decorator style
 
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos
+   from chaos_jungle.inject.decorators import chaos
    from chaos_jungle import NetworkDelay, StorageCorrupt, SSHTarget
 
    @chaos(
@@ -627,7 +620,7 @@ Context manager style
 
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos_session
+   from chaos_jungle.inject.decorators import chaos_session
    from chaos_jungle import NetworkLoss, SSHTarget
 
    with chaos_session(NetworkLoss("5%"), target=SSHTarget("worker1", user="ubuntu")) as runner:
@@ -641,7 +634,7 @@ Context manager style
 
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos_measure
+   from chaos_jungle.inject.decorators import chaos_measure
    from chaos_jungle import NetworkDelay
 
    @chaos_measure(NetworkDelay("100ms"), scenario_name="latency-E1")

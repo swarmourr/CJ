@@ -1,21 +1,26 @@
 Concepts
 ========
 
-chaos-jungle is built around four simple abstractions: **Fault**, **Target**,
-**Scenario**, and **ChaosRunner**.  Everything else — metrics, quality scoring,
-the session database — builds on top of these four.
+Chaos Jungle connects a **Fault** to a **Target** through a **Scenario** and
+executes it with **ChaosRunner**. A session records the attempted intervention,
+boundary evidence, and cleanup. The application outcome is supplied by the
+experimenter; it is not inferred from fault configuration.
 
 ----
 
 Fault
 -----
 
-A **fault** is one injectable failure mode.  Every fault implements three
+A **fault** is one injectable failure mode. Every fault implements lifecycle
 methods:
 
 * ``start(target)`` — inject the fault
 * ``stop(target)`` — remove the fault
 * ``revert(target)`` — undo any persistent side effects (e.g. restore corrupted files)
+
+Mechanisms may additionally implement ``verify_active(target)`` and
+``verify_recovered(target)``. These checks do not by themselves establish that
+the workload reached the fault or that a task recovered.
 
 Faults are grouped by the layer they target:
 
@@ -344,8 +349,10 @@ Mutation modes: ``nullify``, ``delete``, ``negate``, ``type_mismatch``, ``inject
 Target
 ------
 
-A **target** is a machine.  It knows how to run commands, transfer files,
-and execute privileged operations (``sudo``).
+A **target** identifies where an intervention is placed. It may execute
+commands on the local host, an authorized remote machine, or an explicitly
+selected container. A model proxy instead intercepts traffic directed through
+it; it does not modify the external model provider.
 
 .. list-table::
    :header-rows: 1
@@ -363,14 +370,21 @@ and execute privileged operations (``sudo``).
    * - ``HTTPTarget``
      - HTTP requests to a running ``cj-daemon``
      - Firewall-protected machines; GitLab CI runners
+   * - ``DockerTarget``
+     - ``docker exec`` into one named container
+     - Network, resource, or process faults inside that container
+   * - ``DockerContainerControllerTarget``
+     - Docker control of one named container
+     - Container pause, stop, or kill
 
 .. note::
 
-   **LLM / AI faults** (proxy-based) work on **any OS** with ``LocalTarget``
-   
+   **LLM / AI faults** (proxy-based) require the workload's model traffic to
+   route through the selected proxy.
 
-   **Infrastructure faults** (network, storage, process, resources) require
-   a **Linux target** and ``sudo`` for privileged commands.
+   **Infrastructure faults** require the relevant target-side tools and
+   permissions. Linux and elevated privileges are needed for many, but not
+   every mechanism.
 
 ----
 
@@ -384,10 +398,7 @@ Every scenario receives a **UUID** automatically at creation time.
 
    from chaos_jungle import Scenario, NetworkDelay, NetworkLoss
 
-   scenario = Scenario("wan-degraded", faults=[
-       NetworkDelay("200ms", jitter="20ms"),
-       NetworkLoss("2%"),
-   ])
+   scenario = Scenario("wan-degraded", faults=[NetworkDelay("200ms")])
    print(scenario.id)   # "a3f7c2d1-..." — auto-generated, unique across machines
 
 Multiple faults in a scenario are injected in order and removed in reverse
@@ -462,14 +473,16 @@ The **runner** orchestrates the full fault lifecycle:
 It writes every action to the SQLite session database and provides three
 usage styles:
 
-**1. Explicit start / stop** — full manual control:
+**1. Explicit start / stop** — full manual control (use ``finally`` for cleanup):
 
 .. code-block:: python
 
    runner = ChaosRunner(scenario, target)
    runner.start()
-   run_workload()
-   runner.stop()
+   try:
+       run_workload()
+   finally:
+       runner.stop()
 
 **2. Context manager** — fault active for the duration of the block:
 
@@ -499,8 +512,27 @@ usage styles:
    print(result.summary())
    # duration_s  baseline=0.12s  fault=0.34s  delta=+183%
 
-Styles 1 / 2 / 3 are equivalent — choose whichever fits your code.
-Style 4 adds statistical measurement on top.
+The interfaces share a managed fault lifecycle but differ in scope and
+measurement. ``measure()`` summarizes repeated observations; it does not
+make an application-specific correctness judgment or establish fault exposure
+without boundary evidence.
+
+----
+
+Exposure and restoration
+------------------------
+
+CJ distinguishes **activation** (the mechanism is installed), **triggering**
+(the selected operation was reached), and **manifestation** (the intended
+effect was observed). The separate exposure report can classify an attempted
+intervention as ``valid``, ``untriggered``, ``invalid``, or ``inconclusive``.
+Do not interpret a successful task after an untriggered fault as fault
+tolerance, or a failed task without verified exposure as a fault effect.
+
+``stop()`` and ``revert()`` are cleanup actions. A post-check is needed to
+verify environmental recovery, and even verified restoration does not mean
+the agent resumed its task. See :ref:`guide-choosing-injection` for evidence
+requirements at each injection boundary.
 
 ----
 
@@ -510,15 +542,9 @@ Session Database
 Every experiment is recorded in a SQLite database at
 ``~/.chaos-jungle/chaos_jungle.db``.
 
-Schema:
-
-.. code-block:: sql
-
-   sessions (id, name, started_at, stopped_at, status)
-   faults   (id, session_id, kind, parameters, started_at, stopped_at)
-   events   (id, session_id, fault_id, timestamp, message)
-   results  (id, session_id, data_json, recorded_at)
-   commands (id, session_id, cmd, stdout, stderr, rc, executed_at)
+The database includes sessions, faults, events, application results, target
+commands, traces, model and tool calls, resource samples, and group evidence.
+Not every mechanism produces every kind of evidence.
 
 ``results`` rows are written by ``runner.record_result(metrics_dict)`` and
 appear in exported CSV files and the web dashboard.

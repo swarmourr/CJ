@@ -77,7 +77,7 @@ Quick start
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency, RateLimit, Unavailable
+   from chaos_jungle.inject.intercept import inject, Latency, RateLimit, Unavailable
 
    with inject(Latency(3.0)):
        # ALL of these are affected — no SDK-specific code
@@ -144,7 +144,7 @@ Restrict interception to a single provider:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Unavailable
+   from chaos_jungle.inject.intercept import inject, Unavailable
 
    # Only OpenAI calls fail — Anthropic / local models are unaffected
    with inject(Unavailable(), urls=["api.openai.com"]):
@@ -154,7 +154,7 @@ Override the full list:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency, DEFAULT_LLM_HOSTS
+   from chaos_jungle.inject.intercept import inject, Latency, DEFAULT_LLM_HOSTS
 
    # Add a custom internal gateway to the default list
    with inject(Latency(2.0), urls=DEFAULT_LLM_HOSTS + ["llm-gateway.internal"]):
@@ -169,7 +169,7 @@ Pass multiple behaviors to combine effects:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency, RateLimit
+   from chaos_jungle.inject.intercept import inject, Latency, RateLimit
 
    with inject(Latency(1.0), RateLimit(after_n=3)):
        # First 3 calls: slow (1 s latency)
@@ -196,7 +196,7 @@ on a single thread and the patches are applied before the coroutine starts:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency
+   from chaos_jungle.inject.intercept import inject, Latency
 
    async def test_async_agent():
        with inject(Latency(2.0)):
@@ -271,7 +271,7 @@ parameters let you control exactly *which* calls are affected:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, RateLimit, Latency
+   from chaos_jungle.inject.intercept import inject, RateLimit, Latency
 
    # Skip first 2 calls, rate-limit from call 3 onward
    with inject(RateLimit(after_n=0), after_n_calls=2):
@@ -310,7 +310,7 @@ receives plausible but incorrect data and may silently generate wrong answers.
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, ToolMutate
+   from chaos_jungle.inject.intercept import inject, ToolMutate
 
    # Garble all tool results (obvious corruption)
    with inject(ToolMutate()):
@@ -357,7 +357,7 @@ injected instructions, leaks its system prompt, or violates guardrails.
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, PromptInjection
+   from chaos_jungle.inject.intercept import inject, PromptInjection
 
    # Classic ignore-previous-instructions attack
    with inject(PromptInjection(
@@ -403,7 +403,7 @@ overhead, not microseconds).
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Unauthorized, Forbidden, AuthExpiry
+   from chaos_jungle.inject.intercept import inject, Unauthorized, Forbidden, AuthExpiry
 
    # All requests blocked with 401 immediately
    with inject(Unauthorized()):
@@ -431,11 +431,11 @@ All three accept ``response_delay_s`` (default 0.1 s) and ``jitter_s``
 Custom behavior
 ---------------
 
-Subclass :class:`~chaos_jungle.intercept.Behavior` for full control:
+Subclass :class:`~chaos_jungle.inject.intercept.Behavior` for full control:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import Behavior, inject
+   from chaos_jungle.inject.intercept import Behavior, inject
 
    class SlowThenFail(Behavior):
        """Add latency on the first call, return 503 on all subsequent ones."""
@@ -451,7 +451,7 @@ Subclass :class:`~chaos_jungle.intercept.Behavior` for full control:
 
        def after(self, url, response):
            if not self._first:
-               from chaos_jungle.intercept import _mock_response
+               from chaos_jungle.inject.intercept import _mock_response
                return _mock_response(503, {"error": "overloaded"}, response)
            return response
 
@@ -464,7 +464,7 @@ how ``ToolMutate`` and ``PromptInjection`` work internally:
 .. code-block:: python
 
    import json
-   from chaos_jungle.intercept import Behavior, inject, _rebuild_request
+   from chaos_jungle.inject.intercept import Behavior, inject, _rebuild_request
 
    class RedactPII(Behavior):
        """Replace email addresses in the prompt before sending."""
@@ -485,18 +485,16 @@ how ``ToolMutate`` and ``PromptInjection`` work internally:
 
 ----
 
-----
-
 Optional measurement
 --------------------
 
 Pass ``measure=True`` to collect metrics automatically from the ``with``
 block — no workload function needed.  ``inject()`` returns an
-:class:`~chaos_jungle.intercept.InjectResult` via the context variable:
+:class:`~chaos_jungle.inject.intercept.InjectResult` via the context variable:
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, RateLimit, Latency
+   from chaos_jungle.inject.intercept import inject, RateLimit, Latency
 
    with inject(RateLimit(after_n=2), measure=True) as m:
        agent.run("Book a flight")
@@ -538,7 +536,7 @@ collects nothing — existing code is unchanged.
 
    ``inject(measure=True)`` answers *"how did it behave?"* — it collects
    metrics but has no baseline and no delta.  For baseline-vs-fault
-   comparison use :class:`~chaos_jungle.runner.ChaosRunner` ``.measure()``.
+   comparison use :class:`~chaos_jungle.core.runner.ChaosRunner` ``.measure()``.
 
 ----
 

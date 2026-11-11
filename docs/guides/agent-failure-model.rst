@@ -293,7 +293,7 @@ simultaneously — and measure the impact against a clean baseline.
 
 .. code-block:: python
 
-   from chaos_jungle.intercept import inject, Latency, RateLimit
+   from chaos_jungle.inject.intercept import inject, Latency, RateLimit
    from chaos_jungle import ChaosRunner, Scenario, NetworkDelay, SSHTarget
 
    # Layer 1: slow LLM + Layer 9: slow network at the same time

@@ -291,7 +291,7 @@ egress.
 
 .. code-block:: python
 
-   from chaos_jungle import NetworkBandwidthLimit
+   from chaos_jungle.faults import NetworkBandwidthLimit
 
    fault = NetworkBandwidthLimit("1mbit")          # 1 Mbit/s cap
    fault = NetworkBandwidthLimit("500kbit", iface="eth0")
@@ -329,7 +329,7 @@ introducing some queue depth.
 
 .. code-block:: python
 
-   from chaos_jungle import NetworkReorder
+   from chaos_jungle.faults import NetworkReorder
 
    fault = NetworkReorder("25%")                   # 25 % of packets reordered
    fault = NetworkReorder("50%", delay="100ms")    # with custom queue delay
@@ -374,7 +374,7 @@ multiple concurrent experiments do not interfere with each other.
 
 .. code-block:: python
 
-   from chaos_jungle import NetworkReset
+   from chaos_jungle.faults import NetworkReset
 
    fault = NetworkReset()                   # RST all outgoing TCP
    fault = NetworkReset(dport=443)          # RST outgoing HTTPS only
@@ -422,7 +422,7 @@ Like ``NetworkReset``, each instance uses a unique rule comment so
 
 .. code-block:: python
 
-   from chaos_jungle import NetworkPartition
+   from chaos_jungle.faults import NetworkPartition
 
    fault = NetworkPartition("10.0.0.2")                        # block one node
    fault = NetworkPartition("10.0.0.2", block_input=False)     # outbound only

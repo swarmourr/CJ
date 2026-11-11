@@ -41,7 +41,7 @@ Or from Python:
 
 .. code-block:: python
 
-   from chaos_jungle.dashboard import run
+   from chaos_jungle.control.dashboard import run
    run(host="127.0.0.1", port=8050)
 
 Tabs
@@ -189,7 +189,7 @@ Metrics
 ~~~~~~~
 
 Shows metric results recorded via
-:func:`~chaos_jungle.runner.ChaosRunner.record_result`.
+:func:`~chaos_jungle.core.runner.ChaosRunner.record_result`.
 
 When a result contains ``baseline_*`` / ``chaos_*`` / ``delta_*`` keys
 (produced automatically by ``@chaos_measure`` or the Ollama test script),
@@ -251,7 +251,7 @@ You can embed the dashboard inside your own application:
 .. code-block:: python
 
    import threading
-   from chaos_jungle.dashboard import run
+   from chaos_jungle.control.dashboard import run
 
    # Start in a background thread
    t = threading.Thread(target=run, kwargs={"port": 8050}, daemon=True)

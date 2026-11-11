@@ -11,10 +11,11 @@ and accepts fault control commands from your local machine via ``HTTPTarget``.
 Starting the daemon
 -------------------
 
+Install the current source on the target as described in
+:doc:`../guides/installation` before starting the daemon.
+
 .. code-block:: bash
 
-   # Install and start
-   pip install chaos-jungle
    cj-daemon --port 7777 --token mysecret
 
    # Or via environment variable

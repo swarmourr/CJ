@@ -148,7 +148,7 @@ uses them is affected automatically — no proxy port, no SDK reconfiguration.
        PATCH -->|"real TCP connection"| EP
 
 Faults at this level: ``Latency``, ``Jitter``, ``RateLimit``,
-``Unavailable``, ``Timeout``, ``CorruptResponse`` (from ``chaos_jungle.intercept``).
+``Unavailable``, ``Timeout``, ``CorruptResponse`` (from ``chaos_jungle.inject.intercept``).
 
 Works on any OS.  No port setup needed.
 
@@ -301,8 +301,9 @@ removes the padding file on stop.
 
 **Zero infrastructure for LLM tests.**
 ``inject()`` works on any OS with no ``sudo``, no
-port forwarding, and no proxy process.  Just ``pip install chaos-jungle`` and
-wrap your code.
+port forwarding, and no proxy process. After installing CJ as described in
+:doc:`guides/installation`, wrap the supported client calls in an injection
+block.
 
 **Observability first.**
 Every action is written to SQLite.  The dashboard, CSV export, and CLI all

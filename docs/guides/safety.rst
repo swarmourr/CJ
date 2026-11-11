@@ -8,7 +8,7 @@ it would be possible to accidentally run destructive faults (disk fill,
 process kill, storage corruption) against production targets or sensitive
 paths.
 
-:class:`~chaos_jungle.guardrails.SafetyPolicy` provides a second layer
+:class:`~chaos_jungle.core.guardrails.SafetyPolicy` provides a second layer
 of defence beyond the existing conflict detection — it enforces *what kinds
 of faults are permitted* and optionally enables a **dry-run mode** where
 nothing is actually injected.
@@ -49,7 +49,7 @@ SafetyPolicy
 
 .. code-block:: python
 
-   from chaos_jungle.guardrails import SafetyPolicy
+   from chaos_jungle.core.guardrails import SafetyPolicy
    from chaos_jungle import ChaosRunner, Scenario
    from chaos_jungle.faults import NetworkDelay
    from chaos_jungle.targets import LocalTarget
@@ -69,7 +69,7 @@ If a forbidden fault is included:
 .. code-block:: python
 
    from chaos_jungle.faults import DiskFull
-   from chaos_jungle.guardrails import DangerError
+   from chaos_jungle.core.guardrails import DangerError
 
    try:
        runner = ChaosRunner(
@@ -94,7 +94,7 @@ Parameters
    * - ``max_danger``
      - ``1``
      - Maximum ``danger_level`` permitted. Faults above this level raise
-       :exc:`~chaos_jungle.guardrails.DangerError` before injection.
+       :exc:`~chaos_jungle.core.guardrails.DangerError` before injection.
    * - ``dry_run``
      - ``False``
      - When ``True``, calls :meth:`~chaos_jungle.faults.base.Fault.dry_run`
@@ -119,7 +119,7 @@ injecting anything:
 
 .. code-block:: python
 
-   from chaos_jungle.guardrails import SafetyPolicy
+   from chaos_jungle.core.guardrails import SafetyPolicy
 
    policy = SafetyPolicy(dry_run=True)
    runner = ChaosRunner(scenario, LocalTarget(), policy=policy)

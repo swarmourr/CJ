@@ -261,7 +261,7 @@ Using with measure()
 
    from chaos_jungle import Scenario, ChaosRunner
    from chaos_jungle.faults.skill import SkillBadOutput
-   from chaos_jungle.oracles import CorrectSkillSelected, SkillFallbackRate
+   from chaos_jungle.analysis.oracles import CorrectSkillSelected, SkillFallbackRate
    from chaos_jungle.targets import LocalTarget
 
    runner = ChaosRunner(
@@ -299,19 +299,19 @@ Three oracles are specifically designed for skill chaos experiments:
 
    * - Oracle
      - What it checks
-   * - :class:`~chaos_jungle.oracles.CorrectSkillSelected`
+   * - :class:`~chaos_jungle.analysis.oracles.CorrectSkillSelected`
      - The ``"skill_used"`` key in each run dict matches the expected skill
        name.  Fails if the agent misrouted to a different tool.
-   * - :class:`~chaos_jungle.oracles.SkillFallbackRate`
+   * - :class:`~chaos_jungle.analysis.oracles.SkillFallbackRate`
      - Fraction of runs where ``"skill_fallback": True`` does not exceed
        ``max_rate``.  Ensures the agent does not fall back too aggressively.
-   * - :class:`~chaos_jungle.oracles.NoSkillVersionMismatch`
+   * - :class:`~chaos_jungle.analysis.oracles.NoSkillVersionMismatch`
      - Scans ``"response"`` and ``"skill_error"`` fields for patterns
        indicating the agent received a stale/incompatible tool schema.
 
 .. code-block:: python
 
-   from chaos_jungle.oracles import (
+   from chaos_jungle.analysis.oracles import (
        CorrectSkillSelected,
        SkillFallbackRate,
        NoSkillVersionMismatch,

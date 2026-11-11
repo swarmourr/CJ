@@ -78,7 +78,7 @@ Or with the ``@chaos_measure`` decorator:
 
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos_measure
+   from chaos_jungle.inject.decorators import chaos_measure
    from chaos_jungle.faults.llm import LLMRateLimit
 
    @chaos_measure(LLMRateLimit(n=3), scenario_name="rate-limit-test")
@@ -286,10 +286,10 @@ API error instead of forwarding it.
 
    from chaos_jungle.faults.llm import ToolFault
 
-   # Fail every tool call
+   # Reject model requests carrying a tool-result message
    fault = ToolFault()
 
-   # Fail only the "search" tool
+   # Reject only requests carrying a "search" tool result
    fault = ToolFault(tool_name="search")
 
 **Tests:** tool-failure recovery, error propagation through agent loops,

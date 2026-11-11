@@ -73,7 +73,7 @@ All assertion methods return ``self`` so they can be chained.
 Checking manually
 -----------------
 
-You can call ``.check()`` on any :class:`~chaos_jungle.runner.MeasurementResult`
+You can call ``.check()`` on any :class:`~chaos_jungle.core.runner.MeasurementResult`
 without passing ``hypothesis=`` to ``runner.measure()``:
 
 .. code-block:: python

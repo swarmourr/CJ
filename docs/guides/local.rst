@@ -78,7 +78,7 @@ Decorator style
 
 .. code-block:: python
 
-   from chaos_jungle.decorators import chaos
+   from chaos_jungle.inject.decorators import chaos
    from chaos_jungle import LLMLatency
 
    @chaos(LLMLatency(delay_s=3.0, port=18001, upstream="http://127.0.0.1:11434"))

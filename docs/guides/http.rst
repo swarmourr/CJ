@@ -18,9 +18,10 @@ Use this when:
 Install the daemon on the target
 ----------------------------------
 
+Install CJ on the target using :doc:`installation`, then start the daemon:
+
 .. code-block:: bash
 
-   pip install chaos-jungle
    cj-daemon --port 7777 --token mysecret
 
 To run as a systemd service so the daemon starts automatically on boot:
