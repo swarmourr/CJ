@@ -4,6 +4,10 @@ stages:
   - verify
   - publish
 
+default:
+  tags:
+    - docker
+
 unit_tests:
   stage: test
   image: python:${PYTHON_VERSION}-slim
