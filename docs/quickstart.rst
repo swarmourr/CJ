@@ -59,30 +59,9 @@ Two paths — pick yours
 Installation
 ------------
 
-**From PyPI:**
-
-.. code-block:: bash
-
-   pip install chaos-jungle
-
-**Directly from GitHub (latest):**
-
-.. code-block:: bash
-
-   pip install git+https://github.com/swarmourr/CJ.git
-
-   # force-reinstall to pick up the latest commit
-   pip install --force-reinstall git+https://github.com/swarmourr/CJ.git
-
-   # on systems with externally managed Python (Ubuntu 23+, Debian 12+)
-   pip install --break-system-packages git+https://github.com/swarmourr/CJ.git
-
-**With extras:**
-
-.. code-block:: bash
-
-   pip install "chaos-jungle[docs]"   # Sphinx docs
-   pip install "chaos-jungle[dev]"    # dev tools
+Install the current source in a virtual environment and verify the CLI using
+:doc:`guides/installation`. A PyPI installation command will be available
+after the first release.
 
 Requirements
 ~~~~~~~~~~~~

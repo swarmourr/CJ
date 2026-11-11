@@ -5,6 +5,8 @@ builds a wheel and source distribution, validates their metadata, and installs
 the wheel for a smoke test. Download the `build_dist` job artifacts to inspect
 the exact files that would be published. Runtime scripts under
 `chaos_jungle/scripts/`, including `bpf/flow_modify.c`, must remain in the wheel.
+The `docs_build` job also renders this Sphinx manual and makes its HTML output
+available as a GitLab job artifact for review.
 
 The source distribution is limited to the package, README, license, and build
 metadata. It does not need experiment archives, evaluation data, local virtual

@@ -197,14 +197,17 @@ Add an LLM judge to score response quality across the same runs:
 Installation
 ------------
 
+Use Python 3.9 or newer in a virtual environment. Until a PyPI release is
+available, install the current source from GitHub:
+
 .. code-block:: bash
 
-   pip install chaos-jungle
+   python3 -m venv .venv
+   . .venv/bin/activate
+   python -m pip install git+https://github.com/swarmourr/CJ.git
 
-   # or latest from GitHub
-   pip install git+https://github.com/swarmourr/CJ.git
-
-Requirements: Python 3.9+.
+See :doc:`guides/installation` for verification, development installs, and
+target-side requirements.
 
 .. list-table::
    :widths: 50 25 25
@@ -246,6 +249,7 @@ Where to go next
    :maxdepth: 2
    :caption: Getting Started
 
+   guides/installation
    quickstart
    guides/choosing-injection
    concepts
@@ -344,3 +348,4 @@ Where to go next
    :caption: Project
 
    changelog
+   publishing
