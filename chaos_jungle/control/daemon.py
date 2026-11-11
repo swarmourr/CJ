@@ -31,7 +31,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Annotated
+from typing import Annotated, Optional
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request, UploadFile, Form
@@ -88,7 +88,7 @@ app = FastAPI(title="chaos-jungle daemon", version="2.0.0")
 
 # ── Auth + safety middleware ──────────────────────────────────────
 
-def _check_auth(authorization: str | None) -> None:
+def _check_auth(authorization: Optional[str]) -> None:
     if _DEV_MODE:
         return
     if not _TOKEN:
@@ -167,7 +167,7 @@ class EmergencyStopRequest(BaseModel):
 @app.post("/emergency-stop")
 def emergency_stop(
     body: EmergencyStopRequest,
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Stop and revert all active experiments immediately."""
     _check_auth(authorization)
@@ -202,7 +202,7 @@ def emergency_stop(
 
 @app.delete("/emergency-stop")
 def clear_emergency_stop(
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Clear a previously set emergency stop."""
     _check_auth(authorization)
@@ -228,7 +228,7 @@ class ExecResponse(BaseModel):
 @app.post("/exec", response_model=ExecResponse)
 def exec_cmd(
     body: ExecRequest,
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Run a shell command on this machine and return the result.
 
@@ -275,7 +275,7 @@ def exec_cmd(
 def upload_file(
     file: UploadFile,
     dest: Annotated[str, Form()],
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Upload a file to the daemon machine (allowlisted paths only)."""
     _check_auth(authorization)
@@ -289,7 +289,7 @@ def upload_file(
 @app.get("/files/download")
 def download_file(
     path: str,
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Download a file from the daemon machine (allowlisted paths only)."""
     _check_auth(authorization)
@@ -311,7 +311,7 @@ class ScenarioCreateRequest(BaseModel):
 
 
 class ScenarioRunRequest(BaseModel):
-    duration: str | None = None
+    duration: Optional[str] = None
     lease_s: float = _LEASE_DEFAULT_S
 
 
@@ -322,7 +322,7 @@ class HeartbeatRequest(BaseModel):
 @app.post("/scenarios", status_code=201)
 def create_scenario(
     body: ScenarioCreateRequest,
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Register a scenario definition (with its faults) in the daemon store."""
     _check_auth(authorization)
@@ -334,7 +334,7 @@ def create_scenario(
 
 @app.get("/scenarios")
 def list_scenarios(
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """List all registered scenario definitions and their current status."""
     _check_auth(authorization)
@@ -354,7 +354,7 @@ def list_scenarios(
 @app.get("/scenarios/{scenario_id}")
 def get_scenario(
     scenario_id: str,
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Get the definition and status of a single scenario."""
     _check_auth(authorization)
@@ -371,7 +371,7 @@ def get_scenario(
 @app.get("/scenarios/{scenario_id}/status")
 def scenario_status(
     scenario_id: str,
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Return just the lifecycle status of a scenario."""
     _check_auth(authorization)
@@ -386,7 +386,7 @@ def scenario_status(
 def run_scenario(
     scenario_id: str,
     body: ScenarioRunRequest = ScenarioRunRequest(),
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Start a previously registered scenario, returning immediately.
 
@@ -456,7 +456,7 @@ def run_scenario(
 @app.post("/scenarios/{scenario_id}/stop")
 def stop_scenario(
     scenario_id: str,
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Stop and revert a running scenario. Invokes the actual ChaosRunner.stop()."""
     _check_auth(authorization)
@@ -493,7 +493,7 @@ def stop_scenario(
 def heartbeat(
     scenario_id: str,
     body: HeartbeatRequest = HeartbeatRequest(),
-    authorization: Annotated[str | None, Header()] = None,
+    authorization: Annotated[Optional[str], Header()] = None,
 ):
     """Renew the lease for a running scenario.
 
