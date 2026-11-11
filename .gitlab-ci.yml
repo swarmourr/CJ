@@ -19,12 +19,49 @@ unit_tests:
     - python -m pip install -e ".[dev]"
     - python -m pytest tests/ -q --strict-markers
 
+real_experiment:
+  stage: test
+  image: python:3.12-slim
+  timeout: 5m
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: manual
+      allow_failure: true
+  script:
+    - python -m pip install -e .
+    - python ci/run_real_experiment.py --output-dir ci-artifacts/real-experiment
+  artifacts:
+    when: always
+    paths:
+      - ci-artifacts/real-experiment/
+    expire_in: 1 week
+
+real_llm_experiment:
+  stage: test
+  image: python:3.12-slim
+  timeout: 5m
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: manual
+      allow_failure: true
+  script:
+    - python -m pip install -e .
+    - python ci/run_real_experiment.py --mode live --output-dir ci-artifacts/real-llm-experiment
+  artifacts:
+    when: always
+    paths:
+      - ci-artifacts/real-llm-experiment/
+    expire_in: 1 week
+
 lint:
   stage: test
   image: python:3.12-slim
   script:
     - python -m pip install "ruff==0.17.4"
     - python ci/check_ruff_baseline.py
+    - python -m ruff check ci/run_real_experiment.py
 
 docs_build:
   stage: test
