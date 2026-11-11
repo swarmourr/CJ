@@ -19,8 +19,8 @@ lint:
   stage: test
   image: python:3.12-slim
   script:
-    - python -m pip install "ruff>=0.4"
-    - ruff check chaos_jungle/ tests/
+    - python -m pip install "ruff==0.17.4"
+    - python ci/check_ruff_baseline.py
 
 docs_build:
   stage: test

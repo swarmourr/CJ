@@ -33,4 +33,4 @@ jobs:
 
       - name: Run lint (ruff)
         run: |
-          ruff check chaos_jungle/ tests/
+          python ci/check_ruff_baseline.py

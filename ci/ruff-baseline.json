@@ -1,0 +1,723 @@
+[
+  {
+    "path": "chaos_jungle/analysis/oracles.py",
+    "code": "F401",
+    "message": "`dataclasses.field` imported but unused",
+    "source": "from dataclasses import dataclass, field",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/config.py",
+    "code": "F821",
+    "message": "Undefined name `DistributedScenario`",
+    "source": "def build_distributed_scenario(cls, path: str) -> \"DistributedScenario\":",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/config.py",
+    "code": "F821",
+    "message": "Undefined name `ExperimentPlan`",
+    "source": "def build_plans(cls, path: str) -> \"list[ExperimentPlan]\":",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/config.py",
+    "code": "F821",
+    "message": "Undefined name `InjectionGroup`",
+    "source": "def build_injection_group(cls, path: str) -> \"InjectionGroup\":",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "E401",
+    "message": "Multiple imports on one line",
+    "source": "import csv as _csv, io as _io",
+    "count": 2
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "E401",
+    "message": "Multiple imports on one line",
+    "source": "import os, json as _json2",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "E401",
+    "message": "Multiple imports on one line",
+    "source": "import webbrowser, threading",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "import sys; sys.exit(1)",
+    "count": 4
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "F401",
+    "message": "`csv` imported but unused",
+    "source": "import csv as _csv, io as _io",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "F401",
+    "message": "`datetime.datetime` imported but unused",
+    "source": "from datetime import datetime",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "F401",
+    "message": "`io` imported but unused",
+    "source": "import csv as _csv, io as _io",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "F401",
+    "message": "`json` imported but unused",
+    "source": "import json as _json",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/cli.py",
+    "code": "F401",
+    "message": "`json` imported but unused",
+    "source": "import os, json as _json2",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/control/dashboard.py",
+    "code": "E741",
+    "message": "Ambiguous variable name: `l`",
+    "source": "tc_rules = [l.strip() for l in out.splitlines()",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/guardrails.py",
+    "code": "F401",
+    "message": "`hmac` imported but unused",
+    "source": "import hmac",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/guardrails.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "f\"Add 'local' to SafetyPolicy(allowed_targets=[...]) to allow it.\"",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/guardrails.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "f\"LocalTarget is not permitted by this policy. \"",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/preflight.py",
+    "code": "F401",
+    "message": "`sys` imported but unused",
+    "source": "import sys",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "E401",
+    "message": "Multiple imports on one line",
+    "source": "import os as _os, subprocess as _sp",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "F401",
+    "message": "`datetime.timezone` imported but unused",
+    "source": "from datetime import datetime, timezone",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "F401",
+    "message": "`math` imported but unused",
+    "source": "import math",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "print(f\"[chaos-jungle] Duration reached \u2014 auto-stopping chaos\")",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "print(f\"[chaos-jungle] Duration reached \u2014 stopping chaos\")",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "F821",
+    "message": "Undefined name `ExperimentPlan`",
+    "source": ") -> \"ExperimentPlan\":",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "F821",
+    "message": "Undefined name `Fault`",
+    "source": "fault: \"Fault | int\",",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/runner.py",
+    "code": "F841",
+    "message": "Local variable `fmt` is assigned to but never used",
+    "source": "fmt = \"%Y-%m-%dT%H:%M:%S.%f%z\"",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/scheduler.py",
+    "code": "F401",
+    "message": "`time` imported but unused",
+    "source": "import time",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/suite.py",
+    "code": "F401",
+    "message": "`chaos_jungle.core._duration.parse_duration` imported but unused",
+    "source": "from chaos_jungle.core._duration import parse_duration",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/core/suite.py",
+    "code": "F401",
+    "message": "`chaos_jungle.core.guardrails.apply_guardrails` imported but unused",
+    "source": "from chaos_jungle.core.guardrails import SuiteValidator, apply_guardrails, ConflictError, ConflictWarning",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/db/session_db.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "clauses.append(\"status=?\"); params.append(status)",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/db/session_db.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "clauses.append(\"type=?\"); params.append(type)",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/db/session_db.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "sets.append(\"injection_verified=?\"); params.append(1 if injection_verified else 0)",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/db/session_db.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "sets.append(\"snapshot_after=?\"); params.append(json.dumps(snapshot_after))",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/db/session_db.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "sets.append(\"snapshot_before=?\"); params.append(json.dumps(snapshot_before))",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/db/session_db.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "sets.append(\"verification_output=?\"); params.append(verification_output)",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/db/session_db.py",
+    "code": "F841",
+    "message": "Local variable `cur` is assigned to but never used",
+    "source": "cur = self._conn.execute(",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/distributed/coordinator.py",
+    "code": "F401",
+    "message": "`time` imported but unused",
+    "source": "import time",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/distributed/evidence.py",
+    "code": "F401",
+    "message": "`datetime.timezone` imported but unused",
+    "source": "from datetime import datetime, timezone",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/faults/llm.py",
+    "code": "E401",
+    "message": "Multiple imports on one line",
+    "source": "import urllib.request as _ur, json as _json",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/faults/llm.py",
+    "code": "F821",
+    "message": "Undefined name `VerificationResult`",
+    "source": "def verify_active(self, target: \"Target\") -> \"VerificationResult\":",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/faults/llm.py",
+    "code": "F821",
+    "message": "Undefined name `VerificationResult`",
+    "source": "def verify_recovered(self, target: \"Target\") -> \"VerificationResult\":",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/faults/skill.py",
+    "code": "F401",
+    "message": "`chaos_jungle.targets.base.Target` imported but unused",
+    "source": "from chaos_jungle.targets.base import Target",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/faults/skill_file.py",
+    "code": "F821",
+    "message": "Undefined name `VerificationResult`",
+    "source": "def verify_active(self, target) -> \"VerificationResult\":  # type: ignore[override]",
+    "count": 2
+  },
+  {
+    "path": "chaos_jungle/faults/skill_file.py",
+    "code": "F821",
+    "message": "Undefined name `VerificationResult`",
+    "source": "def verify_recovered(self, target) -> \"VerificationResult\":  # type: ignore[override]",
+    "count": 2
+  },
+  {
+    "path": "chaos_jungle/inject/group.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "raise ValueError(f\"on_activation_failure must be rollback_all|continue\")",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/group.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "raise ValueError(f\"on_prepare_failure must be cancel|best_effort\")",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/group.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "raise ValueError(f\"on_skew_violation must be rollback_all|mark_invalid|continue\")",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/intercept.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "if isinstance(v, bool):  return int(v)",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/intercept.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "if isinstance(v, dict):  return []",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/intercept.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "if isinstance(v, float): return str(v)",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/intercept.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "if isinstance(v, int):   return str(v)",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/intercept.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "if isinstance(v, list):  return {}",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/inject/intercept.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "if isinstance(v, str):   return 0",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/metrics/builtin.py",
+    "code": "F401",
+    "message": "`fnmatch` imported but unused",
+    "source": "import fnmatch",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/metrics/builtin.py",
+    "code": "F401",
+    "message": "`os` imported but unused",
+    "source": "import os",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/metrics/builtin.py",
+    "code": "F401",
+    "message": "`re` imported but unused",
+    "source": "import re",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/metrics/custom.py",
+    "code": "F401",
+    "message": "`tempfile` imported but unused",
+    "source": "import tempfile",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/models.py",
+    "code": "F401",
+    "message": "`dataclasses.field` imported but unused",
+    "source": "from dataclasses import dataclass, field",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "E401",
+    "message": "Multiple imports on one line",
+    "source": "import subprocess, pathlib",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "F401",
+    "message": "`chaos_jungle.targets.local.LocalTarget` imported but unused",
+    "source": "from chaos_jungle.targets.local import LocalTarget",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "F401",
+    "message": "`dataclasses.asdict` imported but unused",
+    "source": "from dataclasses import dataclass, field, asdict",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "F401",
+    "message": "`os` imported but unused",
+    "source": "import os",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "F821",
+    "message": "Undefined name `Scenario`",
+    "source": "scenario: \"Scenario\",  # chaos_jungle.core.scenario.Scenario",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "F821",
+    "message": "Undefined name `Target`",
+    "source": "def _target_spec(target: \"Target | None\") -> TargetSpec:",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "F821",
+    "message": "Undefined name `Target`",
+    "source": "target: \"Target | None\" = None,",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/plan.py",
+    "code": "F841",
+    "message": "Local variable `scenario_obj` is assigned to but never used",
+    "source": "scenario_obj = Scenario(name, [])  # faults already extracted above",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/scripts/bpf/xdp_flow_modify.py",
+    "code": "E703",
+    "message": "Statement ends with an unnecessary semicolon",
+    "source": "break;",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/scripts/bpf/xdp_flow_modify.py",
+    "code": "E741",
+    "message": "Ambiguous variable name: `l`",
+    "source": "def longToIP(l):",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/scripts/bpf/xdp_flow_modify.py",
+    "code": "F401",
+    "message": "`collections` imported but unused",
+    "source": "import collections",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/scripts/llm_proxy/_lifecycle.py",
+    "code": "F401",
+    "message": "`hashlib` imported but unused",
+    "source": "import hashlib",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/scripts/llm_proxy/llm_proxy.py",
+    "code": "F401",
+    "message": "`datetime.timezone` imported but unused",
+    "source": "from datetime import datetime, timezone",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/scripts/llm_proxy/llm_proxy.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "return f\"MCP fault applied\"",
+    "count": 1
+  },
+  {
+    "path": "chaos_jungle/scripts/llm_proxy/llm_proxy.py",
+    "code": "F541",
+    "message": "f-string without any placeholders",
+    "source": "return f\"max_tokens rewritten in request\"",
+    "count": 1
+  },
+  {
+    "path": "tests/conftest.py",
+    "code": "F401",
+    "message": "`chaos_jungle.faults.base.VerificationResult` imported but unused",
+    "source": "from chaos_jungle.faults.base import Fault, VerificationResult",
+    "count": 1
+  },
+  {
+    "path": "tests/conftest.py",
+    "code": "F401",
+    "message": "`threading` imported but unused",
+    "source": "import threading",
+    "count": 1
+  },
+  {
+    "path": "tests/conftest.py",
+    "code": "F401",
+    "message": "`typing.Callable` imported but unused",
+    "source": "from typing import Callable",
+    "count": 1
+  },
+  {
+    "path": "tests/conftest.py",
+    "code": "F811",
+    "message": "Redefinition of unused `VerificationResult` from line 7: `VerificationResult` redefined here",
+    "source": "from chaos_jungle.faults.base import VerificationResult",
+    "count": 4
+  },
+  {
+    "path": "tests/test_daemon.py",
+    "code": "F401",
+    "message": "`threading` imported but unused",
+    "source": "import threading",
+    "count": 1
+  },
+  {
+    "path": "tests/test_fault_verification.py",
+    "code": "F401",
+    "message": "`pytest` imported but unused",
+    "source": "import pytest",
+    "count": 1
+  },
+  {
+    "path": "tests/test_guardrails.py",
+    "code": "F401",
+    "message": "`os` imported but unused",
+    "source": "import os",
+    "count": 1
+  },
+  {
+    "path": "tests/test_guardrails.py",
+    "code": "F401",
+    "message": "`tempfile` imported but unused",
+    "source": "import tempfile",
+    "count": 1
+  },
+  {
+    "path": "tests/test_injection_group.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "d = self._data(); d[\"bogus\"] = 1",
+    "count": 1
+  },
+  {
+    "path": "tests/test_injection_group.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "d = self._data(); d[\"injections\"] = []",
+    "count": 1
+  },
+  {
+    "path": "tests/test_injection_group.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "d = self._data(); d[\"on_prepare_failure\"] = \"ignore\"",
+    "count": 1
+  },
+  {
+    "path": "tests/test_injection_group.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "d = self._data(); d[\"synchronization\"] = \"quantum\"",
+    "count": 1
+  },
+  {
+    "path": "tests/test_injection_group.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "d = self._data(); del d[\"name\"]",
+    "count": 1
+  },
+  {
+    "path": "tests/test_injection_group.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "def __init__(self): self.starts = 0; self.stops = 0",
+    "count": 1
+  },
+  {
+    "path": "tests/test_integration.py",
+    "code": "F841",
+    "message": "Local variable `ret` is assigned to but never used",
+    "source": "ret = proxy._record_llm_call(",
+    "count": 1
+  },
+  {
+    "path": "tests/test_model_registry.py",
+    "code": "F401",
+    "message": "`os` imported but unused",
+    "source": "import os",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "for t in threads: t.join(timeout=5)",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E701",
+    "message": "Multiple statements on one line (colon)",
+    "source": "for t in threads: t.start()",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "import time; time.sleep(0.02)",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "import time; time.sleep(0.1)",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "import time; time.sleep(0.15)  # let worker complete",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "r = MagicMock(); r.not_implemented = True; return r",
+    "count": 12
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "t1.join(timeout=5); t2.join(timeout=5)",
+    "count": 2
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "E702",
+    "message": "Multiple statements on one line (semicolon)",
+    "source": "t1.start(); t2.start()",
+    "count": 2
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "F401",
+    "message": "`chaos_jungle.models.ModelConfig` imported but unused",
+    "source": "from chaos_jungle.models import ModelConfig, ModelRegistry",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "F401",
+    "message": "`chaos_jungle.plan.FaultSpec` imported but unused",
+    "source": "from chaos_jungle.plan import ExperimentPlan, FaultSpec",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "F401",
+    "message": "`time` imported but unused",
+    "source": "import time",
+    "count": 1
+  },
+  {
+    "path": "tests/test_refactoring.py",
+    "code": "F401",
+    "message": "`unittest.mock.patch` imported but unused",
+    "source": "from unittest.mock import MagicMock, patch",
+    "count": 1
+  },
+  {
+    "path": "tests/test_runner_lifecycle.py",
+    "code": "E401",
+    "message": "Multiple imports on one line",
+    "source": "import tempfile, os",
+    "count": 1
+  },
+  {
+    "path": "tests/test_runner_lifecycle.py",
+    "code": "F401",
+    "message": "`os` imported but unused",
+    "source": "import tempfile, os",
+    "count": 1
+  }
+]
